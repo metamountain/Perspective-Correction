@@ -203,6 +203,100 @@ With `f` fixed correctly, Alte Scheune goes 7.09° → **0.63°**; with `f` wron
 (35mm) it goes 6.87° → **9.42°**, worse than doing nothing. The auto estimate
 picked 41mm for it. That is the whole argument for `--focal-35mm` in one line.
 
+## SAM: the model was never the hard part
+
+`--mask sam --sam-model auto` (`src/bpc/sam.py`). Backends tried in order:
+ultralytics (handles SAM 1/2/3 from one class, **AGPL-3.0**, so optional and
+never bundled), Meta's `sam2`, `segment_anything`, `segment_anything_hq`. torch
+is imported only when this mask mode runs, so the default install stays
+numpy + OpenCV + Pillow.
+
+**SAM finds boundaries superbly and has no idea what they mean.** Nothing in its
+output says which of forty regions is the building. That gap, not loading the
+model, was the whole problem. It is closed with evidence already in hand:
+
+> SAM supplies the edges. The line detector supplies the labels.
+
+### The classifier was wrong twice, both times structurally
+
+**One-sided.** The first version asked only "does this region contain straight
+lines?" and masked whatever answered no. A screenshot showed it masking the
+stucco panels between a building's windows — because **lines lie on the
+*boundaries* of regions, not in their interiors**. A flat surface contains no
+lines at all; its edges are the window frames and floor bands *around* it. Fixed
+by counting over a dilated region (a panel more than doubles its score, foliage
+stays at zero), and by requiring a region to be *positively* recognised as
+clutter before it goes. Absence of evidence is not evidence of clutter.
+
+**Wrongly ordered.** Evidence is not equally strong, and the test that finally
+caught this is the user's own framing — sky/vegetation/street/floor against
+wall/window/panel. Sky and asphalt are routinely bounded by perfectly straight
+edges (a roofline, a kerb), so "straight outline" as an early positive kept both
+as *built*. Order now:
+
+1. **verticals *and* horizontals together** (`orthogonal_mix`) — only Manhattan
+   objects produce it; a fence brings one family, foliage neither. Unoverridable.
+2. recognisable **vegetation / sky / ground**.
+3. weaker built evidence: line density, then outline straightness.
+4. otherwise **keep** — dropping a facade costs the measurement, keeping a stray
+   region costs a little noise.
+
+`test_the_classifier_separates_clutter_from_architecture` pins all seven
+categories. Per-region signals and verdicts are printed, because mask quality
+cannot be judged from a single percentage.
+
+### Still unmeasured, and it is the open question
+
+**Whether SAM beats no mask at all has never been measured on real photographs.**
+It could not be: no torch, no weights, no GPU in the dev container. The `auto`
+heuristic — since removed from favour — was a wash on six real barns
+(mean 0.98° → 0.96°). Do not promote SAM to a default on the strength of it
+being SAM. Run `tools/benchmark_detectors.py` on real material first.
+
+## Windows has two Pythons and neither is wrong
+
+This costs more time than any algorithm here, so it is worth stating plainly:
+
+| | torch + SAM | tkinter (the GUI) |
+|---|---|---|
+| ComfyUI `python_embeded` | yes, with CUDA | **no** — the embeddable Python omits tcl/tk |
+| system Python | usually not | yes |
+
+Both failures print "no backend". `--sam-info` reports both halves plus the
+interpreter, and the error message reads which side it is on: in the GUI Python
+it offers `--sam-export` *before* suggesting an install, because putting a
+multi-gigabyte CUDA torch into a second interpreter on a machine that already
+has one is the wrong first answer.
+
+`--sam-export DIR` runs SAM once from whichever Python can load it and writes one
+mask PNG per photograph; everything afterwards consumes the folder through
+`--mask file`. That bridge exists so nobody has to choose between the segmenter
+and the review window.
+
+**Anything fiddly belongs in Python, not in a `.bat`.** `run_and_log.bat` once
+searched for the checkpoint itself, grew a `^` continuation inside a
+parenthesised block — which cmd splits and runs as a command — and the SAM prompt
+silently never appeared. That search is now `--sam-model auto`, where it is
+tested. It prefers what *works* over what is largest: plain `sam_vit_b` first,
+since HQ needs another package, safetensors need converting, ViT-H buys nothing
+for a mask resampled to a few hundred pixels, and a 129 kB `mobile_sam.pt` is not
+MobileSAM.
+
+## A run has to be judgeable by someone who did not make it
+
+`--diagnostics` writes the interpreter, library versions, importable backends and
+the settings actually in force as a log header; `--json-report` stores the same
+block beside the results. "SKIPPED, low confidence" is nearly useless without
+them. `run_and_log.bat` collects a whole run — corrected images, overlays, log,
+report — into one folder, and writes the environment *before* the run so a failed
+run still leaves something diagnosable.
+
+`--remember` stores **paths only** (checkpoint, mask folder, output, focal
+length). Correction parameters are deliberately not remembered: a setting that
+silently persists between runs is one nobody can reason about, and a batch must
+stay reproducible from its command line. Unknown keys are dropped on load so the
+file cannot become a second, hidden place where behaviour is configured.
+
 ## Known weakness, stated plainly
 
 **A flat-on facade with no EXIF.** One horizontal direction fixes one *point* on
