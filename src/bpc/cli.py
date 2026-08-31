@@ -109,6 +109,12 @@ def build_parser():
 
     g = p.add_argument_group("detection")
     g.add_argument("--detector", choices=["auto", "lsd", "fld", "hough"], default="auto")
+    g.add_argument("--mask", choices=["off", "auto", "file"], default=Settings.mask_mode,
+                   help="ignore lines in vegetation/sky ('auto') or in a painted PNG ('file')")
+    g.add_argument("--mask-file", default="",
+                   help="a PNG mask, or a folder holding one <stem>.png per image")
+    g.add_argument("--mask-invert", action="store_true",
+                   help="the mask marks what to KEEP (what a segmenter such as SAM outputs)")
     g.add_argument("--detect-max-edge", type=int, default=Settings.detect_max_edge)
     g.add_argument("--min-line-length", type=float, default=Settings.min_line_length_frac,
                    help="minimum line length as a fraction of the short edge")
@@ -147,6 +153,9 @@ def build_parser():
 def settings_from(args) -> Settings:
     s = Settings()
     s.detector = args.detector
+    s.mask_mode = args.mask
+    s.mask_file = args.mask_file
+    s.mask_invert = args.mask_invert
     s.detect_max_edge = args.detect_max_edge
     s.min_line_length_frac = args.min_line_length
     s.inlier_threshold_deg = args.inlier_threshold

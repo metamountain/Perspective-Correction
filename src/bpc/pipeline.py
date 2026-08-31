@@ -41,12 +41,21 @@ class Result:
         return {k: getattr(self, k) for k in self.__slots__ if k != "diagnostics"}
 
 
-def analyse(bgr, settings, exif_focal_px=None):
+def _match_scale(bgr, gray):
+    """Colour copy at the analysis resolution, for the mask producers."""
+    import cv2
+    if bgr.shape[:2] == gray.shape[:2]:
+        return bgr
+    return cv2.resize(bgr, (gray.shape[1], gray.shape[0]), interpolation=cv2.INTER_AREA)
+
+
+def analyse(bgr, settings, exif_focal_px=None, image_path=""):
     """Detection + model for an already loaded image.  Returns
     ``(model, vert, horiz, scale, detector)`` with the focal length in
     full-resolution pixels."""
     gray, scale = io.analysis_gray(bgr, settings.detect_max_edge)
-    _, vert, horiz, detector = L.prepare(gray, settings)
+    small = _match_scale(bgr, gray)
+    _, vert, horiz, detector = L.prepare(gray, settings, small, image_path)
     gh, gw = gray.shape[:2]
     exif_small = exif_focal_px * scale if exif_focal_px else None
     m = M.estimate(vert, horiz, gw, gh, settings, exif_small)
@@ -72,7 +81,7 @@ def process(src_path, dst_path, settings, debug_dir=None, dry_run=False):
     base["out_size"] = (w, h)
     try:
         exif_f = io.focal_px_from_exif(src, w, h) if settings.use_exif_focal else None
-        m, vert, horiz, scale, detector = analyse(bgr, settings, exif_f)
+        m, vert, horiz, scale, detector = analyse(bgr, settings, exif_f, src_path)
     except Exception as exc:
         return Result(status=ERROR, reason=f"analysis failed ({exc})",
                       seconds=time.time() - t0, **base)

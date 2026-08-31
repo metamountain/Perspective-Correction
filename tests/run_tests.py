@@ -17,7 +17,8 @@ sys.path.insert(0, os.path.join(ROOT, "src"))
 sys.path.insert(0, HERE)
 
 MODULES = ["test_geometry", "test_lines", "test_warp", "test_estimation",
-           "test_pipeline", "test_review", "test_reference", "test_assets"]
+           "test_pipeline", "test_review", "test_masks", "test_reference",
+           "test_assets"]
 
 
 def main(argv):

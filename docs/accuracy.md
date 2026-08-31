@@ -141,6 +141,23 @@ Sharpening the prior from 0.6 to 0.35 cuts it by 58 %, at no cost on plain
 facades. `angular_softness` is 0.35 by default because of this table;
 `--angular-softness` exposes it.
 
+## Two more ideas that measurement rejected
+
+**Merging the horizontal lines only.** Verticals and horizontals have opposite
+needs -- a facade offers many unoccluded verticals, but its few horizontals are
+routinely broken in half by a tree, and a vanishing point is located by the
+baseline of the lines voting for it. So merging just the horizontal pool should
+have helped. On facades with tree occluders it made things markedly worse:
+pitch mean 0.28 -> 1.28 deg, worst 2.84 -> 8.90 deg, horizon support
+0.930 -> 0.811. Across a tree, the fragments being joined are often *not* the
+same world line: two string courses at slightly different heights fall inside
+the offset tolerance and merge into one confidently wrong long line.
+
+**Masking the vertical pool only.** Since masking helps the geometry but starves
+the focal estimator, masking only the verticals should have given both. It gave
+neither: pitch max 3.00 deg against 2.84 deg with no mask at all. Removed rather
+than kept as a third mode. See docs/masking.md for the table that does matter.
+
 ## Known weakness
 
 A flat-on facade with no EXIF is the hard case and the common one for web

@@ -14,6 +14,7 @@ import cv2
 import numpy as np
 
 from . import geometry as G
+from . import masks as MK
 
 
 # --------------------------------------------------------------------------
@@ -238,7 +239,7 @@ def split_by_orientation(ls: LineSet, vertical_window_deg: float,
     return vert, horiz
 
 
-def prepare(gray: np.ndarray, settings) -> tuple:
+def prepare(gray: np.ndarray, settings, bgr=None, image_path: str = "") -> tuple:
     """Full front end: detect, clean, merge, classify.  Returns
     ``(all_lines, vertical, horizontal, detector_name)``."""
     h, w = gray.shape[:2]
@@ -248,6 +249,11 @@ def prepare(gray: np.ndarray, settings) -> tuple:
         seg = seg[G.segment_lengths(seg) >= min_len]
     if len(seg):
         seg = drop_border_segments(seg, w, h, settings.border_margin_px)
+    mask = None
+    if len(seg) and bgr is not None and getattr(settings, "mask_mode", "off") != "off":
+        mask = MK.build(bgr, settings, image_path)
+        if mask is not None:
+            seg = MK.drop_masked(seg, mask)
     if len(seg) and settings.merge_lines:
         seg = merge_collinear(seg, gap_tol=max(12.0, 0.02 * max(w, h)))
         seg = seg[G.segment_lengths(seg) >= min_len]
@@ -255,4 +261,18 @@ def prepare(gray: np.ndarray, settings) -> tuple:
     vert, horiz = split_by_orientation(ls, settings.vertical_window_deg,
                                        settings.horizontal_window_deg,
                                        settings.angular_softness)
+    if settings.merge_horizontal and len(horiz):
+        # Merge the horizontal pool only.  The two pools have opposite needs: a
+        # facade offers many unoccluded verticals, and merging them destroys
+        # independent measurements, but its few horizontals are routinely broken
+        # in half by a tree, and a vanishing point is located by the baseline of
+        # the lines that vote for it.
+        hseg = merge_collinear(horiz.seg, angle_tol_deg=1.5, offset_tol=3.0,
+                               gap_tol=max(30.0, 0.12 * max(w, h)))
+        hseg = hseg[G.segment_lengths(hseg) >= min_len]
+        if len(hseg):
+            merged = LineSet(hseg)
+            _, horiz = split_by_orientation(merged, settings.vertical_window_deg,
+                                            settings.horizontal_window_deg,
+                                            settings.angular_softness)
     return ls, vert, horiz, name

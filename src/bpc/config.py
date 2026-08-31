@@ -30,6 +30,10 @@ class Settings:
     # focal length: mean pitch error 0.10 deg off, 0.33 deg on; worst case
     # 0.61 deg off, 3.58 deg on.  See docs/accuracy.md.
     merge_lines: bool = False
+    merge_horizontal: bool = False
+    mask_mode: str = "off"          # off | auto | file
+    mask_file: str = ""             # a PNG, or a folder of <stem>.png
+    mask_invert: bool = False       # set when white means "keep"
 
     # ---- vanishing point search ----
     ransac_iters: int = 800

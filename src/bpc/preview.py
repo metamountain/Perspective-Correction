@@ -40,19 +40,24 @@ def overlay(bgr, vert, horiz, model, scale=1.0, result_text=""):
     inv = 1.0 / scale if scale else 1.0
 
     if len(horiz):
-        _draw_lines(canvas, horiz.seg * inv, BLUE, 1)
+        _draw_lines(canvas, horiz.seg * inv, BLUE, max(1, int(round(inv))))
     if len(vert):
         inl = model.vert_inliers if model is not None and model.vert_inliers is not None \
             else np.zeros(len(vert), bool)
         if len(inl) == len(vert):
-            _draw_lines(canvas, vert.seg[~inl] * inv, YELLOW, 1)
-            _draw_lines(canvas, vert.seg[inl] * inv, GREEN, 2)
+            _draw_lines(canvas, vert.seg[~inl] * inv, YELLOW, max(1, int(round(inv))))
+            _draw_lines(canvas, vert.seg[inl] * inv, GREEN, max(2, int(round(inv * 2))))
         else:
-            _draw_lines(canvas, vert.seg * inv, GREEN, 2)
+            _draw_lines(canvas, vert.seg * inv, GREEN, max(2, int(round(inv * 2))))
 
     if model is not None and model.f:
         h, w = canvas.shape[:2]
-        K = G.intrinsics(model.f * inv, w / 2.0, h / 2.0)
+        # `scale` rescales the *segments*, which are in analysis-resolution
+        # coordinates.  The focal length is not: the pipeline already converts it
+        # back to full-resolution pixels.  Scaling it again here pushed the
+        # horizon off the canvas entirely on any image large enough to be
+        # downscaled for analysis, which is every real photograph.
+        K = G.intrinsics(model.f, w / 2.0, h / 2.0)
         _draw_infinite_line(canvas, G.horizon_line(model.up, K), MAGENTA, 2)
 
     if result_text:

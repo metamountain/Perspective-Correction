@@ -43,7 +43,8 @@ class Scene:
 
     def __init__(self, w=1200, h=800, focal_35mm=28.0, pitch_deg=0.0, roll_deg=0.0,
                  yaw_deg=0.0, seed=0, clutter=40, noise=3.0, corner=False,
-                 texture=True, half_timbered=False, brace_lean_deg=28.0):
+                 texture=True, half_timbered=False, brace_lean_deg=28.0,
+                 occluders=0):
         self.w, self.h = w, h
         self.f = focal_35mm * math.hypot(w, h) / math.hypot(36.0, 24.0)
         self.K = np.array([[self.f, 0, w / 2.0], [0, self.f, h / 2.0], [0, 0, 1.0]])
@@ -66,6 +67,8 @@ class Scene:
         self._ground()
         if clutter:
             self._clutter(clutter)
+        if occluders:
+            self._occluders(occluders)
         if texture:
             self._texture()
         if noise:
@@ -198,6 +201,29 @@ class Scene:
                           self.rng.uniform(8, 24)])
             d = self.rng.normal(0, 0.8, 3)
             self.seg(p, p + d, (118, 136, 112), 2)
+
+    def _occluders(self, n):
+        """Trees in front of the building.
+
+        This models the thing that actually breaks horizontal evidence on real
+        photographs: an eaves line or a string course runs the width of the
+        facade, a tree stands in front of it, and the detector returns two short
+        fragments instead of one long line.  Short fragments locate a vanishing
+        point badly, because the baseline is what fixes it.
+        """
+        for i in range(n):
+            u = (i + 0.5) / n
+            cx = int(self.w * (0.12 + 0.76 * u) + self.rng.normal(0, self.w * 0.02))
+            cy = int(self.h * (0.55 + self.rng.normal(0, 0.05)))
+            rx = int(self.w * self.rng.uniform(0.035, 0.065))
+            ry = int(self.h * self.rng.uniform(0.28, 0.42))
+            cv2.ellipse(self.img, (cx, cy), (rx, ry), 0, 0, 360, (74, 96, 66), -1)
+            for _ in range(14):          # a few branches poking out
+                a = self.rng.uniform(0, 2 * np.pi)
+                r = self.rng.uniform(0.6, 1.35)
+                cv2.line(self.img, (cx, cy),
+                         (int(cx + rx * r * np.cos(a) * 1.6), int(cy + ry * r * np.sin(a))),
+                         (66, 84, 60), 2, cv2.LINE_AA)
 
     def _texture(self):
         n = self.rng.normal(0, 5.0, self.img.shape[:2])

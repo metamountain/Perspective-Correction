@@ -45,7 +45,11 @@ class ReviewSession:
         self.h, self.w = self.bgr.shape[:2]
 
         self.gray, self.scale = IO.analysis_gray(self.bgr, settings.detect_max_edge)
-        _, self.vert, self.horiz, self.detector = L.prepare(self.gray, settings)
+        _small = cv2.resize(self.bgr, (self.gray.shape[1], self.gray.shape[0]),
+                            interpolation=cv2.INTER_AREA) \
+            if self.bgr.shape[:2] != self.gray.shape[:2] else self.bgr
+        _, self.vert, self.horiz, self.detector = L.prepare(self.gray, settings,
+                                                            _small, self.path)
         # per-line manual state: True = may be used, False = struck out by the user
         self.enabled = np.ones(len(self.vert), dtype=bool)
 
