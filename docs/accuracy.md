@@ -158,6 +158,52 @@ the focal estimator, masking only the verticals should have given both. It gave
 neither: pitch max 3.00 deg against 2.84 deg with no mask at all. Removed rather
 than kept as a third mode. See docs/masking.md for the table that does matter.
 
+## Validated on real photographs
+
+Everything above is synthetic. The estimator was then checked on six real barn
+photographs with a **round-trip test**: warp by a rotation `R_d` chosen here, so
+that the warped copy's world-up must be `R_d @ u0`. The absolute pose stays
+unknown; the *change* is exact. `tools/benchmark_detectors.py` and
+`tests/test_assets.py` both run it.
+
+| photograph | confidence | round-trip mean error | weakest confidence term |
+|---|---|---|---|
+| quaker barn | 0.75 | **0.33 deg** | focal 0.86 |
+| small red barn | 0.70 | **0.34 deg** | focal 0.83 |
+| white sparrow barn | 0.66 | 0.63 deg | focal 0.72 |
+| XYZ | 0.42 | 0.78 deg | focal 0.60 |
+| pole barn | 0.49 | 1.01 deg | focal 0.72 |
+| Alte Scheune | 0.44 | **2.80 deg** | stability 0.70 |
+
+**The confidence score ranks the photographs by their actual error.** That was
+never obvious -- it is a product of six heuristic factors -- and it is the
+property the whole skip/review design rests on, so
+`test_confidence_ranks_the_photographs_by_their_real_error` now asserts it.
+
+### And the focal length dominates, on real data too
+
+Correcting each photograph and re-measuring the residual tilt, with the *same*
+focal length used in both passes so a residual is a real residual:
+
+| photograph | at 24 mm | at 35 mm |
+|---|---|---|
+| Alte Scheune | 7.09 -> **0.63 deg** | 6.87 -> **9.42 deg** |
+| white sparrow | 4.53 -> **0.09 deg** | 13.20 -> 6.28 deg |
+| quaker barn | 1.16 -> 0.47 deg | 2.02 -> 1.21 deg |
+
+With the right focal length the correction is near perfect. With the wrong one
+it is worse than doing nothing. The automatic estimate chose 41 mm for Alte
+Scheune, which is why that image degraded. Nothing states the case for
+`--focal-35mm` more plainly.
+
+### A caveat about re-measuring a corrected image
+
+Re-running the estimator on a *cropped* output is not a fair check: the crop
+moves the principal point away from the image centre, and the model assumes the
+two coincide. Measured on these six photographs the crop accounted for roughly
+0.2 to 0.8 degrees of apparent residual. The same assumption is a genuine
+limitation on any previously-cropped input, which web JPEGs often are.
+
 ## Known weakness
 
 A flat-on facade with no EXIF is the hard case and the common one for web

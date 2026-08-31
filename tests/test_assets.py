@@ -100,3 +100,82 @@ def test_manual_review_opens_on_every_asset():
 def _load(path):
     from bpc.imageio import load
     return load(path).bgr
+
+
+# --------------------------------------------------------------------------
+# ground truth on real photographs
+# --------------------------------------------------------------------------
+_DELTAS = [(2.0, 0.0), (-3.0, 0.0), (0.0, 4.0), (0.0, -5.0), (2.5, 3.5), (-1.5, -2.5)]
+
+
+def _round_trip_error(path, focal_35mm=24.0, edge=1600):
+    """Real error in degrees, without knowing the true camera pose.
+
+    A photograph's pose is unknown, but a rotation applied here is known
+    exactly: if the true world-up in camera coordinates is ``u0`` and the image
+    is warped by ``R_d``, the warped copy's up must be ``R_d @ u0``.  Estimating
+    from both and comparing measures the estimator on real texture, foliage and
+    JPEG noise.
+    """
+    import cv2
+    import numpy as np
+    from bpc import geometry as G
+    from bpc import imageio as IO
+    from bpc import model as M
+
+    bgr = IO.load(path).bgr
+    h, w = bgr.shape[:2]
+    s = min(1.0, edge / max(w, h))
+    base = cv2.resize(bgr, (int(w * s), int(h * s)),
+                      interpolation=cv2.INTER_AREA) if s < 1 else bgr
+    bh, bw = base.shape[:2]
+    st = Settings().replace(focal_35mm=focal_35mm)
+    m0, _, _, _, _ = analyse(base, st)
+    if m0.f is None:
+        return None
+    K = G.intrinsics(M.focal_px_from_35mm(focal_35mm, bw, bh), bw / 2.0, bh / 2.0)
+    errs = []
+    for dr, dp in _DELTAS:
+        Rd = G.correction_rotation(math.radians(dr), math.radians(dp))
+        warped = cv2.warpPerspective(base, G.homography(K, Rd), (bw, bh),
+                                     flags=cv2.INTER_LANCZOS4,
+                                     borderMode=cv2.BORDER_REPLICATE)
+        m1, _, _, _, _ = analyse(warped, st)
+        if m1.f is None:
+            continue
+        expect = Rd @ m0.up
+        expect /= np.linalg.norm(expect)
+        got = m1.up / np.linalg.norm(m1.up)
+        errs.append(math.degrees(math.acos(min(1.0, abs(float(got @ expect))))))
+    return float(np.mean(errs)) if errs else None
+
+
+def test_a_known_rotation_is_recovered_on_real_photographs():
+    import numpy as np
+    errs = [e for e in (_round_trip_error(f) for f in _require()) if e is not None]
+    assert errs, "no measurable assets"
+    assert np.mean(errs) < 2.0, f"mean round-trip error {np.mean(errs):.2f} deg"
+    assert max(errs) < 4.0, f"worst round-trip error {max(errs):.2f} deg"
+
+
+def test_confidence_ranks_the_photographs_by_their_real_error():
+    """The confidence score is the gate that decides whether a photo is touched
+    at all, so it has to correlate with how wrong the answer actually is.  On
+    the shipped assets it does: the two most confident images have the smallest
+    round-trip error and the least confident has the largest.  Without this the
+    score is only a plausible-looking formula."""
+    import numpy as np
+    conf, err = [], []
+    for f in _require():
+        e = _round_trip_error(f)
+        if e is None:
+            continue
+        m, _, _, _, _ = analyse(_load(f), Settings())
+        conf.append(m.confidence)
+        err.append(e)
+    if len(conf) < 4:
+        raise SkipTest("need at least four measurable assets")     # noqa: F821
+    rc = np.argsort(np.argsort(conf))
+    re_ = np.argsort(np.argsort(err))
+    rho = np.corrcoef(rc, re_)[0, 1]
+    assert rho < -0.4, f"confidence does not track the real error (rho={rho:.2f})"

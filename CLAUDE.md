@@ -171,6 +171,38 @@ prompting comes from GroundingDINO → SAM, or SAM 3's concept head. Prompt the
 concrete countable nouns ground well, abstractions like "architecture" do not,
 and a missed piece of building is lost evidence.
 
+## The confidence score is validated, not just plausible
+
+Six real barn photographs, round-trip tested (warp by a known `R_d`; the warped
+copy's up must be `R_d @ u0`, so real texture gets exact ground truth without
+knowing the true pose):
+
+| photo | conf | real error |
+|---|---|---|
+| quaker | 0.75 | 0.33° |
+| small red barn | 0.70 | 0.34° |
+| white sparrow | 0.66 | 0.63° |
+| XYZ | 0.42 | 0.78° |
+| pole barn | 0.49 | 1.01° |
+| Alte Scheune | 0.44 | **2.80°** |
+
+**Confidence ranks them by actual error.** It is a product of six heuristic
+factors and there was no guarantee of that, so
+`test_confidence_ranks_the_photographs_by_their_real_error` asserts it. The
+whole skip-and-review design rests on this property; do not change the factors
+without re-running that test.
+
+Two traps when measuring a correction by re-analysing its output:
+- **Cropping moves the principal point** away from the image centre, which the
+  model assumes coincide. Worth 0.2–0.8° of apparent residual on these six.
+  It is also a real limitation on any *previously cropped* input — web JPEGs.
+- **A re-estimated focal length makes the metric self-inconsistent.** Fix `f`
+  in both passes or the number means nothing.
+
+With `f` fixed correctly, Alte Scheune goes 7.09° → **0.63°**; with `f` wrong
+(35mm) it goes 6.87° → **9.42°**, worse than doing nothing. The auto estimate
+picked 41mm for it. That is the whole argument for `--focal-35mm` in one line.
+
 ## Known weakness, stated plainly
 
 **A flat-on facade with no EXIF.** One horizontal direction fixes one *point* on
