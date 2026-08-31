@@ -95,6 +95,31 @@ install that is its own python, which already has torch and CUDA:
 
 Using ComfyUI's python avoids downloading a second multi-gigabyte torch.
 
+### When torch and the GUI live in different Pythons
+
+They usually do, and neither side is wrong:
+
+| | torch + SAM | tkinter (the GUI) |
+|---|---|---|
+| ComfyUI's `python_embeded` | yes | **no** -- the Windows embeddable Python omits tcl/tk |
+| the system Python | usually not | yes |
+
+`--sam-info` prints both halves, because seeing only the SAM half hides half the
+diagnosis. Rather than choosing between the segmenter and the review window, run
+SAM once from whichever Python can load it and consume the result anywhere:
+
+    rem from ComfyUI's python, which has torch
+    D:\ComfyUI_windows_portable\python_embeded\python.exe rectify.py "D:\Fotos" ^
+        --sam-export "D:\Masken" ^
+        --sam-model "D:\ComfyUI_windows_portable\ComfyUI\models\sams\sam_vit_b_01ec64.pth"
+
+    rem afterwards, from any python -- batch, GUI, another machine
+    python rectify.py "D:\Fotos" --mask file --mask-file "D:\Masken" --focal-35mm 24
+
+The masks are written at analysis resolution and resampled on load, so the
+folder stays small and the segmenter runs once per photograph rather than once
+per experiment.
+
 ### Backends, and their licences
 
 Tried in order; install whichever suits you.

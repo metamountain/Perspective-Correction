@@ -110,3 +110,30 @@ def test_the_hint_names_the_package_that_fits_the_checkpoint():
     sam2 = S._install_hint("/x/sam2.1_hiera_tiny.pt", ["a: No module named 'x'"])
     assert "segment-anything" in sam1
     assert "ultralytics" in sam2
+
+
+def test_backends_reports_tkinter_too():
+    """The interpreter split is the whole problem: ComfyUI's embedded Python has
+    torch and SAM but no tkinter, the system Python is the other way round.
+    Reporting only the SAM half hides half the diagnosis."""
+    b = S.backends()
+    assert "tkinter" in b and "torch" in b
+
+
+def test_export_writes_one_mask_per_photo_and_survives_failures():
+    """The bridge across that split, so nobody has to choose between the
+    segmenter and the review window."""
+    import cv2
+    from bpc.config import Settings
+    with tempfile.TemporaryDirectory() as d:
+        img = os.path.join(d, "a.jpg")
+        cv2.imwrite(img, (np.random.default_rng(0).integers(0, 255, (200, 300, 3))
+                          ).astype(np.uint8))
+        out = os.path.join(d, "masks")
+        lines = []
+        written, failed = S.export_masks([img], "/no/such/model.pt", out,
+                                         Settings(), log=lines.append)
+        assert written == 0 and failed == 1        # no model here: must not raise
+        assert os.path.isdir(out)
+        assert any("ERROR" in l for l in lines)
+        assert any("--mask file" in l for l in lines), "must say how to use the folder"

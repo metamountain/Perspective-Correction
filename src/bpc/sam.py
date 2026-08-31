@@ -121,12 +121,81 @@ def _install_hint(path: str, errors) -> str:
 
 
 def backends():
-    """Which loaders are importable here -- for diagnostics, never for control
-    flow, since importing torch is expensive."""
+    """What this interpreter can import -- diagnostics only, never control flow,
+    since importing torch is expensive.
+
+    ``tkinter`` is in the list because it is the other half of the same problem.
+    A ComfyUI portable install has torch and SAM but *no* tkinter -- the Windows
+    embeddable Python omits tcl/tk -- while the system Python is usually the
+    other way round. Seeing both at once is what makes the situation legible.
+    """
     import importlib.util
-    return {n: importlib.util.find_spec(n) is not None
-            for n in ("ultralytics", "sam2", "segment_anything",
-                      "segment_anything_hq", "torch")}
+    out = {}
+    for n in ("ultralytics", "sam2", "segment_anything", "segment_anything_hq",
+              "torch", "tkinter"):
+        try:
+            out[n] = importlib.util.find_spec(n) is not None
+        except Exception:
+            out[n] = False
+    return out
+
+
+def export_masks(images, model_path, out_dir, settings, log=print):
+    """Write one mask PNG per photograph, for use later with ``--mask file``.
+
+    This exists because of a split that has no good side: the interpreter with
+    torch and SAM (ComfyUI's embedded Python) has no tkinter, and the one with
+    tkinter has no torch. Rather than making the user choose between the
+    segmenter and the review window, SAM runs once from whichever Python can
+    load it, and everything afterwards -- batch runs, the GUI, a different
+    machine -- consumes the folder it wrote.
+    """
+    import cv2 as _cv2
+
+    from . import imageio as IO
+    from . import lines as L
+
+    os.makedirs(out_dir, exist_ok=True)
+    written, failed = 0, 0
+    log(f"# SAM export -> {out_dir}")
+    log(f"# {describe(model_path)}")
+    for path in images:
+        stem = os.path.splitext(os.path.basename(path))[0]
+        try:
+            src = IO.load(path)
+            gray, _ = IO.analysis_gray(src.bgr, settings.detect_max_edge)
+            small = _cv2.resize(src.bgr, (gray.shape[1], gray.shape[0]),
+                                interpolation=_cv2.INTER_AREA)
+            _, vert, horiz, _, _ = L.prepare(gray, settings.replace(mask_mode="off"), None)
+            seg = np.vstack([vert.seg, horiz.seg]) if len(vert) or len(horiz) \
+                else np.zeros((0, 4))
+            text = (getattr(settings, "sam_text", "") or "").strip()
+            if text:
+                mask, note = mask_from_text(small, model_path, text,
+                                            getattr(settings, "sam_max_edge", 768),
+                                            getattr(settings, "sam_device", ""))
+            else:
+                mask, note = mask_from_segments(
+                    small, seg, model_path,
+                    min_density_ratio=getattr(settings, "sam_min_density", 0.25),
+                    max_edge=getattr(settings, "sam_max_edge", 768),
+                    device=getattr(settings, "sam_device", ""))
+            if mask is None:
+                log(f"SKIPPED {stem}  {note}")
+                failed += 1
+                continue
+            # written at the analysis resolution; the loader resamples to
+            # whatever the photograph is, so this stays small on disk
+            out = os.path.join(out_dir, stem + ".png")
+            _cv2.imwrite(out, (mask.astype(np.uint8) * 255))
+            log(f"OK      {stem}  {note}  ({mask.mean() * 100:.0f}% of frame)")
+            written += 1
+        except Exception as exc:
+            log(f"ERROR   {stem}  {exc}")
+            failed += 1
+    log(f"# {written} written, {failed} failed")
+    log(f"# now run anywhere:  --mask file --mask-file \"{out_dir}\"")
+    return written, failed
 
 
 def _as_torch_checkpoint(path: str) -> str:

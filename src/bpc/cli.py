@@ -128,6 +128,12 @@ def build_parser():
                         "which works with SAM 1 and 2 as well")
     g.add_argument("--sam-max-edge", type=int, default=Settings.sam_max_edge)
     g.add_argument("--sam-device", default="", help="cuda, cpu; empty picks cuda when present")
+    g.add_argument("--sam-export", metavar="DIR",
+                   help="run SAM over the inputs and write one mask PNG per photo "
+                        "into DIR, then exit. Use it from the interpreter that has "
+                        "torch (ComfyUI's python_embeded), and consume the folder "
+                        "afterwards with --mask file --mask-file DIR from anywhere, "
+                        "including the GUI")
     g.add_argument("--sam-info", action="store_true",
                    help="report which SAM backends are installed, describe "
                         "--sam-model, and exit")
@@ -266,6 +272,20 @@ def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
     if args.sam_info:
         return sam_info(args)
+    if args.sam_export:
+        if not args.sam_model:
+            print("--sam-export needs --sam-model <checkpoint>")
+            return 2
+        files = collect(args.inputs, args.recursive)
+        if not files:
+            print("no readable images found")
+            return 1
+        from . import sam as SAM
+        log = _Log(args.log_file, args.quiet)
+        _, failed = SAM.export_masks(files, args.sam_model, args.sam_export,
+                                     settings_from(args), log=log)
+        log.close()
+        return 0 if failed == 0 else 3
     if args.mask == "sam" and not args.sam_model:
         print("--mask sam needs --sam-model <checkpoint>")
         return 2

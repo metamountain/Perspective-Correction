@@ -49,6 +49,8 @@ Log lines are one per file:
 | `--crop aspect\|inside\|none` | keep the original aspect ratio, fit inside, or don't crop |
 | `--detector hybrid` | combine LSD's precision with M-LSD's judgement. Needs `pip install ai-edge-litert` ([measurements](docs/detectors.md)) |
 | `--mask auto` | ignore lines in vegetation and sky. **Pair it with `--focal-35mm`** ([why](docs/masking.md)) |
+| `--sam-info` | which backends this Python has, and whether a checkpoint loads |
+| `--sam-export DIR` | run SAM once from the Python that has torch; use the folder anywhere afterwards |
 | `--mask sam --sam-model PATH` | Segment Anything decides what is clutter; SAM supplies the boundaries, the line detector the labels ([details](docs/masking.md)) |
 | `--mask file --mask-file DIR` | one PNG mask per photo from any other tool |
 | `--debug-dir DIR` | write line/horizon overlays and before-after pairs |
