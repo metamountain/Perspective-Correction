@@ -45,21 +45,55 @@ class ReviewSession:
         self.h, self.w = self.bgr.shape[:2]
 
         self.gray, self.scale = IO.analysis_gray(self.bgr, settings.detect_max_edge)
-        _small = cv2.resize(self.bgr, (self.gray.shape[1], self.gray.shape[0]),
-                            interpolation=cv2.INTER_AREA) \
+        self._small = cv2.resize(self.bgr, (self.gray.shape[1], self.gray.shape[0]),
+                                 interpolation=cv2.INTER_AREA) \
             if self.bgr.shape[:2] != self.gray.shape[:2] else self.bgr
-        (_, self.vert, self.horiz, self.detector,
-         self.detect_info) = L.prepare(self.gray, settings, _small, self.path)
-        # per-line manual state: True = may be used, False = struck out by the user
-        self.enabled = np.ones(len(self.vert), dtype=bool)
+        self.detect_error = ""
+        self._detect()
 
         self.mode = AUTO
         self.show_mask = True
+        self.mask_alpha = 0.28
         self.manual_roll = 0.0
         self.manual_pitch = 0.0
         self.manual_focal_35mm = 0.0
         self.model = None
         self.refit()
+
+    # -- detection -------------------------------------------------------
+    def _detect(self):
+        """Run the line front end.  Separate from ``__init__`` because changing
+        the mask has to redo it, not just refit."""
+        try:
+            (_, self.vert, self.horiz, self.detector,
+             self.detect_info) = L.prepare(self.gray, self.settings, self._small, self.path)
+            self.detect_error = ""
+        except Exception as exc:
+            # a missing mask file must not take the window down; say so instead
+            self.detect_error = str(exc)
+            safe = self.settings.replace(mask_mode="off")
+            (_, self.vert, self.horiz, self.detector,
+             self.detect_info) = L.prepare(self.gray, safe, self._small, self.path)
+        # per-line manual state: True = may be used, False = struck out by the user
+        self.enabled = np.ones(len(self.vert), dtype=bool)
+
+    def set_mask(self, mode, path="", invert=None):
+        """Switch the region mask and re-detect.
+
+        Belongs here rather than only in the batch settings: the point of a mask
+        is that you can see what it removed, and you can only judge that while
+        looking at the picture."""
+        self.settings = self.settings.replace(
+            mask_mode=mode, mask_file=path or self.settings.mask_file,
+            mask_invert=self.settings.mask_invert if invert is None else invert)
+        self._detect()
+        self.refit()
+        return self.detect_error
+
+    @property
+    def mask_active(self):
+        info = getattr(self, "detect_info", None) or {}
+        return info.get("mask") is not None
 
     # -- fitting ---------------------------------------------------------
     def refit(self):
@@ -185,8 +219,8 @@ class ReviewSession:
         canvas = self.bgr.copy()
         inv = 1.0 / self.scale
         info = getattr(self, "detect_info", None) or {}
-        if self.show_mask:
-            PV.tint_mask(canvas, info.get("mask"))
+        if self.show_mask and self.mask_alpha > 0.001:
+            PV.tint_mask(canvas, info.get("mask"), alpha=self.mask_alpha)
             dropped = info.get("masked_out")
             if dropped is not None and len(dropped):
                 PV._draw_lines(canvas, dropped * inv, PV.RED, 1)
@@ -230,9 +264,22 @@ class ReviewSession:
         conf = self.model.confidence if self.model else 0.0
         src = self.model.f_source if self.model else "-"
         head = "MANUAL" if self.mode == MANUAL else ("SKIP" if skip else "AUTO")
+        mask_note = ""
+        if self.detect_error:
+            mask_note = f"mask problem: {self.detect_error}"
+        elif self.settings.mask_mode == "off":
+            mask_note = "mask: off"
+        elif self.mask_active:
+            info = self.detect_info or {}
+            dropped = info.get("masked_out")
+            n = 0 if dropped is None else len(dropped)
+            mask_note = f"mask: {self.settings.mask_mode}, {n} line(s) removed"
+        else:
+            mask_note = f"mask: {self.settings.mask_mode} produced nothing"
         parts = [f"{head}  roll={math.degrees(roll):+.2f}deg  pitch={math.degrees(pitch):+.2f}deg",
                  f"f={f35:.0f}mm ({src if self.mode == AUTO else 'manual'})  conf={conf:.2f}  "
                  f"lines={int(self.enabled.sum())}/{len(self.vert)}"]
+        parts.append(mask_note)
         if clamped:
             parts.append("correction hit the configured limit")
         if skip:

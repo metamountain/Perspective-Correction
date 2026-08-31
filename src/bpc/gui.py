@@ -82,6 +82,7 @@ class ReviewWindow(tk.Toplevel):
             return
 
         self._build()
+        self.v_alpha.set(self.session.mask_alpha)
         self.after(60, self._sync_from_session)
 
     # -- layout ----------------------------------------------------------
@@ -121,6 +122,29 @@ class ReviewWindow(tk.Toplevel):
         self._slider(ctl, 1, "pitch (verticals)", self.v_pitch, -30, 30, "deg")
         self._slider(ctl, 2, "focal length", self.v_focal, 8, 200, "mm eq")
 
+        msk = ttk.LabelFrame(top, text="region mask", padding=6)
+        msk.pack(fill="x", pady=(6, 0))
+        self.v_maskmode = tk.StringVar(value=self.settings.mask_mode)
+        ttk.Label(msk, text="source", width=18).grid(row=0, column=0, sticky="w")
+        box = ttk.Combobox(msk, textvariable=self.v_maskmode, width=8, state="readonly",
+                           values=["off", "auto", "file"])
+        box.grid(row=0, column=1, sticky="w", padx=(6, 6))
+        box.bind("<<ComboboxSelected>>", lambda e: self._apply_mask())
+        ttk.Button(msk, text="mask folder...", command=self._pick_mask_folder
+                   ).grid(row=0, column=2, sticky="w")
+        self.v_maskinv = tk.BooleanVar(value=self.settings.mask_invert)
+        ttk.Checkbutton(msk, text="mask marks what to KEEP (SAM output)",
+                        variable=self.v_maskinv, command=self._apply_mask
+                        ).grid(row=0, column=3, sticky="w", padx=10)
+        self.lbl_mask = ttk.Label(msk, text="")
+        self.lbl_mask.grid(row=1, column=0, columnspan=4, sticky="w", pady=(4, 0))
+        self.v_alpha = tk.DoubleVar(value=0.28)
+        ttk.Label(msk, text="mask opacity", width=18).grid(row=2, column=0, sticky="w")
+        ttk.Scale(msk, from_=0.0, to=1.0, variable=self.v_alpha, orient="horizontal",
+                  command=lambda _v: self._on_alpha()).grid(row=2, column=1, columnspan=3,
+                                                            sticky="ew", padx=6)
+        msk.columnconfigure(3, weight=1)
+
         btns = ttk.Frame(top, padding=(0, 8))
         btns.pack(fill="x")
         ttk.Button(btns, text="strike out slanted lines (>18 deg)",
@@ -137,6 +161,36 @@ class ReviewWindow(tk.Toplevel):
     def _mk_show(self):
         self.v_show_lines = tk.BooleanVar(value=True)
         return self.v_show_lines
+
+    def _apply_mask(self):
+        mode = self.v_maskmode.get()
+        if mode == "file" and not self.session.settings.mask_file:
+            if not self._pick_mask_folder(apply_now=False):
+                self.v_maskmode.set(self.session.settings.mask_mode)
+                return
+        err = self.session.set_mask(mode, invert=bool(self.v_maskinv.get()))
+        self.lbl_mask.configure(text=err or "")
+        if self.session.mode == AUTO:
+            self._sync_from_session()
+        else:
+            self._redraw()
+
+    def _pick_mask_folder(self, apply_now=True):
+        """A folder of one mask per photo is what an external segmenter such as
+        SAM produces; a single PNG is the hand-painted case."""
+        d = filedialog.askdirectory(title="folder of mask images (one per photo)",
+                                    parent=self)
+        if not d:
+            return False
+        self.session.settings = self.session.settings.replace(mask_file=d)
+        if apply_now:
+            self.v_maskmode.set("file")
+            self._apply_mask()
+        return True
+
+    def _on_alpha(self):
+        self.session.mask_alpha = float(self.v_alpha.get())
+        self._schedule_redraw()
 
     def _mk_mask(self):
         self.v_show_mask = tk.BooleanVar(value=True)
@@ -318,15 +372,29 @@ class App(_ROOT_CLASS):
         row.grid(row=1, column=0, columnspan=3, sticky="ew", **pad)
         ttk.Button(row, text="add images...", command=self._add_files).pack(side="left")
         ttk.Button(row, text="add folder...", command=self._add_folder).pack(side="left", padx=6)
-        ttk.Button(row, text="clear", command=self._clear).pack(side="left")
+        ttk.Button(row, text="remove", command=self._remove_selected).pack(side="left")
+        ttk.Button(row, text="clear", command=self._clear).pack(side="left", padx=6)
         self.lbl_items = ttk.Label(row, text="nothing selected")
         self.lbl_items.pack(side="left", padx=12)
-        ttk.Button(row, text="review one image...",
+        ttk.Button(row, text="review selected image...",
                    command=self._review_single).pack(side="right")
 
-        ttk.Label(top, text="output folder").grid(row=2, column=0, sticky="w", **pad)
-        ttk.Entry(top, textvariable=self.v_output, width=70).grid(row=2, column=1, sticky="ew", **pad)
-        ttk.Button(top, text="browse...", command=self._pick_out).grid(row=2, column=2, **pad)
+        # A visible, selectable list.  Without it "review one image" had to guess
+        # which of several dropped photos was meant, and it guessed the first --
+        # so dropping a second one and clicking review opened the first again.
+        listrow = ttk.Frame(top)
+        listrow.grid(row=2, column=0, columnspan=3, sticky="ew", **pad)
+        self.lst = tk.Listbox(listrow, height=4, activestyle="dotbox",
+                              exportselection=False)
+        self.lst.pack(side="left", fill="both", expand=True)
+        sb = ttk.Scrollbar(listrow, orient="vertical", command=self.lst.yview)
+        sb.pack(side="right", fill="y")
+        self.lst.configure(yscrollcommand=sb.set)
+        self.lst.bind("<Double-1>", lambda e: self._review_single())
+
+        ttk.Label(top, text="output folder").grid(row=3, column=0, sticky="w", **pad)
+        ttk.Entry(top, textvariable=self.v_output, width=70).grid(row=3, column=1, sticky="ew", **pad)
+        ttk.Button(top, text="browse...", command=self._pick_out).grid(row=3, column=2, **pad)
         top.columnconfigure(1, weight=1)
 
         opt = ttk.LabelFrame(self, text="settings", padding=8)
@@ -392,6 +460,7 @@ class App(_ROOT_CLASS):
 
     def _add(self, paths):
         added = 0
+        first_new = len(self.items)
         for p in paths:
             p = os.path.abspath(p)
             if not os.path.exists(p) or p in self.items:
@@ -399,7 +468,13 @@ class App(_ROOT_CLASS):
             if os.path.isdir(p) or os.path.splitext(p)[1].lower() in READABLE:
                 self.items.append(p)
                 added += 1
+        if added and hasattr(self, "lst"):
+            self.lst.selection_clear(0, "end")
         self._refresh_items()
+        if added and hasattr(self, "lst"):
+            self.lst.selection_clear(0, "end")
+            self.lst.selection_set(first_new)
+            self.lst.see(first_new)
         return added
 
     def _add_files(self):
@@ -430,7 +505,24 @@ class App(_ROOT_CLASS):
             self.drop.configure(text="nothing usable in that drop")
             self.after(1800, self._refresh_items)
 
+    def _remove_selected(self):
+        for i in reversed(self.lst.curselection()):
+            del self.items[i]
+        self._refresh_items()
+
     def _refresh_items(self):
+        keep = list(self.lst.curselection()) if hasattr(self, "lst") else []
+        if hasattr(self, "lst"):
+            self.lst.delete(0, "end")
+            for p in self.items:
+                self.lst.insert("end", ("[folder]  " if os.path.isdir(p) else "")
+                                + os.path.basename(p))
+            if self.items:
+                # select what was just added, which is what the user is looking at
+                idx = keep[0] if keep and keep[0] < len(self.items) else len(self.items) - 1
+                self.lst.selection_clear(0, "end")
+                self.lst.selection_set(idx)
+                self.lst.see(idx)
         n_files = sum(1 for p in self.items if os.path.isfile(p))
         n_dirs = sum(1 for p in self.items if os.path.isdir(p))
         if not self.items:
@@ -451,17 +543,24 @@ class App(_ROOT_CLASS):
         self.drop.configure(text=hint)
 
     def _review_single(self):
-        """Open one image straight in the review window.
+        """Open the *selected* image in the review window.
 
         The batch list is the normal path, but a single photograph being checked
-        by hand should not need a run first."""
-        files = self._files()
-        if not files:
+        by hand should not need a run first.  It reviews what is selected in the
+        list -- picking the first entry regardless, as this used to, meant that
+        dropping a second photo and clicking review opened the first one again."""
+        if not self.items:
             messagebox.showinfo("Review", "add an image first")
             return
-        if len(files) > 1:
-            files = [f for f in files if os.path.isfile(f)][:1]
-        ReviewWindow(self, files[0], self._settings(), self._dest(files[0]))
+        sel = self.lst.curselection()
+        item = self.items[sel[0]] if sel else self.items[-1]
+        if os.path.isdir(item):
+            inside = [f for f in self._expand(item) if os.path.isfile(f)]
+            if not inside:
+                messagebox.showinfo("Review", "that folder has no readable images")
+                return
+            item = inside[0]
+        ReviewWindow(self, item, self._settings(), self._dest(item))
 
     def _pick_out(self):
         d = filedialog.askdirectory(title="output folder")
@@ -469,21 +568,24 @@ class App(_ROOT_CLASS):
             self.v_output.set(d)
 
     # -- run -------------------------------------------------------------
+    def _expand(self, item):
+        """One selection entry -> the photographs it stands for."""
+        if os.path.isfile(item):
+            return [item]
+        if self.v_recursive.get():
+            return [os.path.join(b, n) for b, _, names in os.walk(item)
+                    for n in sorted(names)
+                    if os.path.splitext(n)[1].lower() in READABLE]
+        return [os.path.join(item, n) for n in sorted(os.listdir(item))
+                if os.path.splitext(n)[1].lower() in READABLE
+                and os.path.isfile(os.path.join(item, n))]
+
     def _files(self):
         """Expand the selection: single images stay as they are, folders are
         listed (recursively if asked)."""
         out, seen = [], set()
         for item in self.items:
-            if os.path.isfile(item):
-                found = [item]
-            elif self.v_recursive.get():
-                found = [os.path.join(b, n) for b, _, names in os.walk(item)
-                         for n in sorted(names)
-                         if os.path.splitext(n)[1].lower() in READABLE]
-            else:
-                found = [os.path.join(item, n) for n in sorted(os.listdir(item))
-                         if os.path.splitext(n)[1].lower() in READABLE
-                         and os.path.isfile(os.path.join(item, n))]
+            found = self._expand(item)
             for f in found:
                 k = os.path.abspath(f)
                 if k not in seen:

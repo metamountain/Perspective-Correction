@@ -89,3 +89,47 @@ def test_an_unclear_image_reports_why_it_would_be_skipped():
     # and the manual mode can still correct it
     s.set_manual(roll_deg=2.0, pitch_deg=0.0, focal_35mm=28)
     assert s.would_skip() is None
+
+
+def test_the_mask_can_be_switched_while_looking_at_the_picture():
+    """A mask is only judgeable against the image it is applied to, so the
+    review window must be able to turn it on, not only the batch settings."""
+    s, _ = _session(seed=31, occluders=3)
+    assert not s.mask_active
+    assert "mask: off" in s.status_text()
+    n_before = len(s.vert)
+    s.set_mask("auto")
+    assert s.mask_active
+    assert "mask: auto" in s.status_text()
+    assert len(s.vert) <= n_before
+    s.set_mask("off")
+    assert not s.mask_active
+
+
+def test_a_missing_mask_file_is_reported_not_raised():
+    """A wrong folder must not take the window down mid-review."""
+    s, _ = _session(seed=32)
+    err = s.set_mask("file", "/definitely/not/here")
+    assert err and "mask" in err.lower()
+    assert len(s.vert) > 0, "detection must fall back, not collapse"
+    assert "mask problem" in s.status_text()
+
+
+def test_mask_opacity_is_adjustable_and_zero_means_invisible():
+    import numpy as np
+    s, _ = _session(seed=33, occluders=3)
+    s.set_mask("auto")
+    s.mask_alpha = 0.0
+    plain = s.render_before(320)
+    s.mask_alpha = 0.9
+    tinted = s.render_before(320)
+    assert plain.shape == tinted.shape
+    assert not np.array_equal(plain, tinted), "the opacity slider must do something"
+
+
+def test_the_mask_reports_how_many_lines_it_removed():
+    s, _ = _session(seed=34, occluders=3)
+    s.set_mask("auto")
+    dropped = (s.detect_info or {}).get("masked_out")
+    assert dropped is not None
+    assert f"{len(dropped)} line(s) removed" in s.status_text()
