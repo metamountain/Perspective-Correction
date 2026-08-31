@@ -39,6 +39,7 @@ import cv2
 import numpy as np
 from PIL import Image, ImageTk
 
+from . import prefs
 from .config import Settings
 from .imageio import READABLE
 from .pipeline import ERROR, OK, SKIPPED, process
@@ -196,6 +197,7 @@ class ReviewWindow(tk.Toplevel):
         if not p:
             return False
         self.session.settings = self.session.settings.replace(sam_model=p)
+        prefs.save(sam_model=p)          # typed once, not once per session
         self.lbl_mask.configure(text=SAM.describe(p))
         if apply_now:
             self.v_maskmode.set("sam")
@@ -210,6 +212,7 @@ class ReviewWindow(tk.Toplevel):
         if not d:
             return False
         self.session.settings = self.session.settings.replace(mask_file=d)
+        prefs.save(mask_file=d)
         if apply_now:
             self.v_maskmode.set("file")
             self._apply_mask()
@@ -371,6 +374,11 @@ class App(_ROOT_CLASS):
         self.stop_flag = threading.Event()
         self.results = {}
         self._build()
+        stored = prefs.load()
+        if stored.get("output"):
+            self.v_output.set(stored["output"])
+        # a remembered path is offered, never forced: the selector still says off
+        self._remembered = stored
         if initial:
             self._add(list(initial))
         self.after(120, self._pump)
@@ -440,7 +448,7 @@ class App(_ROOT_CLASS):
         self.v_mask = tk.StringVar(value=Settings.mask_mode)
         ttk.Combobox(opt, textvariable=self.v_mask, values=["off", "auto", "file", "sam"],
                      width=6, state="readonly").grid(row=0, column=7, sticky="w")
-        self.v_maskpath = tk.StringVar()
+        self.v_maskpath = tk.StringVar(value="")
         ttk.Button(opt, text="mask source...", command=self._pick_mask_source
                    ).grid(row=0, column=8, sticky="w", padx=(6, 0))
         ttk.Label(opt, text="crop").grid(row=1, column=3, sticky="e", padx=4)
@@ -486,7 +494,8 @@ class App(_ROOT_CLASS):
         s.max_pitch_deg = float(self.v_maxpitch.get())
         s.crop = self.v_crop.get()
         s.mask_mode = self.v_mask.get()
-        path = self.v_maskpath.get()
+        path = self.v_maskpath.get() or self._remembered.get(
+            "sam_model" if self.v_mask.get() == "sam" else "mask_file", "")
         if s.mask_mode == "file":
             s.mask_file = path
         elif s.mask_mode == "sam":
@@ -506,11 +515,13 @@ class App(_ROOT_CLASS):
             if p:
                 from . import sam as SAM
                 self.v_maskpath.set(p)
+                prefs.save(sam_model=p)
                 messagebox.showinfo("SAM model", SAM.describe(p))
         elif mode == "file":
             d = filedialog.askdirectory(title="folder of mask images (one per photo)")
             if d:
                 self.v_maskpath.set(d)
+                prefs.save(mask_file=d)
         else:
             messagebox.showinfo("Mask", "set the mask selector to 'file' or 'sam' first")
 
@@ -622,6 +633,7 @@ class App(_ROOT_CLASS):
         d = filedialog.askdirectory(title="output folder")
         if d:
             self.v_output.set(d)
+            prefs.save(output=d)
 
     # -- run -------------------------------------------------------------
     def _expand(self, item):

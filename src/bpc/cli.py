@@ -128,6 +128,11 @@ def build_parser():
                         "which works with SAM 1 and 2 as well")
     g.add_argument("--sam-max-edge", type=int, default=Settings.sam_max_edge)
     g.add_argument("--sam-device", default="", help="cuda, cpu; empty picks cuda when present")
+    g.add_argument("--remember", action="store_true",
+                   help="store --sam-model, --mask-file, -o and --focal-35mm as "
+                        "defaults for future runs")
+    g.add_argument("--forget", action="store_true",
+                   help="delete the remembered defaults and exit")
     g.add_argument("--sam-export", metavar="DIR",
                    help="run SAM over the inputs and write one mask PNG per photo "
                         "into DIR, then exit. Use it from the interpreter that has "
@@ -268,8 +273,41 @@ def sam_info(args) -> int:
     return 0
 
 
+def apply_prefs(args, parser):
+    """Fill unset path arguments from the remembered ones.
+
+    Only fills what the command line left at its default, so an explicit flag
+    always wins and a run is still fully described by what was typed plus what
+    ``--sam-info`` reports.
+    """
+    from . import prefs
+    stored = prefs.load()
+    used = []
+    for key in ("sam_model", "mask_file", "output"):
+        if not getattr(args, key, None) and stored.get(key):
+            setattr(args, key, stored[key])
+            used.append(key)
+    if not args.focal_35mm and stored.get("focal_35mm"):
+        args.focal_35mm = float(stored["focal_35mm"])
+        used.append("focal_35mm")
+    return used
+
+
 def main(argv=None) -> int:
-    args = build_parser().parse_args(argv)
+    parser = build_parser()
+    args = parser.parse_args(argv)
+    from . import prefs
+    if args.forget:
+        print("forgot remembered defaults" if prefs.forget() else "nothing was remembered")
+        return 0
+    used = apply_prefs(args, parser)
+    if used and not args.quiet:
+        print(f"# using remembered {', '.join(used)} from {prefs.path()}")
+    if args.remember:
+        ok = prefs.save(sam_model=args.sam_model, mask_file=args.mask_file,
+                        output=args.output,
+                        focal_35mm=args.focal_35mm if args.focal_35mm else None)
+        print(f"# remembered in {prefs.path()}" if ok else "# nothing to remember")
     if args.sam_info:
         return sam_info(args)
     if args.sam_export:
@@ -300,7 +338,7 @@ def main(argv=None) -> int:
                 print(f"GUI unavailable ({exc}); pass image files or folders instead.")
                 return 2
             return run_gui(args.inputs)
-        build_parser().print_help()
+        parser.print_help()
         return 2
 
     files = collect(args.inputs, args.recursive)

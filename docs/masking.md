@@ -120,6 +120,19 @@ The masks are written at analysis resolution and resampled on load, so the
 folder stays small and the segmenter runs once per photograph rather than once
 per experiment.
 
+### Type the checkpoint path once
+
+    python rectify.py "D:\Fotos" --mask sam --sam-model "D:\...\sam_vit_b_01ec64.pth" --remember
+
+After that the path fills itself in, and the GUI remembers whatever you pick in
+its file dialogs. `--forget` clears it; an explicit flag always wins over a
+remembered one.
+
+Only *paths* are remembered -- the checkpoint, a mask folder, the output folder
+and the focal length. Correction parameters deliberately are not: a setting that
+silently persists between runs is one nobody can reason about, and a batch
+should stay reproducible from its command line.
+
 ### Backends, and their licences
 
 Tried in order; install whichever suits you.
