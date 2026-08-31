@@ -139,6 +139,9 @@ def build_parser():
                         "torch (ComfyUI's python_embeded), and consume the folder "
                         "afterwards with --mask file --mask-file DIR from anywhere, "
                         "including the GUI")
+    g.add_argument("--diagnostics", action="store_true",
+                   help="print the environment (interpreter, versions, backends, "
+                        "settings) before the run, so a log is self-describing")
     g.add_argument("--sam-info", action="store_true",
                    help="report which SAM backends are installed, describe "
                         "--sam-model, and exit")
@@ -245,6 +248,45 @@ class _Log:
 def _job(item):
     src, dst, settings, debug_dir, dry = item
     return process(src, dst, settings, debug_dir=debug_dir, dry_run=dry)
+
+
+def diagnostics_text(args, settings) -> str:
+    """Everything needed to interpret a log without asking follow-up questions.
+
+    A log that says "SKIPPED, low confidence" is nearly useless on its own: the
+    answer depends on the interpreter, the library versions, which optional
+    backends were present and what the settings actually were after defaults and
+    remembered values were applied.
+    """
+    import platform
+    import sys as _sys
+
+    from . import __version__
+    from . import sam as SAM
+
+    out = ["# --- environment " + "-" * 48]
+    out.append(f"# bpc {__version__} on {platform.platform()}")
+    out.append(f"# python {_sys.version.split()[0]}  {_sys.executable}")
+    for mod in ("numpy", "cv2", "PIL", "piexif"):
+        try:
+            m = __import__(mod)
+            out.append(f"#   {mod:8s} {getattr(m, '__version__', '?')}")
+        except Exception as exc:
+            out.append(f"#   {mod:8s} MISSING ({type(exc).__name__})")
+    out.append("# optional backends: " + ", ".join(
+        f"{k}={'yes' if v else 'no'}" for k, v in SAM.backends().items()))
+    if settings.mask_mode == "sam" and settings.sam_model:
+        out.append(f"# sam model: {SAM.describe(settings.sam_model)}")
+    interesting = ("detector", "mask_mode", "mask_file", "sam_model", "sam_text",
+                   "sam_min_density", "focal_35mm", "default_focal_35mm",
+                   "focal_estimate", "min_confidence", "max_pitch_deg",
+                   "max_roll_deg", "pitch_strength", "roll_strength", "crop",
+                   "detect_max_edge", "inlier_threshold_deg", "angular_softness",
+                   "uncertain_pitch_damping", "seed")
+    out.append("# settings: " + ", ".join(
+        f"{k}={getattr(settings, k)!r}" for k in interesting))
+    out.append("# " + "-" * 62)
+    return "\n".join(out)
 
 
 def sam_info(args) -> int:
@@ -359,6 +401,9 @@ def main(argv=None) -> int:
     settings = settings_from(args)
     roots = [os.path.abspath(i) for i in args.inputs if os.path.isdir(i)]
     log = _Log(args.log_file, args.quiet)
+    if args.diagnostics:
+        for line in diagnostics_text(args, settings).splitlines():
+            log(line)
     log(f"# batch-perspective-correction  {len(files)} file(s)  "
         f"{time.strftime('%Y-%m-%d %H:%M:%S')}")
 
@@ -398,7 +443,9 @@ def main(argv=None) -> int:
 
     if args.json_report:
         with open(args.json_report, "w", encoding="utf-8") as fh:
-            json.dump([dict(r.as_dict(), diagnostics=r.diagnostics) for r in results],
+            json.dump({"environment": diagnostics_text(args, settings),
+                       "results": [dict(r.as_dict(), diagnostics=r.diagnostics)
+                                   for r in results]},
                       fh, indent=2, default=str)
         log(f"# report written to {args.json_report}")
 

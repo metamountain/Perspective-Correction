@@ -30,6 +30,15 @@ Debian/Ubuntu). The CLI works without it.
 
 or double-click `run_gui.bat` on Windows.
 
+To produce something reviewable — by a colleague, or by an assistant helping you
+tune it — drop a photo folder onto **`run_and_log.bat`**. It finds ComfyUI's
+python by itself (the one with torch and CUDA), offers any SAM checkpoint it
+finds, and writes one folder holding the corrected images, the detection
+overlays, a `log.txt` that begins with the environment and settings that
+produced it, and a machine-readable `report.json`. A log that says "SKIPPED, low
+confidence" is nearly useless without knowing which interpreter, which library
+versions and which settings were actually in force, so it records all three.
+
 Log lines are one per file:
 
     OK      DSC_0142.jpg  roll=-1.83deg pitch=+6.41deg conf=0.88 f=24mm(exif) keeps 87% 3648x2432 0.71s

@@ -187,3 +187,42 @@ def test_a_mask_source_with_no_path_fails_once_not_per_file():
         assert not os.path.exists(os.path.join(d, "out"))
     finally:
         shutil.rmtree(d, ignore_errors=True)
+
+
+def test_the_json_report_says_what_produced_it():
+    """A log line reading "SKIPPED, low confidence" is nearly useless on its
+    own: the answer depends on the interpreter, the library versions, which
+    optional backends were present and what the settings were after defaults and
+    remembered values were applied. A report that omits those cannot be judged
+    by anyone who did not run it."""
+    import json
+
+    from bpc.cli import main as cli_main
+    d = _tmp()
+    try:
+        cv2.imwrite(os.path.join(d, "a.jpg"), synth.Scene(pitch_deg=8, seed=71).img)
+        rep = os.path.join(d, "report.json")
+        assert cli_main([d, "-n", "-q", "--json-report", rep]) == 0
+        with open(rep, encoding="utf-8") as fh:
+            data = json.load(fh)
+        assert set(data) == {"environment", "results"}
+        env = data["environment"]
+        for expected in ("python", "numpy", "cv2", "optional backends", "settings"):
+            assert expected in env, f"the report must record {expected}"
+        assert len(data["results"]) == 1
+        assert "confidence" in data["results"][0]
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
+def test_diagnostics_go_into_the_log_file_too():
+    from bpc.cli import main as cli_main
+    d = _tmp()
+    try:
+        cv2.imwrite(os.path.join(d, "a.jpg"), synth.Scene(pitch_deg=8, seed=72).img)
+        log = os.path.join(d, "log.txt")
+        assert cli_main([d, "-n", "-q", "--diagnostics", "--log-file", log]) == 0
+        text = open(log, encoding="utf-8").read()
+        assert "# python" in text and "# settings:" in text
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
