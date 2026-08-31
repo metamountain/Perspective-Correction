@@ -441,16 +441,24 @@ def _to_full(m, h, w):
     return m.astype(bool)
 
 
-def line_density(mask: np.ndarray, seg: np.ndarray, samples: int = 7) -> float:
-    """Straight-line length per unit area inside a region, normalised.
+def line_density(mask: np.ndarray, seg: np.ndarray, samples: int = 7,
+                 margin: int = 0) -> float:
+    """Straight-line length per unit area in a region, counting its border.
 
-    This is what turns SAM's boundaries into a decision.  A facade segment is
-    threaded with long straight edges; a tree canopy of the same area has almost
-    none, however intricate its outline.
+    ``margin`` is the point.  A first version counted only lines strictly inside
+    a region and got flat building surfaces exactly wrong: a stucco panel
+    between two windows contains no straight lines at all -- its edges are the
+    window frames and floor bands *around* it -- so the wall of a building was
+    scored as foliage and masked out of its own measurement.  Dilating the
+    region first lets a panel claim the lines that bound it, while a tree canopy
+    dilated by the same amount still claims almost none.
     """
     area = float(mask.sum())
     if area <= 0 or len(seg) == 0:
         return 0.0
+    if margin > 0:
+        k = np.ones((2 * margin + 1, 2 * margin + 1), np.uint8)
+        mask = cv2.dilate(mask.astype(np.uint8), k).astype(bool)
     h, w = mask.shape[:2]
     t = np.linspace(0.0, 1.0, samples)[None, :]
     xs = np.clip((seg[:, 0:1] + (seg[:, 2:3] - seg[:, 0:1]) * t).astype(int), 0, w - 1)
@@ -460,28 +468,58 @@ def line_density(mask: np.ndarray, seg: np.ndarray, samples: int = 7) -> float:
     return float((lengths * inside).sum() / np.sqrt(area))
 
 
-def mask_from_segments(bgr, seg, model_path, min_density_ratio=0.25,
-                       max_edge=768, device=""):
-    """Regions to ignore: everything SAM found that holds no straight lines.
+def boundary_straightness(mask: np.ndarray) -> float:
+    """0..1 -- how few straight pieces the region's own outline needs.
 
-    The threshold is relative -- a fraction of the densest region in this
-    picture -- rather than absolute, because line density per unit area scales
-    with how much of the frame the building occupies and how far away it is.
+    The second signal, and it needs no lines at all: SAM's boundaries are
+    themselves the evidence.  A wall, a window or a roof plane is bounded by a
+    handful of straight edges; a tree crown or a bush has a fractal outline that
+    no small number of segments approximates.  This is what rescues a plain
+    surface that happens to sit away from any detected line.
+    """
+    m = mask.astype(np.uint8)
+    contours, _ = cv2.findContours(m, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        return 0.0
+    c = max(contours, key=cv2.contourArea)
+    peri = cv2.arcLength(c, True)
+    if peri <= 0:
+        return 0.0
+    approx = cv2.approxPolyDP(c, 0.01 * peri, True)
+    n = max(len(approx), 1)
+    # a rectangle needs 4 vertices however large it is; foliage needs dozens
+    return float(np.clip(6.0 / n, 0.0, 1.0))
+
+
+def mask_from_segments(bgr, seg, model_path, min_density_ratio=0.25,
+                       max_edge=768, device="", straightness_floor=0.45):
+    """Regions to ignore: what SAM found that is neither lined nor straight-edged.
+
+    Two independent signals, and a region survives on either.  Line evidence
+    inside or bounding it says "this is built"; a straight-edged outline says
+    the same without needing any line at all.  Foliage fails both, which is the
+    only thing that has to be true for this to work.
     """
     regions = segment(bgr, model_path, max_edge=max_edge, device=device)
     if not regions:
         return None, "SAM returned no regions"
-    dens = np.array([line_density(m, seg) for m in regions])
+    margin = max(4, int(round(0.012 * np.hypot(*bgr.shape[:2]))))
+    dens = np.array([line_density(m, seg, margin=margin) for m in regions])
     if not np.isfinite(dens).any() or dens.max() <= 0:
-        return None, "no straight lines inside any SAM region"
+        return None, "no straight lines near any SAM region"
+    straight = np.array([boundary_straightness(m) for m in regions])
     keep_thr = dens.max() * float(min_density_ratio)
+
     mask = np.zeros(bgr.shape[:2], bool)
-    n_masked = 0
-    for m, d in zip(regions, dens):
-        if d < keep_thr:
-            mask |= m
-            n_masked += 1
-    return mask, f"SAM: {len(regions)} regions, {n_masked} without line structure"
+    dropped = 0
+    for m, d, st in zip(regions, dens, straight):
+        if d >= keep_thr or st >= straightness_floor:
+            continue
+        mask |= m
+        dropped += 1
+    share = float(mask.mean()) * 100
+    return mask, (f"SAM: {len(regions)} regions, {dropped} with neither lines "
+                  f"nor straight edges ({share:.0f}% of frame)")
 
 
 def mask_from_text(bgr, model_path, prompt=DEFAULT_REJECT_PROMPT, max_edge=768,

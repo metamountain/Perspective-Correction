@@ -69,11 +69,23 @@ pipeline already has:
 
 > SAM supplies the edges. The line detector supplies the labels.
 
-A facade is threaded with long straight lines; foliage, sky, cars and people are
-not. Every region SAM returns is scored by the straight-line length inside it,
-normalised by area, and the ones with none are masked out. No text model, no
-GroundingDINO — and it works with SAM 1 and SAM 2 as well as SAM 3.
-`--sam-min-density` sets how empty a region has to be before it is dropped,
+Every region SAM returns is judged by **two independent signals**, and survives
+on either:
+
+* **line evidence in or around it.** A facade is threaded with long straight
+  lines; foliage, sky, cars and people are not. Counted over a slightly dilated
+  region, which matters more than it sounds: a stucco panel between two windows
+  contains no straight lines at all -- its edges are the window frames and floor
+  bands *around* it -- so counting only the interior scored the wall of a
+  building as foliage and masked it out of its own measurement.
+* **how straight its own outline is.** A wall, a window or a roof plane is
+  bounded by a handful of straight edges; a tree crown has a fractal outline
+  that no small number of segments approximates. This needs no lines at all and
+  rescues a plain surface that happens to sit away from any of them.
+
+Foliage fails both, which is the only thing that has to be true. No text model,
+no GroundingDINO, and it works with SAM 1 and 2 as well as SAM 3.
+`--sam-min-density` sets how empty a region must be before it is dropped,
 relative to the densest region *in that picture*, because line density scales
 with how much of the frame the building occupies.
 

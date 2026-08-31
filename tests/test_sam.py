@@ -158,3 +158,52 @@ def test_the_hint_adapts_to_which_interpreter_you_are_in():
         assert "pip install" in headless and "--sam-export" not in headless
     finally:
         S.backends = real
+
+
+def test_a_blank_wall_panel_is_not_mistaken_for_foliage():
+    """The bug a screenshot exposed: SAM masked the stucco panels between the
+    windows of a building it was meant to be measuring.
+
+    A flat surface contains no straight lines -- its edges are the window frames
+    and floor bands *around* it -- so scoring only the interior scored the wall
+    of a building as if it were a tree."""
+    import cv2
+    h = w = 400
+    panel = np.zeros((h, w), bool)
+    panel[120:280, 120:280] = True
+    bounding = np.array([[120., 120., 280., 120.], [120., 280., 280., 280.],
+                         [120., 120., 120., 280.], [280., 120., 280., 280.]])
+    crown = np.zeros((h, w), np.uint8)
+    rng = np.random.default_rng(0)
+    for _ in range(120):
+        cv2.circle(crown, (int(rng.uniform(300, 370)), int(rng.uniform(30, 100))),
+                   int(rng.uniform(6, 18)), 255, -1)
+    crown = crown.astype(bool)
+
+    d_panel = S.line_density(panel, bounding, margin=5)
+    d_crown = S.line_density(crown, bounding, margin=5)
+    assert d_panel > S.line_density(panel, bounding, margin=0), \
+        "the margin must let a panel claim the lines that bound it"
+    assert d_crown == 0.0
+    assert S.boundary_straightness(panel) > 0.9
+    assert S.boundary_straightness(crown) < 0.6
+
+
+def test_straightness_alone_rescues_a_surface_with_no_lines_near_it():
+    """The second signal needs no lines at all: SAM's own boundary is evidence.
+    A wall is bounded by a handful of straight edges, a tree crown by a fractal
+    outline no small number of segments approximates."""
+    import cv2
+    plain = np.zeros((300, 300), bool)
+    plain[50:250, 50:250] = True
+    assert S.boundary_straightness(plain) > 0.9
+    ragged = np.zeros((300, 300), np.uint8)
+    rng = np.random.default_rng(3)
+    for _ in range(150):
+        cv2.circle(ragged, (int(rng.uniform(80, 220)), int(rng.uniform(80, 220))),
+                   int(rng.uniform(5, 20)), 255, -1)
+    assert S.boundary_straightness(ragged.astype(bool)) < 0.6
+
+
+def test_straightness_of_nothing_is_zero():
+    assert S.boundary_straightness(np.zeros((50, 50), bool)) == 0.0
