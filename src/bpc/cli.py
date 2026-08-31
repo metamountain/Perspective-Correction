@@ -108,9 +108,29 @@ def build_parser():
                    help="scale the pitch fix when the focal length is only a guess")
 
     g = p.add_argument_group("detection")
-    g.add_argument("--detector", choices=["auto", "lsd", "fld", "hough"], default="auto")
-    g.add_argument("--mask", choices=["off", "auto", "file"], default=Settings.mask_mode,
-                   help="ignore lines in vegetation/sky ('auto') or in a painted PNG ('file')")
+    g.add_argument("--detector",
+                   choices=["auto", "lsd", "fld", "hough", "mlsd", "hybrid", "union"],
+                   default="auto",
+                   help="line detector; mlsd/hybrid/union need a TFLite runtime "
+                        "(see docs/detectors.md for the measurements)")
+    g.add_argument("--mlsd-model", default="",
+                   help="M-LSD tflite model path, or a filename inside models/")
+    g.add_argument("--mask", choices=["off", "auto", "file", "sam"],
+                   default=Settings.mask_mode,
+                   help="'auto' vegetation/sky heuristic, 'file' a painted PNG or folder, "
+                        "'sam' a Segment Anything checkpoint (see --sam-model)")
+    g.add_argument("--sam-model", default="",
+                   help="SAM checkpoint, e.g. "
+                        r'"D:\ComfyUI_windows_portable\ComfyUI\models\sams\sam_vit_b_01ec64.pth"')
+    g.add_argument("--sam-text", default="",
+                   help="SAM 3 only: segment these instead, e.g. "
+                        "'tree, foliage, sky, car'. Empty uses the line-density route, "
+                        "which works with SAM 1 and 2 as well")
+    g.add_argument("--sam-max-edge", type=int, default=Settings.sam_max_edge)
+    g.add_argument("--sam-device", default="", help="cuda, cpu; empty picks cuda when present")
+    g.add_argument("--sam-min-density", type=float, default=Settings.sam_min_density,
+                   help="keep regions whose straight-line density is at least this "
+                        "fraction of the densest region in the frame")
     g.add_argument("--mask-file", default="",
                    help="a PNG mask, or a folder holding one <stem>.png per image")
     g.add_argument("--mask-invert", action="store_true",
@@ -153,9 +173,15 @@ def build_parser():
 def settings_from(args) -> Settings:
     s = Settings()
     s.detector = args.detector
+    s.mlsd_model = args.mlsd_model
     s.mask_mode = args.mask
     s.mask_file = args.mask_file
     s.mask_invert = args.mask_invert
+    s.sam_model = args.sam_model
+    s.sam_text = args.sam_text
+    s.sam_max_edge = args.sam_max_edge
+    s.sam_device = args.sam_device
+    s.sam_min_density = args.sam_min_density
     s.detect_max_edge = args.detect_max_edge
     s.min_line_length_frac = args.min_line_length
     s.inlier_threshold_deg = args.inlier_threshold

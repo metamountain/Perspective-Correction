@@ -38,7 +38,7 @@ def test_the_tolerance_is_what_decides_a_straddling_line():
 def test_no_mask_is_a_no_op():
     seg = np.array([[10., 10., 10., 190.]])
     assert np.array_equal(MK.drop_masked(seg, None), seg)
-    assert MK.build(np.zeros((40, 40, 3), np.uint8), Settings()) is None
+    assert MK.build(np.zeros((40, 40, 3), np.uint8), Settings())[0] is None
 
 
 def test_auto_mask_finds_the_trees_and_spares_the_facade():
@@ -92,3 +92,30 @@ def test_a_file_mask_actually_reaches_the_detector():
         _, vert_all, _, _, _ = analyse(sc.img, Settings(), image_path=src)
         assert len(vert) < len(vert_all)
         assert len(vert) > 0
+
+
+# --------------------------------------------------------------------------
+# the credibility guard
+# --------------------------------------------------------------------------
+def test_a_mask_that_eats_the_evidence_is_refused():
+    """The guard that matters most for an external segmenter: a SAM mask used
+    with the wrong polarity removes the building instead of the clutter, and
+    shows up here as nearly all the line evidence vanishing."""
+    before = np.array([[0., 0., 0., 100.]] * 10)
+    ok, why = MK.credible(before, before[:9])          # 10 % lost
+    assert ok and why == ""
+    ok, why = MK.credible(before, before[:2])          # 80 % lost
+    assert not ok and "line evidence" in why
+
+
+def test_credibility_is_about_evidence_not_pixels():
+    """Measured on real barns: 64 % of a frame masked can cost 1.5 % of the
+    evidence (a grassy foreground) while 71 % can cost 74.5 % (a green-painted
+    wall read as foliage). Only the second is dangerous."""
+    long_lines = np.array([[0., 0., 0., 400.]] * 5)
+    assert MK.credible(long_lines, long_lines)[0]
+    assert not MK.credible(long_lines, np.zeros((0, 4)))[0]
+
+
+def test_no_lines_at_all_is_not_a_failure():
+    assert MK.credible(np.zeros((0, 4)), np.zeros((0, 4)))[0]

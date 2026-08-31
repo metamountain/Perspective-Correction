@@ -319,15 +319,20 @@ def prepare(gray: np.ndarray, settings, bgr=None, image_path: str = "") -> tuple
         seg = seg[G.segment_lengths(seg) >= min_len]
     if len(seg):
         seg = drop_border_segments(seg, w, h, settings.border_margin_px)
-    mask, masked_out = None, np.zeros((0, 4))
+    mask, masked_out, mask_note = None, np.zeros((0, 4)), ""
     if len(seg) and bgr is not None and getattr(settings, "mask_mode", "off") != "off":
-        mask = MK.build(bgr, settings, image_path)
+        # SAM needs the lines to decide which of its regions is a building, so
+        # detection has to happen before masking, not after.
+        mask, mask_note = MK.build(bgr, settings, image_path, seg)
         if mask is not None:
             # a long straight line is architecture, whatever the texture
             # statistics think; protect it before anything is discarded
             mask = MK.protect_structure(mask, seg, min_len * 1.8)
         if mask is not None:
             kept = MK.drop_masked(seg, mask)
+            ok, why = MK.credible(seg, kept)
+            if not ok:
+                mask, kept, mask_note = None, seg, why
             # keep what was thrown away, so the preview can show it.  A mask the
             # user cannot see is a mask the user cannot trust: when SAM removes
             # the wrong half of a building, the only symptom otherwise is a
@@ -345,7 +350,7 @@ def prepare(gray: np.ndarray, settings, bgr=None, image_path: str = "") -> tuple
     vert, horiz = split_by_orientation(ls, settings.vertical_window_deg,
                                        settings.horizontal_window_deg,
                                        settings.angular_softness)
-    info = {"mask": mask, "masked_out": masked_out}
+    info = {"mask": mask, "masked_out": masked_out, "mask_note": mask_note}
     if settings.merge_horizontal and len(horiz):
         # Merge the horizontal pool only.  The two pools have opposite needs: a
         # facade offers many unoccluded verticals, and merging them destroys

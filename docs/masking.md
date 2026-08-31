@@ -56,7 +56,81 @@ and the GUI review window has a **show mask** toggle. Both exist because the
 Fachwerk failure above was invisible in the numbers -- the only symptom was a
 slightly lower confidence -- and obvious the instant the mask was drawn.
 
-## An external segmenter (SAM, and friends)
+## Segment Anything, built in
+
+    python rectify.py "D:\Fotos" --mask sam ^
+        --sam-model "D:\ComfyUI_windows_portable\ComfyUI\models\sams\sam_vit_b_01ec64.pth" ^
+        --focal-35mm 24
+
+**SAM finds boundaries superbly and has no idea what they mean.** Nothing in its
+output says which of the forty regions it returned is the building. That gap,
+not loading the model, is the whole problem, and it is closed with evidence the
+pipeline already has:
+
+> SAM supplies the edges. The line detector supplies the labels.
+
+A facade is threaded with long straight lines; foliage, sky, cars and people are
+not. Every region SAM returns is scored by the straight-line length inside it,
+normalised by area, and the ones with none are masked out. No text model, no
+GroundingDINO — and it works with SAM 1 and SAM 2 as well as SAM 3.
+`--sam-min-density` sets how empty a region has to be before it is dropped,
+relative to the densest region *in that picture*, because line density scales
+with how much of the frame the building occupies.
+
+### Backends, and their licences
+
+Tried in order; install whichever suits you.
+
+| package | handles | licence |
+|---|---|---|
+| `ultralytics` | SAM 1, 2 and 3 from one class, picks the predictor from the file name | **AGPL-3.0** |
+| `sam2` | SAM 2 checkpoints, needs the matching architecture config | Apache-2.0 |
+| `segment_anything` | SAM 1 | Apache-2.0 |
+| `segment_anything_hq` | the `sam_hq_*` checkpoints | Apache-2.0 |
+
+This project is MIT and bundles none of them: torch is imported only when
+`--mask sam` is actually used, so a default install stays numpy, OpenCV and
+Pillow. If you care about copyleft reaching your work, prefer the Apache-2.0
+packages.
+
+### Text prompting needs SAM 3
+
+    --sam-text "tree, foliage, sky, car, person"
+
+Only SAM 3 has a concept head; SAM 1 and SAM 2 have no text encoder at all and
+cannot take words. Prompt the *rejects* rather than the building: concrete
+countable nouns ground reliably, "architecture" does not, and a missed piece of
+building is lost evidence rather than a cosmetic flaw. Without `--sam-text` the
+line-density route above is used, which needs no text head.
+
+### A folder of SAM checkpoints is full of look-alikes
+
+Each of these fails differently, so each is named on sight — the GUI shows it
+when you pick the file, and `--mask sam` reports it in the log:
+
+| file | what happens |
+|---|---|
+| `sam_vit_b_01ec64.pth` | works, the sensible default |
+| `sam_hq_vit_*.pth` | different architecture; needs `segment-anything-hq` |
+| `sam2.1_*.safetensors` | converted to `.pt` once, beside the original |
+| `mobile_sam.pt` at 129 kB | far too small to be MobileSAM; flagged |
+| no `sam3*` present | text prompting unavailable |
+
+### Whatever the source, a mask that eats the evidence is refused
+
+Judged on **line evidence lost, not pixels covered**, and the difference is not
+academic. Measured on six real barns: one photograph has 64 % of its frame
+masked and loses 1.5 % of its vertical line weight — a grassy foreground,
+harmless — while another masks 71 % and loses **74.5 %**, because that barn is
+painted green and the vegetation cue took the wall for foliage. A coverage test
+rejects the harmless one and passes the dangerous one.
+
+For an external segmenter this is the check that matters most: a SAM mask
+applied with the wrong polarity, or one belonging to a different photograph,
+both show up as nearly all the evidence vanishing, and both are refused with a
+reason rather than quietly ruining the fit.
+
+## A hand-painted mask, or another tool's output
 
     python rectify.py "D:\Fotos" --mask file --mask-file "D:\Masken" --focal-35mm 24
 

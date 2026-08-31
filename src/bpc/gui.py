@@ -127,11 +127,13 @@ class ReviewWindow(tk.Toplevel):
         self.v_maskmode = tk.StringVar(value=self.settings.mask_mode)
         ttk.Label(msk, text="source", width=18).grid(row=0, column=0, sticky="w")
         box = ttk.Combobox(msk, textvariable=self.v_maskmode, width=8, state="readonly",
-                           values=["off", "auto", "file"])
+                           values=["off", "auto", "file", "sam"])
         box.grid(row=0, column=1, sticky="w", padx=(6, 6))
         box.bind("<<ComboboxSelected>>", lambda e: self._apply_mask())
         ttk.Button(msk, text="mask folder...", command=self._pick_mask_folder
                    ).grid(row=0, column=2, sticky="w")
+        ttk.Button(msk, text="SAM model...", command=self._pick_sam_model
+                   ).grid(row=0, column=4, sticky="w", padx=(10, 0))
         self.v_maskinv = tk.BooleanVar(value=self.settings.mask_invert)
         ttk.Checkbutton(msk, text="mask marks what to KEEP (SAM output)",
                         variable=self.v_maskinv, command=self._apply_mask
@@ -168,12 +170,37 @@ class ReviewWindow(tk.Toplevel):
             if not self._pick_mask_folder(apply_now=False):
                 self.v_maskmode.set(self.session.settings.mask_mode)
                 return
+        if mode == "sam" and not self.session.settings.sam_model:
+            if not self._pick_sam_model(apply_now=False):
+                self.v_maskmode.set(self.session.settings.mask_mode)
+                return
         err = self.session.set_mask(mode, invert=bool(self.v_maskinv.get()))
         self.lbl_mask.configure(text=err or "")
         if self.session.mode == AUTO:
             self._sync_from_session()
         else:
             self._redraw()
+
+    def _pick_sam_model(self, apply_now=True):
+        """Point at a SAM checkpoint and say what it is.
+
+        A ComfyUI sams folder holds look-alikes that fail differently -- HQ
+        variants needing another package, safetensors needing conversion, stubs
+        far too small to be the model they are named after -- so the choice is
+        described immediately rather than after a failed batch."""
+        from . import sam as SAM
+        p = filedialog.askopenfilename(
+            title="SAM checkpoint",
+            filetypes=[("SAM checkpoints", "*.pt *.pth *.safetensors"),
+                       ("all files", "*.*")], parent=self)
+        if not p:
+            return False
+        self.session.settings = self.session.settings.replace(sam_model=p)
+        self.lbl_mask.configure(text=SAM.describe(p))
+        if apply_now:
+            self.v_maskmode.set("sam")
+            self._apply_mask()
+        return True
 
     def _pick_mask_folder(self, apply_now=True):
         """A folder of one mask per photo is what an external segmenter such as
@@ -411,8 +438,11 @@ class App(_ROOT_CLASS):
         self._spin(opt, 1, 0, "max pitch (deg)", self.v_maxpitch, 0.0, 45.0, 1.0)
         ttk.Label(opt, text="mask").grid(row=0, column=6, sticky="e", padx=4)
         self.v_mask = tk.StringVar(value=Settings.mask_mode)
-        ttk.Combobox(opt, textvariable=self.v_mask, values=["off", "auto", "file"],
+        ttk.Combobox(opt, textvariable=self.v_mask, values=["off", "auto", "file", "sam"],
                      width=6, state="readonly").grid(row=0, column=7, sticky="w")
+        self.v_maskpath = tk.StringVar()
+        ttk.Button(opt, text="mask source...", command=self._pick_mask_source
+                   ).grid(row=0, column=8, sticky="w", padx=(6, 0))
         ttk.Label(opt, text="crop").grid(row=1, column=3, sticky="e", padx=4)
         ttk.Combobox(opt, textvariable=self.v_crop, values=["aspect", "inside", "none"],
                      width=8, state="readonly").grid(row=1, column=4, sticky="w")
@@ -456,7 +486,33 @@ class App(_ROOT_CLASS):
         s.max_pitch_deg = float(self.v_maxpitch.get())
         s.crop = self.v_crop.get()
         s.mask_mode = self.v_mask.get()
+        path = self.v_maskpath.get()
+        if s.mask_mode == "file":
+            s.mask_file = path
+        elif s.mask_mode == "sam":
+            s.sam_model = path
         return s
+
+    def _pick_mask_source(self):
+        """One button for both, because the batch panel had a mask selector with
+        no way to say *which* mask -- so choosing 'file' made every image fail
+        with what looked like an internal error."""
+        mode = self.v_mask.get()
+        if mode == "sam":
+            p = filedialog.askopenfilename(
+                title="SAM checkpoint",
+                filetypes=[("SAM checkpoints", "*.pt *.pth *.safetensors"),
+                           ("all files", "*.*")])
+            if p:
+                from . import sam as SAM
+                self.v_maskpath.set(p)
+                messagebox.showinfo("SAM model", SAM.describe(p))
+        elif mode == "file":
+            d = filedialog.askdirectory(title="folder of mask images (one per photo)")
+            if d:
+                self.v_maskpath.set(d)
+        else:
+            messagebox.showinfo("Mask", "set the mask selector to 'file' or 'sam' first")
 
     def _add(self, paths):
         added = 0

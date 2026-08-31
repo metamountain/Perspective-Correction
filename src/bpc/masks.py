@@ -160,14 +160,67 @@ def protect_structure(mask: np.ndarray, seg: np.ndarray, min_len: float,
     return mask & ~(keep.astype(bool))
 
 
-def build(bgr: np.ndarray, settings, image_path: str = "") -> "np.ndarray | None":
+def build(bgr: np.ndarray, settings, image_path: str = "", seg=None):
+    """``(mask_or_None, note)`` for whichever source is configured."""
     mode = getattr(settings, "mask_mode", "off")
     if mode == "off":
-        return None
+        return None, ""
     if mode == "file":
         return load(resolve(settings.mask_file, image_path), bgr.shape,
-                    getattr(settings, "mask_invert", False))
-    return vegetation_and_sky(bgr)
+                    getattr(settings, "mask_invert", False)), "painted mask"
+    if mode == "sam":
+        from . import sam as SAM
+        path = getattr(settings, "sam_model", "")
+        if not path:
+            raise ValueError("--mask sam needs --sam-model <checkpoint>")
+        text = (getattr(settings, "sam_text", "") or "").strip()
+        if text:
+            return SAM.mask_from_text(bgr, path, text,
+                                      getattr(settings, "sam_max_edge", 768),
+                                      getattr(settings, "sam_device", ""))
+        if seg is None:
+            seg = np.zeros((0, 4))
+        return SAM.mask_from_segments(
+            bgr, seg, path,
+            min_density_ratio=getattr(settings, "sam_min_density", 0.25),
+            max_edge=getattr(settings, "sam_max_edge", 768),
+            device=getattr(settings, "sam_device", ""))
+    return vegetation_and_sky(bgr), "vegetation and sky heuristic"
+
+
+MAX_EVIDENCE_LOST = 0.55
+
+
+def credible(before: np.ndarray, after: np.ndarray, max_lost: float = MAX_EVIDENCE_LOST):
+    """``(ok, reason)`` -- is what this mask removed clutter, or the building?
+
+    Judged on **line evidence lost, not pixels covered**, and the difference is
+    not academic.  Measured on six real barns: one photograph has 64 % of its
+    frame masked and loses 1.5 % of its vertical line weight -- a grassy
+    foreground, entirely harmless -- while another masks 71 % and loses
+    **74.5 %**, because that barn is painted green and the vegetation cue took
+    the wall for foliage.  A coverage test rejects the harmless one and passes
+    the dangerous one.
+
+    Being the outermost check it also catches what no individual cue can, which
+    is why it matters most for an external segmenter: a SAM mask applied with
+    the wrong polarity, or one belonging to a different photograph, both show up
+    here as nearly all the evidence vanishing.
+    """
+    if len(before) == 0:
+        return True, ""
+    w_before = float(np.hypot(before[:, 2] - before[:, 0],
+                              before[:, 3] - before[:, 1]).sum())
+    if w_before <= 0:
+        return True, ""
+    w_after = float(np.hypot(after[:, 2] - after[:, 0],
+                             after[:, 3] - after[:, 1]).sum()) if len(after) else 0.0
+    lost = 1.0 - w_after / w_before
+    if lost > max_lost:
+        return False, (f"mask removed {lost * 100:.0f}% of the line evidence "
+                       f"(over {max_lost * 100:.0f}%) and was ignored -- wrong "
+                       f"polarity, wrong image, or it is masking the building")
+    return True, ""
 
 
 def drop_masked(seg: np.ndarray, mask: np.ndarray, samples: int = 5,
