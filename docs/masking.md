@@ -137,6 +137,16 @@ The masks are written at analysis resolution and resampled on load, so the
 folder stays small and the segmenter runs once per photograph rather than once
 per experiment.
 
+### Or do not type it at all
+
+    --mask sam --sam-model auto
+
+Searches the usual ComfyUI locations and prefers what actually works over what
+is largest: plain `sam_vit_b` first, because HQ checkpoints need another
+package, safetensors need converting, and ViT-H buys nothing for a mask that is
+resampled to a few hundred pixels. Files far too small to be the model their
+name claims are skipped. It reports what it chose.
+
 ### Type the checkpoint path once
 
     python rectify.py "D:\Fotos" --mask sam --sam-model "D:\...\sam_vit_b_01ec64.pth" --remember

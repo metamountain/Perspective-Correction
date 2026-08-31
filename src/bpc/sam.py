@@ -136,6 +136,57 @@ def _install_hint(path: str, errors) -> str:
             f"use its python_embeded\\python.exe -- it already has torch and CUDA.")
 
 
+PREFERRED_ORDER = ("sam_vit_b", "sam_vit_l", "sam2.1", "sam2", "sam3",
+                   "sam_vit_h", "mobile_sam", "sam_hq_vit_b")
+
+
+def find_checkpoint(hint: str = ""):
+    """Locate a usable SAM checkpoint without making anyone type a path.
+
+    Batch files cannot do this reliably -- the version that tried grew a line
+    continuation inside a parenthesised block and cmd ran the continuation as a
+    command -- and a search worth doing is worth testing, so it lives here.
+
+    Preference is for what actually works over what is largest: plain
+    ``sam_vit_b`` first, because HQ checkpoints need another package, a
+    ``.safetensors`` file needs converting, and the huge ViT-H buys nothing for
+    a mask that is resampled to a few hundred pixels anyway.
+    """
+    import glob
+
+    roots = []
+    if hint:
+        roots.append(hint)
+    roots += [os.path.join(d + ":\\", p) for d in "CDEFG"
+              for p in ("ComfyUI*/ComfyUI/models/sams", "ComfyUI*/models/sams",
+                        "*/ComfyUI*/ComfyUI/models/sams")]
+    roots += [os.path.expanduser("~/ComfyUI/models/sams"),
+              os.path.expanduser("~/comfyui/models/sams"),
+              os.path.join(os.getcwd(), "models", "sams")]
+
+    found = []
+    for root in roots:
+        for base in glob.glob(root):
+            if not os.path.isdir(base):
+                continue
+            for ext in ("*.pt", "*.pth", "*.safetensors"):
+                found += glob.glob(os.path.join(base, ext))
+    if not found:
+        return ""
+
+    def rank(p):
+        name = os.path.basename(p).lower()
+        size = os.path.getsize(p)
+        for i, tag in enumerate(PREFERRED_ORDER):
+            if tag in name:
+                # a file far too small to be the model it claims is not a
+                # candidate however well its name ranks
+                return (0 if size > 20_000_000 else 1, i, size)
+        return (2, len(PREFERRED_ORDER), size)
+
+    return sorted(found, key=rank)[0]
+
+
 def _likely_torch_python():
     """A best-effort guess at the ComfyUI python on this machine.
 

@@ -120,7 +120,8 @@ def build_parser():
                    help="'auto' vegetation/sky heuristic, 'file' a painted PNG or folder, "
                         "'sam' a Segment Anything checkpoint (see --sam-model)")
     g.add_argument("--sam-model", default="",
-                   help="SAM checkpoint, e.g. "
+                   help="SAM checkpoint, or 'auto' to search the usual ComfyUI "
+                        "folders. Example: "
                         r'"D:\ComfyUI_windows_portable\ComfyUI\models\sams\sam_vit_b_01ec64.pth"')
     g.add_argument("--sam-text", default="",
                    help="SAM 3 only: segment these instead, e.g. "
@@ -342,6 +343,15 @@ def main(argv=None) -> int:
     if args.forget:
         print("forgot remembered defaults" if prefs.forget() else "nothing was remembered")
         return 0
+    if args.sam_model == "auto":
+        from . import sam as SAM
+        found = SAM.find_checkpoint()
+        if not found:
+            print("--sam-model auto found no checkpoint; pass a path")
+            return 2
+        args.sam_model = found
+        if not args.quiet:
+            print(f"# using {SAM.describe(found)}")
     used = apply_prefs(args, parser)
     if used and not args.quiet:
         print(f"# using remembered {', '.join(used)} from {prefs.path()}")

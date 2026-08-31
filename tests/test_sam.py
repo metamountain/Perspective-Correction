@@ -207,3 +207,36 @@ def test_straightness_alone_rescues_a_surface_with_no_lines_near_it():
 
 def test_straightness_of_nothing_is_zero():
     assert S.boundary_straightness(np.zeros((50, 50), bool)) == 0.0
+
+
+def test_find_checkpoint_prefers_what_actually_works():
+    """Batch files cannot do this reliably -- the version that tried grew a line
+    continuation inside a parenthesised block, which cmd runs as a command -- so
+    the search lives in Python where it can be tested.
+
+    Preference is for what works over what is largest: HQ checkpoints need
+    another package, safetensors need converting, and ViT-H buys nothing for a
+    mask resampled to a few hundred pixels."""
+    with tempfile.TemporaryDirectory() as d:
+        sams = os.path.join(d, "ComfyUI", "models", "sams")
+        os.makedirs(sams)
+        for n, sz in (("mobile_sam.pt", 129_341),
+                      ("sam2.1_hiera_tiny-fp16.safetensors", 77_980_668),
+                      ("sam_hq_vit_b.pth", 379_335_069),
+                      ("sam_vit_b_01ec64.pth", 375_042_383),
+                      ("sam_vit_h_4b8939.pth", 2_564_550_879)):
+            _fake(sams, n, sz)
+        chosen = S.find_checkpoint(sams)
+        assert os.path.basename(chosen) == "sam_vit_b_01ec64.pth"
+
+
+def test_find_checkpoint_skips_files_too_small_to_be_real():
+    with tempfile.TemporaryDirectory() as d:
+        _fake(d, "sam_vit_b_stub.pth", 129_341)          # named right, far too small
+        _fake(d, "sam_vit_l_0b3195.pth", 1_249_524_607)
+        assert os.path.basename(S.find_checkpoint(d)) == "sam_vit_l_0b3195.pth"
+
+
+def test_find_checkpoint_returns_empty_when_there_is_nothing():
+    with tempfile.TemporaryDirectory() as d:
+        assert S.find_checkpoint(d) == ""
