@@ -240,3 +240,98 @@ def test_find_checkpoint_skips_files_too_small_to_be_real():
 def test_find_checkpoint_returns_empty_when_there_is_nothing():
     with tempfile.TemporaryDirectory() as d:
         assert S.find_checkpoint(d) == ""
+
+
+def _seven_category_scene():
+    """A scene holding the four things to reject and the three to keep."""
+    import cv2
+    h, w = 500, 700
+    rng = np.random.default_rng(0)
+    img = np.zeros((h, w, 3), np.uint8)
+    reg = {}
+
+    def box(y0, y1, x0, x1):
+        m = np.zeros((h, w), bool)
+        m[y0:y1, x0:x1] = True
+        return m
+
+    img[0:150, :] = (235, 215, 190)                       # bright smooth sky
+    reg["sky"] = box(0, 150, 0, w)
+    veg = np.zeros((h, w), np.uint8)
+    for _ in range(400):
+        cv2.circle(veg, (int(rng.uniform(430, 690)), int(rng.uniform(160, 330))),
+                   int(rng.uniform(4, 16)), 255, -1)
+    img[veg > 0] = (60, 120, 55)
+    for _ in range(300):
+        x, y = int(rng.uniform(430, 690)), int(rng.uniform(160, 330))
+        if veg[y, x]:
+            cv2.circle(img, (x, y), 1, (30, 80, 25), -1)
+    reg["vegetation"] = veg.astype(bool)
+    img[400:500, :] = (95, 95, 100)
+    img[400:500, :] += rng.integers(-14, 14, (100, w, 3)).astype(np.uint8)
+    reg["street"] = box(400, 500, 0, w)
+    img[330:400, :] = (150, 145, 140)
+    img[330:400, :] += rng.integers(-25, 25, (70, w, 3)).astype(np.uint8)
+    reg["floor"] = box(330, 400, 0, w)
+
+    img[150:330, 60:400] = (185, 180, 172)
+    reg["house wall"] = box(150, 330, 60, 400)
+    for wx in (100, 190, 280):
+        cv2.rectangle(img, (wx, 180), (wx + 55, 250), (70, 70, 75), -1)
+    reg["window"] = box(180, 250, 100, 155)
+    reg["facade panel"] = box(255, 325, 200, 390)         # blank: no lines inside
+
+    seg = []
+    for wx in (100, 190, 280):
+        seg += [[wx, 180, wx + 55, 180], [wx, 250, wx + 55, 250],
+                [wx, 180, wx, 250], [wx + 55, 180, wx + 55, 250]]
+    seg += [[60, 150, 400, 150], [60, 330, 400, 330],
+            [60, 150, 60, 330], [400, 150, 400, 330]]
+    seg += [[60, 255, 400, 255], [200, 255, 200, 325], [390, 255, 390, 325]]
+    return img, reg, np.array(seg, float)
+
+
+def test_the_classifier_separates_clutter_from_architecture():
+    """Positive against negative, as the categories are actually named: sky,
+    vegetation, street and floor must go; wall, window and panel must stay."""
+    import math
+    img, regions, seg = _seven_category_scene()
+    margin = max(4, int(round(0.012 * math.hypot(*img.shape[:2]))))
+    sigs = {k: S.region_signals(m, seg, img, margin) for k, m in regions.items()}
+    keep_density = max(s["density"] for s in sigs.values()) * 0.25
+    reject = {"sky", "vegetation", "street", "floor"}
+    for name, sig in sigs.items():
+        verdict, why = S.classify_region(sig, keep_density)
+        want = "reject" if name in reject else "keep"
+        assert verdict == want, f"{name}: got {verdict} ({why}), wanted {want}"
+
+
+def test_a_weak_positive_cannot_overrule_a_clear_negative():
+    """Order is as load-bearing as the tests themselves. Sky and asphalt are
+    routinely bounded by perfectly straight edges -- a roofline, a kerb -- and an
+    earlier arrangement kept both as 'built (straight outline)'."""
+    sky = {"area": 0.3, "cy": 0.15, "green": -20.0, "value": 235.0, "sat": 30.0,
+           "grad": 3.3, "density": 1.2, "straight": 1.0, "mix": 0.0}
+    assert S.classify_region(sky, keep_density=5.0)[0] == "reject"
+    kerb = {"area": 0.2, "cy": 0.9, "green": -7.0, "value": 104.0, "sat": 20.0,
+            "grad": 25.0, "density": 0.0, "straight": 1.0, "mix": 0.0}
+    assert S.classify_region(kerb, keep_density=5.0)[0] == "reject"
+
+
+def test_the_only_signal_buildings_produce_wins_outright():
+    """Verticals and horizontals together is a Manhattan object. A fence brings
+    one family, foliage brings neither -- so nothing else may overturn it."""
+    greenish_facade = {"area": 0.2, "cy": 0.8, "green": 40.0, "value": 120.0,
+                       "sat": 90.0, "grad": 30.0, "density": 0.0,
+                       "straight": 0.1, "mix": 0.6}
+    verdict, why = S.classify_region(greenish_facade, keep_density=5.0)
+    assert verdict == "keep" and "verticals and horizontals" in why
+
+
+def test_an_unrecognised_region_is_kept():
+    """Absence of evidence is not evidence of clutter: dropping a facade costs
+    the measurement, keeping a stray region costs a little noise."""
+    nothing = {"area": 0.05, "cy": 0.5, "green": 0.0, "value": 120.0, "sat": 40.0,
+               "grad": 5.0, "density": 0.0, "straight": 0.1, "mix": 0.0}
+    verdict, why = S.classify_region(nothing, keep_density=5.0)
+    assert verdict == "keep" and "unrecognised" in why

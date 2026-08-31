@@ -33,6 +33,7 @@ Three backends are tried, in this order:
 """
 from __future__ import annotations
 
+import math
 import os
 import sys
 import threading
@@ -542,35 +543,142 @@ def boundary_straightness(mask: np.ndarray) -> float:
     return float(np.clip(6.0 / n, 0.0, 1.0))
 
 
-def mask_from_segments(bgr, seg, model_path, min_density_ratio=0.25,
-                       max_edge=768, device="", straightness_floor=0.45):
-    """Regions to ignore: what SAM found that is neither lined nor straight-edged.
+def region_signals(mask, seg, bgr, margin):
+    """Everything measurable about one SAM region, before any decision.
 
-    Two independent signals, and a region survives on either.  Line evidence
-    inside or bounding it says "this is built"; a straight-edged outline says
-    the same without needing any line at all.  Foliage fails both, which is the
-    only thing that has to be true for this to work.
+    Kept separate from the verdict so the numbers can be printed: a mask you
+    cannot interrogate is a mask you cannot tune.
+    """
+    h, w = mask.shape[:2]
+    area = float(mask.sum())
+    ys, xs = np.nonzero(mask)
+    cy = float(ys.mean()) / h if len(ys) else 0.5
+
+    b, g, r = (bgr[..., i].astype(np.float32) for i in range(3))
+    green = float((g - np.maximum(r, b))[mask].mean()) if area else 0.0
+    hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
+    val = float(hsv[..., 2][mask].mean()) if area else 0.0
+    sat = float(hsv[..., 1][mask].mean()) if area else 0.0
+    gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+    gx = cv2.Sobel(gray, cv2.CV_32F, 1, 0, ksize=3)
+    gy = cv2.Sobel(gray, cv2.CV_32F, 0, 1, ksize=3)
+    grad = float(cv2.magnitude(gx, gy)[mask].mean()) if area else 0.0
+
+    dens = line_density(mask, seg, margin=margin)
+    straight = boundary_straightness(mask)
+    mix = orthogonal_mix(mask, seg, margin)
+    return {"area": area / float(h * w), "cy": cy, "green": green, "value": val,
+            "sat": sat, "grad": grad, "density": dens, "straight": straight,
+            "mix": mix}
+
+
+def orthogonal_mix(mask, seg, margin=0):
+    """0..1 -- does this region carry *both* near-vertical and near-horizontal
+    lines?
+
+    The strongest positive signal there is, and the one a single density number
+    misses. Buildings are Manhattan objects: a facade brings verticals and
+    horizontals together. A fence, a road marking or a power line brings one
+    family only, and foliage brings neither.
+    """
+    if len(seg) == 0 or not mask.any():
+        return 0.0
+    m = mask
+    if margin > 0:
+        k = np.ones((2 * margin + 1, 2 * margin + 1), np.uint8)
+        m = cv2.dilate(mask.astype(np.uint8), k).astype(bool)
+    h, w = m.shape[:2]
+    t = np.linspace(0.0, 1.0, 7)[None, :]
+    xs = np.clip((seg[:, 0:1] + (seg[:, 2:3] - seg[:, 0:1]) * t).astype(int), 0, w - 1)
+    ys = np.clip((seg[:, 1:2] + (seg[:, 3:4] - seg[:, 1:2]) * t).astype(int), 0, h - 1)
+    hit = m[ys, xs].mean(axis=1) > 0.4
+    if not hit.any():
+        return 0.0
+    d = seg[hit]
+    ang = np.abs(np.arctan2(d[:, 3] - d[:, 1], d[:, 2] - d[:, 0]))
+    ang = np.minimum(ang, math.pi - ang)                 # 0 = horizontal
+    length = np.hypot(d[:, 2] - d[:, 0], d[:, 3] - d[:, 1])
+    vert = length[ang > math.radians(60)].sum()
+    horz = length[ang < math.radians(30)].sum()
+    if vert + horz <= 0:
+        return 0.0
+    return float(2.0 * min(vert, horz) / (vert + horz))
+
+
+def classify_region(sig, keep_density):
+    """``(verdict, reason)`` from both sides of the question, in strength order.
+
+    The first version asked only "does this region contain straight lines?" and
+    masked on no. That is one-sided, and it is why a plain stucco wall was
+    removed from the measurement of its own building: no positive evidence, but
+    no negative evidence either, and absence of proof was treated as proof. So a
+    region now has to be *positively* recognised as clutter to go.
+
+    Order matters as much as the tests. Evidence is not equally strong, and the
+    weakest positive signal must not overrule the clearest negative one: sky and
+    asphalt are frequently bounded by perfectly straight edges -- a roofline, a
+    kerb -- and an earlier arrangement kept both as "built (straight outline)".
+    So the one signal only buildings produce is checked first, clutter second,
+    and the weaker built signals last.
+    """
+    # 1. verticals *and* horizontals together: a Manhattan object, i.e. built.
+    #    A fence or a road marking brings one family, foliage brings neither.
+    if sig["mix"] >= 0.30:
+        return "keep", "built (verticals and horizontals)"
+
+    # 2. positively recognisable clutter, which outranks any weak positive
+    if sig["green"] > 6.0 and sig["grad"] > 8.0:
+        return "reject", "vegetation"
+    if sig["value"] > 165 and sig["sat"] < 70 and sig["grad"] < 12 and sig["cy"] < 0.55:
+        return "reject", "sky"
+    if sig["cy"] > 0.70 and sig["mix"] < 0.15 and sig["density"] < keep_density:
+        return "reject", "ground"
+
+    # 3. weaker built evidence
+    if sig["density"] >= keep_density:
+        return "keep", "built (lines)"
+    if sig["straight"] >= 0.45:
+        return "keep", "built (straight outline)"
+
+    # 4. anything unrecognised stays. On an architectural photograph the cost of
+    #    keeping a stray region is a little noise; the cost of dropping a facade
+    #    is the measurement itself.
+    return "keep", "unrecognised, kept"
+
+
+def mask_from_segments(bgr, seg, model_path, min_density_ratio=0.25,
+                       max_edge=768, device="", report=None):
+    """Regions to ignore: the ones positively recognised as sky, plants or ground.
+
+    ``report`` receives one line per region when given, because mask quality is
+    the thing that has to be judged and it cannot be judged from a single
+    percentage.
     """
     regions = segment(bgr, model_path, max_edge=max_edge, device=device)
     if not regions:
         return None, "SAM returned no regions"
     margin = max(4, int(round(0.012 * np.hypot(*bgr.shape[:2]))))
-    dens = np.array([line_density(m, seg, margin=margin) for m in regions])
-    if not np.isfinite(dens).any() or dens.max() <= 0:
-        return None, "no straight lines near any SAM region"
-    straight = np.array([boundary_straightness(m) for m in regions])
-    keep_thr = dens.max() * float(min_density_ratio)
+    sigs = [region_signals(m, seg, bgr, margin) for m in regions]
+    dens = np.array([s_["density"] for s_ in sigs])
+    keep_density = float(dens.max()) * float(min_density_ratio) if dens.max() > 0 else 1e9
 
     mask = np.zeros(bgr.shape[:2], bool)
-    dropped = 0
-    for m, d, st in zip(regions, dens, straight):
-        if d >= keep_thr or st >= straightness_floor:
-            continue
-        mask |= m
-        dropped += 1
+    counts = {}
+    for m, s_ in zip(regions, sigs):
+        verdict, why = classify_region(s_, keep_density)
+        counts[why] = counts.get(why, 0) + 1
+        if report is not None:
+            report.append(
+                f"    {'REJECT' if verdict == 'reject' else 'keep  '} {why:24s} "
+                f"area={s_['area'] * 100:5.1f}%  lines={s_['density']:6.2f} "
+                f"straight={s_['straight']:.2f} mix={s_['mix']:.2f} "
+                f"green={s_['green']:+5.1f} val={s_['value']:5.1f} "
+                f"grad={s_['grad']:5.1f} cy={s_['cy']:.2f}")
+        if verdict == "reject":
+            mask |= m
     share = float(mask.mean()) * 100
-    return mask, (f"SAM: {len(regions)} regions, {dropped} with neither lines "
-                  f"nor straight edges ({share:.0f}% of frame)")
+    tally = ", ".join(f"{v} {k}" for k, v in sorted(counts.items(), key=lambda kv: -kv[1]))
+    return mask, f"SAM: {len(regions)} regions [{tally}] -> {share:.0f}% masked"
 
 
 def mask_from_text(bgr, model_path, prompt=DEFAULT_REJECT_PROMPT, max_edge=768,
