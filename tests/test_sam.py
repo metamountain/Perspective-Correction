@@ -137,3 +137,24 @@ def test_export_writes_one_mask_per_photo_and_survives_failures():
         assert os.path.isdir(out)
         assert any("ERROR" in l for l in lines)
         assert any("--mask file" in l for l in lines), "must say how to use the folder"
+
+
+def test_the_hint_adapts_to_which_interpreter_you_are_in():
+    """The two failures look identical and have opposite answers: the Python
+    with the GUI is usually not the one to install a multi-gigabyte CUDA torch
+    into, because the machine already has one in ComfyUI."""
+    errs = ["ultralytics: No module named 'ultralytics'",
+            "sam2: No module named 'sam2'",
+            "sam1: No module named 'segment_anything'"]
+    real = S.backends
+    try:
+        S.backends = lambda: {"tkinter": True, "torch": False}
+        gui = S._install_hint("/m/sam_vit_b.pth", errs)
+        assert "--sam-export" in gui, "the GUI python must be offered the export route"
+        assert gui.index("--sam-export") < gui.index("pip install"), \
+            "the export route must come first there"
+        S.backends = lambda: {"tkinter": False, "torch": False}
+        headless = S._install_hint("/m/sam_vit_b.pth", errs)
+        assert "pip install" in headless and "--sam-export" not in headless
+    finally:
+        S.backends = real

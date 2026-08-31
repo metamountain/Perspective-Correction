@@ -105,8 +105,13 @@ They usually do, and neither side is wrong:
 | the system Python | usually not | yes |
 
 `--sam-info` prints both halves, because seeing only the SAM half hides half the
-diagnosis. Rather than choosing between the segmenter and the review window, run
-SAM once from whichever Python can load it and consume the result anywhere:
+diagnosis. And when the mask fails in the Python that has tkinter, the error
+offers the export route *before* suggesting an install -- putting a
+multi-gigabyte CUDA torch into a second interpreter, on a machine that already
+has one three folders away, is the wrong first answer.
+
+Rather than choosing between the segmenter and the review window, run SAM once
+from whichever Python can load it and consume the result anywhere:
 
     rem from ComfyUI's python, which has torch
     D:\ComfyUI_windows_portable\python_embeded\python.exe rectify.py "D:\Fotos" ^

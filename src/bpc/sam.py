@@ -99,25 +99,58 @@ def _load(path: str, device: str = ""):
 
 
 def _install_hint(path: str, errors) -> str:
-    """Lead with the command to run, not with a licence footnote.
+    """Lead with what to do, and name *both* ways out.
 
-    "Nothing is installed" and "the installed backend cannot read this file" are
-    different problems with different answers, and the first message this printed
-    buried both behind a list of three packages and their licences.
+    The two failures look identical and have opposite answers.  Running in the
+    Python that has torch (ComfyUI's ``python_embeded``) but no tkinter, and
+    running in the system Python that has tkinter but no torch, both print "no
+    backend".  Telling a GUI user to install a multi-gigabyte CUDA torch into
+    their system Python, when the machine already has one three folders away, is
+    the wrong first suggestion -- so when tkinter is present and torch is not,
+    the export route is offered first.
     """
     missing = all("No module named" in e for e in errors)
-    exe = os.path.basename(sys.executable)
-    name = os.path.basename(path)
-    if missing:
-        pkg = "segment-anything" if _kind(path) == "sam1" else "ultralytics"
-        return (f"no SAM backend installed. Run:\n"
-                f"    {sys.executable} -m pip install {pkg}\n"
-                f"Install into the SAME interpreter that runs this tool ({exe}). "
-                f"On a ComfyUI portable install, use its python_embeded\\python.exe "
-                f"-- it already has torch and CUDA, so you avoid a second "
-                f"multi-gigabyte download.")
-    return (f"a SAM backend is installed but could not read {name}:\n    "
-            + "\n    ".join(errors))
+    if not missing:
+        return (f"a SAM backend is installed but could not read "
+                f"{os.path.basename(path)}:\n    " + "\n    ".join(errors))
+
+    have = backends()
+    pkg = "segment-anything" if _kind(path) == "sam1" else "ultralytics"
+    install = (f"    {sys.executable} -m pip install {pkg}")
+    export = ("    <python with torch> rectify.py \"<folder>\" "
+              f"--sam-export \"<mask folder>\" --sam-model \"{path}\"\n"
+              "    then, from here:  --mask file --mask-file \"<mask folder>\"")
+
+    if have.get("tkinter") and not have.get("torch"):
+        other = _likely_torch_python()
+        where = f"\n(on this machine, probably: {other})" if other else ""
+        return ("no SAM backend in this Python -- and this is the one with the "
+                "GUI, so it is usually not the one to install torch into.\n\n"
+                "Either run SAM once from the Python that already has torch, "
+                "and use the masks here:\n" + export + where +
+                "\n\nor install it here, which means a multi-gigabyte torch:\n"
+                + install)
+    return ("no SAM backend installed. Run:\n" + install +
+            f"\nInstall into the SAME interpreter that runs this tool "
+            f"({os.path.basename(sys.executable)}). On a ComfyUI portable install "
+            f"use its python_embeded\\python.exe -- it already has torch and CUDA.")
+
+
+def _likely_torch_python():
+    """A best-effort guess at the ComfyUI python on this machine.
+
+    Only ever used to make an error message concrete; nothing depends on it.
+    """
+    import glob
+    pats = [r"C:\ComfyUI*\python_embeded\python.exe",
+            r"D:\ComfyUI*\python_embeded\python.exe",
+            r"E:\ComfyUI*\python_embeded\python.exe",
+            os.path.expanduser("~/ComfyUI*/python_embeded/python.exe")]
+    for pat in pats:
+        hits = glob.glob(pat)
+        if hits:
+            return hits[0]
+    return ""
 
 
 def backends():
