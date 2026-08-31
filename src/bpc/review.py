@@ -48,12 +48,13 @@ class ReviewSession:
         _small = cv2.resize(self.bgr, (self.gray.shape[1], self.gray.shape[0]),
                             interpolation=cv2.INTER_AREA) \
             if self.bgr.shape[:2] != self.gray.shape[:2] else self.bgr
-        _, self.vert, self.horiz, self.detector = L.prepare(self.gray, settings,
-                                                            _small, self.path)
+        (_, self.vert, self.horiz, self.detector,
+         self.detect_info) = L.prepare(self.gray, settings, _small, self.path)
         # per-line manual state: True = may be used, False = struck out by the user
         self.enabled = np.ones(len(self.vert), dtype=bool)
 
         self.mode = AUTO
+        self.show_mask = True
         self.manual_roll = 0.0
         self.manual_pitch = 0.0
         self.manual_focal_35mm = 0.0
@@ -183,10 +184,16 @@ class ReviewSession:
         m = self.model
         canvas = self.bgr.copy()
         inv = 1.0 / self.scale
+        info = getattr(self, "detect_info", None) or {}
+        if self.show_mask:
+            PV.tint_mask(canvas, info.get("mask"))
+            dropped = info.get("masked_out")
+            if dropped is not None and len(dropped):
+                PV._draw_lines(canvas, dropped * inv, PV.RED, 1)
         if len(self.horiz):
             PV._draw_lines(canvas, self.horiz.seg * inv, PV.BLUE, 1)
         if len(struck):
-            PV._draw_lines(canvas, struck.seg * inv, (120, 120, 120), 1)
+            PV._draw_lines(canvas, struck.seg * inv, PV.GREY, 1)
         if len(used):
             inl = m.vert_inliers[self.enabled] if m is not None else np.zeros(len(used), bool)
             PV._draw_lines(canvas, used.seg[~inl] * inv, PV.YELLOW, 1)

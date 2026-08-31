@@ -12,6 +12,8 @@ GREEN = (80, 220, 90)      # vertical inliers -- these drove the fit
 YELLOW = (60, 210, 240)    # vertical candidates rejected as outliers
 BLUE = (235, 170, 60)      # horizontal lines
 MAGENTA = (200, 80, 220)   # the implied horizon
+GREY = (130, 130, 130)     # struck out by hand
+RED = (70, 70, 235)        # removed by the region mask
 
 
 def _draw_lines(canvas, seg, colour, thickness=2):
@@ -34,10 +36,30 @@ def _draw_infinite_line(canvas, line, colour, thickness=2):
                  colour, thickness, cv2.LINE_AA)
 
 
-def overlay(bgr, vert, horiz, model, scale=1.0, result_text=""):
+def tint_mask(canvas, mask, colour=(60, 60, 200), alpha=0.28):
+    """Wash the masked region so it is obvious what was excluded."""
+    if mask is None:
+        return canvas
+    m = mask.astype(np.uint8)
+    if m.shape[:2] != canvas.shape[:2]:
+        m = cv2.resize(m, (canvas.shape[1], canvas.shape[0]),
+                       interpolation=cv2.INTER_NEAREST)
+    wash = np.zeros_like(canvas)
+    wash[:] = colour
+    sel = m.astype(bool)
+    canvas[sel] = (canvas[sel] * (1 - alpha) + wash[sel] * alpha).astype(np.uint8)
+    return canvas
+
+
+def overlay(bgr, vert, horiz, model, scale=1.0, result_text="", info=None):
     """Annotated copy of the input showing the evidence behind the decision."""
     canvas = bgr.copy()
     inv = 1.0 / scale if scale else 1.0
+    info = info or {}
+    tint_mask(canvas, info.get("mask"))
+    dropped = info.get("masked_out")
+    if dropped is not None and len(dropped):
+        _draw_lines(canvas, dropped * inv, RED, max(1, int(round(inv))))
 
     if len(horiz):
         _draw_lines(canvas, horiz.seg * inv, BLUE, max(1, int(round(inv))))

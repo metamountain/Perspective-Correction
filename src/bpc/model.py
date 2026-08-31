@@ -35,7 +35,8 @@ from .optimize import nelder_mead
 
 class Model:
     __slots__ = ("roll", "pitch", "f", "f_source", "confidence", "vp", "up",
-                 "vert_inliers", "horiz_vps", "horizon_support", "diagnostics")
+                 "vert_inliers", "horiz_vps", "horizon_support", "diagnostics",
+                 "detect_info")
 
     def __init__(self, **kw):
         for k in self.__slots__:

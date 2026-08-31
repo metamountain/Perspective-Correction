@@ -143,6 +143,10 @@ def copy_through(src_path: str, dst_path: str):
     """Byte-for-byte copy, used when an image is skipped but an output is wanted."""
     if os.path.abspath(src_path) == os.path.abspath(dst_path):
         return
+    # the corrected path creates the output folder before writing; the skipped
+    # path has to as well, or `rectify.py folder -o newfolder` dies on the first
+    # image it declines to touch
+    os.makedirs(os.path.dirname(os.path.abspath(dst_path)) or ".", exist_ok=True)
     with open(src_path, "rb") as f_in, open(dst_path + ".part", "wb") as f_out:
         while True:
             chunk = f_in.read(1 << 20)

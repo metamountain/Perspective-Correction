@@ -36,12 +36,25 @@ third mode nobody could choose between.
 `masks.vegetation_and_sky` uses three cues and needs no download:
 
 * **excess green** -- foliage in leaf;
-* **low structure-tensor coherence over busy pixels** -- a facade has a dominant
-  local direction almost everywhere, a canopy has none. This is the cue that
-  catches a *bare* winter tree, which is not green at all and is exactly the
-  case that breaks an eaves line;
+* **low structure-tensor coherence over busy pixels, but only near vegetation**
+  -- a canopy has no dominant local direction. This cue used to stand alone, and
+  drawing the mask on screen showed why that was wrong: coherence asks whether
+  *one* direction dominates, and a half-timbered facade has *two*, so the beam
+  grid scored as foliage. It was masking **8.2 %** of a real Fachwerk barn's
+  facade -- excluding the building from its own measurement. Requiring greenness
+  nearby costs nothing measurable (pitch mean 0.28 to 0.31 deg on the occluder
+  benchmark, identical worst case) and drops the false masking to **1.5 %**. The
+  price is a bare winter tree, which is not green and is now only partly caught;
+  that case belongs to `--mask file`;
 * **bright, unsaturated or blue regions connected to the top edge** -- sky, as
   opposed to a white wall, which is not connected to the top.
+
+## Look at the mask before you trust it
+
+`--debug-dir` tints the excluded region and draws the lines it removed in red,
+and the GUI review window has a **show mask** toggle. Both exist because the
+Fachwerk failure above was invisible in the numbers -- the only symptom was a
+slightly lower confidence -- and obvious the instant the mask was drawn.
 
 ## An external segmenter (SAM, and friends)
 

@@ -55,12 +55,13 @@ def analyse(bgr, settings, exif_focal_px=None, image_path=""):
     full-resolution pixels."""
     gray, scale = io.analysis_gray(bgr, settings.detect_max_edge)
     small = _match_scale(bgr, gray)
-    _, vert, horiz, detector = L.prepare(gray, settings, small, image_path)
+    _, vert, horiz, detector, info = L.prepare(gray, settings, small, image_path)
     gh, gw = gray.shape[:2]
     exif_small = exif_focal_px * scale if exif_focal_px else None
     m = M.estimate(vert, horiz, gw, gh, settings, exif_small)
     if m.f:
         m.f = m.f / scale                       # back to full resolution pixels
+    m.detect_info = info
     return m, vert, horiz, scale, detector
 
 
@@ -82,6 +83,7 @@ def process(src_path, dst_path, settings, debug_dir=None, dry_run=False):
     try:
         exif_f = io.focal_px_from_exif(src, w, h) if settings.use_exif_focal else None
         m, vert, horiz, scale, detector = analyse(bgr, settings, exif_f, src_path)
+        info = m.detect_info
     except Exception as exc:
         return Result(status=ERROR, reason=f"analysis failed ({exc})",
                       seconds=time.time() - t0, **base)
@@ -96,7 +98,7 @@ def process(src_path, dst_path, settings, debug_dir=None, dry_run=False):
     def finish_skip(reason):
         if debug_dir:
             _write_debug(debug_dir, src_path, bgr, vert, horiz, m, scale,
-                         f"SKIPPED  {reason}")
+                         f"SKIPPED  {reason}", info=info)
         if dst_path and not dry_run and os.path.abspath(dst_path) != os.path.abspath(src_path):
             io.copy_through(src_path, dst_path)
         return Result(status=SKIPPED, reason=reason, seconds=time.time() - t0, **base)
@@ -129,7 +131,7 @@ def process(src_path, dst_path, settings, debug_dir=None, dry_run=False):
     if dry_run:
         if debug_dir:
             _write_debug(debug_dir, src_path, bgr, vert, horiz, m, scale,
-                         _label(base, total_deg))
+                         _label(base, total_deg), info=info)
         return Result(status=OK, reason="dry run", seconds=time.time() - t0, **base)
 
     try:
@@ -142,7 +144,7 @@ def process(src_path, dst_path, settings, debug_dir=None, dry_run=False):
 
     if debug_dir:
         _write_debug(debug_dir, src_path, bgr, vert, horiz, m, scale,
-                     _label(base, total_deg), after=out)
+                     _label(base, total_deg), after=out, info=info)
     return Result(status=OK, reason="", seconds=time.time() - t0, **base)
 
 
@@ -153,11 +155,12 @@ def _label(base, total_deg):
             f"lines={base['n_inliers']}/{base['n_lines']}")
 
 
-def _write_debug(debug_dir, src_path, bgr, vert, horiz, m, scale, text, after=None):
+def _write_debug(debug_dir, src_path, bgr, vert, horiz, m, scale, text, after=None,
+                 info=None):
     import cv2
     os.makedirs(debug_dir, exist_ok=True)
     stem = os.path.splitext(os.path.basename(src_path))[0]
-    ov = PV.overlay(bgr, vert, horiz, m, scale, text)
+    ov = PV.overlay(bgr, vert, horiz, m, scale, text, info=info)
     s = min(1.0, 1400.0 / max(ov.shape[:2]))
     if s < 1.0:
         ov = cv2.resize(ov, (int(ov.shape[1] * s), int(ov.shape[0] * s)),

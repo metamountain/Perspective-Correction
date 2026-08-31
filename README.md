@@ -70,7 +70,13 @@ separately. `--debug-dir` writes one of these per image.
 
 ## Graphical mode
 
-The batch window runs a folder and colour-codes every result. Double-click any
+Drop photos or a folder onto the window -- a **single image** is fine, so is a
+mixed selection -- or click the drop area to browse. Drag and drop needs
+`pip install tkinterdnd2`; without it the same area is a click target and says
+so. "review one image..." opens the review window directly, without a batch run
+first.
+
+The batch window runs the selection and colour-codes every result. Double-click any
 row -- especially a SKIPPED one -- to open manual review:
 
 * **before and after, side by side**, updating live;
@@ -78,7 +84,9 @@ row -- especially a SKIPPED one -- to open manual review:
 * **click any detected line to strike it out**, and the fit is recomputed
   without it. One button strikes out everything leaning more than 18 deg, which
   is usually the roof;
-* **save correction** or **keep original**.
+* **save correction** or **keep original**;
+* **show mask** draws the excluded region and the lines it removed, in red. A
+  mask you cannot see is a mask you cannot trust.
 
 So an image the automatic pass declines is not lost -- it is queued for a
 decision a person makes in a couple of seconds.

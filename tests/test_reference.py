@@ -39,7 +39,7 @@ def test_the_parallel_model_is_an_explicit_candidate():
     from bpc import imageio as IO
     from bpc import lines as L
     gray, _ = IO.analysis_gray(sc.img, s.detect_max_edge)
-    _, vert, _, _ = L.prepare(gray, s)
+    _, vert, _, _, _ = L.prepare(gray, s)
     par = V.parallel_hypothesis(vert, s)
     assert par is not None and abs(par.vp[2]) < 1e-12
     assert par.support > 0.3

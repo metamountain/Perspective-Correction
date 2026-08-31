@@ -50,7 +50,7 @@ def test_mlsd_returns_long_structural_segments():
     _mlsd_or_skip()
     sc = synth.Scene(w=1200, h=800, pitch_deg=8, seed=41)
     st = Settings().replace(detector="mlsd")
-    _, vert, horiz, name = L.prepare(*_grids(sc, st))
+    _, vert, horiz, name, _ = L.prepare(*_grids(sc, st))
     assert name == "mlsd"
     assert len(vert) + len(horiz) > 0
 
@@ -61,7 +61,7 @@ def test_hybrid_never_gates_the_evidence_away_entirely():
     _mlsd_or_skip()
     sc = synth.Scene(w=1200, h=800, pitch_deg=8, seed=42)
     st = Settings().replace(detector="hybrid")
-    _, vert, horiz, name = L.prepare(*_grids(sc, st))
+    _, vert, horiz, name, _ = L.prepare(*_grids(sc, st))
     assert name in ("hybrid", "lsd(hybrid fallback)")
     assert len(vert) >= st.min_vertical_lines
 

@@ -319,11 +319,25 @@ def prepare(gray: np.ndarray, settings, bgr=None, image_path: str = "") -> tuple
         seg = seg[G.segment_lengths(seg) >= min_len]
     if len(seg):
         seg = drop_border_segments(seg, w, h, settings.border_margin_px)
-    mask = None
+    mask, masked_out = None, np.zeros((0, 4))
     if len(seg) and bgr is not None and getattr(settings, "mask_mode", "off") != "off":
         mask = MK.build(bgr, settings, image_path)
         if mask is not None:
-            seg = MK.drop_masked(seg, mask)
+            # a long straight line is architecture, whatever the texture
+            # statistics think; protect it before anything is discarded
+            mask = MK.protect_structure(mask, seg, min_len * 1.8)
+        if mask is not None:
+            kept = MK.drop_masked(seg, mask)
+            # keep what was thrown away, so the preview can show it.  A mask the
+            # user cannot see is a mask the user cannot trust: when SAM removes
+            # the wrong half of a building, the only symptom otherwise is a
+            # quietly worse answer.
+            kept_set = {tuple(r) for r in kept.tolist()}
+            masked_out = np.array([r for r in seg.tolist()
+                                   if tuple(r) not in kept_set], dtype=float)
+            if len(masked_out) == 0:
+                masked_out = np.zeros((0, 4))
+            seg = kept
     if len(seg) and settings.merge_lines:
         seg = merge_collinear(seg, gap_tol=max(12.0, 0.02 * max(w, h)))
         seg = seg[G.segment_lengths(seg) >= min_len]
@@ -331,6 +345,7 @@ def prepare(gray: np.ndarray, settings, bgr=None, image_path: str = "") -> tuple
     vert, horiz = split_by_orientation(ls, settings.vertical_window_deg,
                                        settings.horizontal_window_deg,
                                        settings.angular_softness)
+    info = {"mask": mask, "masked_out": masked_out}
     if settings.merge_horizontal and len(horiz):
         # Merge the horizontal pool only.  The two pools have opposite needs: a
         # facade offers many unoccluded verticals, and merging them destroys
@@ -345,4 +360,4 @@ def prepare(gray: np.ndarray, settings, bgr=None, image_path: str = "") -> tuple
             _, horiz = split_by_orientation(merged, settings.vertical_window_deg,
                                             settings.horizontal_window_deg,
                                             settings.angular_softness)
-    return ls, vert, horiz, name
+    return ls, vert, horiz, name, info

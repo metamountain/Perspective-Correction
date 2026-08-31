@@ -23,6 +23,18 @@ import traceback
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
+# Drag and drop is not in the standard library.  tkinterdnd2 provides it and is
+# a small pure-Tcl extension, but the window has to work without it, so the drop
+# zone doubles as a click target and says which mode it is in.
+try:
+    from tkinterdnd2 import DND_FILES, TkinterDnD
+    _ROOT_CLASS = TkinterDnD.Tk
+    HAVE_DND = True
+except Exception:                                    # pragma: no cover
+    DND_FILES = None
+    _ROOT_CLASS = tk.Tk
+    HAVE_DND = False
+
 import cv2
 import numpy as np
 from PIL import Image, ImageTk
@@ -117,12 +129,27 @@ class ReviewWindow(tk.Toplevel):
                    command=self._reset).pack(side="left", padx=6)
         ttk.Checkbutton(btns, text="show detected lines", command=self._schedule_redraw,
                         variable=self._mk_show()).pack(side="left", padx=12)
+        ttk.Checkbutton(btns, text="show mask", command=self._toggle_mask,
+                        variable=self._mk_mask()).pack(side="left")
         ttk.Button(btns, text="keep original", command=self._keep).pack(side="right")
         ttk.Button(btns, text="save correction", command=self._save).pack(side="right", padx=6)
 
     def _mk_show(self):
         self.v_show_lines = tk.BooleanVar(value=True)
         return self.v_show_lines
+
+    def _mk_mask(self):
+        self.v_show_mask = tk.BooleanVar(value=True)
+        return self.v_show_mask
+
+    def _toggle_mask(self):
+        """Show the excluded region and the lines it removed.
+
+        A mask the user cannot see is a mask the user cannot trust: when a
+        segmenter takes out the wrong half of a building, the only other symptom
+        is a quietly worse answer."""
+        self.session.show_mask = bool(self.v_show_mask.get())
+        self._schedule_redraw()
 
     def _slider(self, parent, row, label, var, lo, hi, unit):
         ttk.Label(parent, text=label, width=18).grid(row=row, column=0, sticky="w")
@@ -253,7 +280,7 @@ class ReviewWindow(tk.Toplevel):
 # ==========================================================================
 # batch window
 # ==========================================================================
-class App(tk.Tk):
+class App(_ROOT_CLASS):
     def __init__(self, initial=None):
         super().__init__()
         self.title("Batch Perspective Correction")
@@ -264,10 +291,7 @@ class App(tk.Tk):
         self.results = {}
         self._build()
         if initial:
-            for item in initial:
-                if os.path.isdir(item):
-                    self.v_input.set(item)
-                    break
+            self._add(list(initial))
         self.after(120, self._pump)
 
     def _build(self):
@@ -275,14 +299,34 @@ class App(tk.Tk):
         top = ttk.Frame(self, padding=8)
         top.pack(fill="x")
 
-        self.v_input = tk.StringVar()
         self.v_output = tk.StringVar()
-        ttk.Label(top, text="input folder").grid(row=0, column=0, sticky="w", **pad)
-        ttk.Entry(top, textvariable=self.v_input, width=70).grid(row=0, column=1, sticky="ew", **pad)
-        ttk.Button(top, text="browse...", command=self._pick_in).grid(row=0, column=2, **pad)
-        ttk.Label(top, text="output folder").grid(row=1, column=0, sticky="w", **pad)
-        ttk.Entry(top, textvariable=self.v_output, width=70).grid(row=1, column=1, sticky="ew", **pad)
-        ttk.Button(top, text="browse...", command=self._pick_out).grid(row=1, column=2, **pad)
+        self.items = []                       # files and/or folders, in order
+
+        hint = ("drop photos or a folder here"
+                if HAVE_DND else
+                "click to add photos or a folder   (pip install tkinterdnd2 for drag and drop)")
+        self.drop = tk.Label(top, text=hint, relief="ridge", borderwidth=2,
+                             background="#eef1f4", foreground="#334", height=3,
+                             cursor="hand2")
+        self.drop.grid(row=0, column=0, columnspan=3, sticky="ew", **pad)
+        self.drop.bind("<Button-1>", lambda e: self._add_files())
+        if HAVE_DND:
+            self.drop.drop_target_register(DND_FILES)
+            self.drop.dnd_bind("<<Drop>>", self._on_drop)
+
+        row = ttk.Frame(top)
+        row.grid(row=1, column=0, columnspan=3, sticky="ew", **pad)
+        ttk.Button(row, text="add images...", command=self._add_files).pack(side="left")
+        ttk.Button(row, text="add folder...", command=self._add_folder).pack(side="left", padx=6)
+        ttk.Button(row, text="clear", command=self._clear).pack(side="left")
+        self.lbl_items = ttk.Label(row, text="nothing selected")
+        self.lbl_items.pack(side="left", padx=12)
+        ttk.Button(row, text="review one image...",
+                   command=self._review_single).pack(side="right")
+
+        ttk.Label(top, text="output folder").grid(row=2, column=0, sticky="w", **pad)
+        ttk.Entry(top, textvariable=self.v_output, width=70).grid(row=2, column=1, sticky="ew", **pad)
+        ttk.Button(top, text="browse...", command=self._pick_out).grid(row=2, column=2, **pad)
         top.columnconfigure(1, weight=1)
 
         opt = ttk.LabelFrame(self, text="settings", padding=8)
@@ -297,6 +341,10 @@ class App(tk.Tk):
         self._spin(opt, 0, 0, "strength", self.v_strength, 0.0, 1.0, 0.05)
         self._spin(opt, 0, 3, "min confidence", self.v_conf, 0.0, 1.0, 0.05)
         self._spin(opt, 1, 0, "max pitch (deg)", self.v_maxpitch, 0.0, 45.0, 1.0)
+        ttk.Label(opt, text="mask").grid(row=0, column=6, sticky="e", padx=4)
+        self.v_mask = tk.StringVar(value=Settings.mask_mode)
+        ttk.Combobox(opt, textvariable=self.v_mask, values=["off", "auto", "file"],
+                     width=6, state="readonly").grid(row=0, column=7, sticky="w")
         ttk.Label(opt, text="crop").grid(row=1, column=3, sticky="e", padx=4)
         ttk.Combobox(opt, textvariable=self.v_crop, values=["aspect", "inside", "none"],
                      width=8, state="readonly").grid(row=1, column=4, sticky="w")
@@ -339,12 +387,81 @@ class App(tk.Tk):
         s.min_confidence = float(self.v_conf.get())
         s.max_pitch_deg = float(self.v_maxpitch.get())
         s.crop = self.v_crop.get()
+        s.mask_mode = self.v_mask.get()
         return s
 
-    def _pick_in(self):
+    def _add(self, paths):
+        added = 0
+        for p in paths:
+            p = os.path.abspath(p)
+            if not os.path.exists(p) or p in self.items:
+                continue
+            if os.path.isdir(p) or os.path.splitext(p)[1].lower() in READABLE:
+                self.items.append(p)
+                added += 1
+        self._refresh_items()
+        return added
+
+    def _add_files(self):
+        pats = " ".join("*" + e for e in sorted(READABLE))
+        chosen = filedialog.askopenfilenames(
+            title="choose one or more photos",
+            filetypes=[("images", pats), ("all files", "*.*")])
+        self._add(list(chosen))
+
+    def _add_folder(self):
         d = filedialog.askdirectory(title="folder with photos")
         if d:
-            self.v_input.set(d)
+            self._add([d])
+
+    def _clear(self):
+        self.items = []
+        self._refresh_items()
+
+    def _on_drop(self, event):
+        """Tk hands the drop over as a Tcl list, so paths with spaces arrive
+        brace-quoted; splitlist is what unpacks that correctly."""
+        try:
+            paths = self.tk.splitlist(event.data)
+        except Exception:
+            paths = [event.data]
+        n = self._add(list(paths))
+        if n == 0:
+            self.drop.configure(text="nothing usable in that drop")
+            self.after(1800, self._refresh_items)
+
+    def _refresh_items(self):
+        n_files = sum(1 for p in self.items if os.path.isfile(p))
+        n_dirs = sum(1 for p in self.items if os.path.isdir(p))
+        if not self.items:
+            self.lbl_items.configure(text="nothing selected")
+        else:
+            bits = []
+            if n_files:
+                bits.append(f"{n_files} image" + ("s" if n_files != 1 else ""))
+            if n_dirs:
+                bits.append(f"{n_dirs} folder" + ("s" if n_dirs != 1 else ""))
+            self.lbl_items.configure(text=" + ".join(bits))
+        hint = ("drop photos or a folder here" if HAVE_DND
+                else "click to add photos or a folder   "
+                     "(pip install tkinterdnd2 for drag and drop)")
+        if self.items:
+            hint += "\n" + os.path.basename(self.items[-1]) + \
+                    (f"  (+{len(self.items) - 1} more)" if len(self.items) > 1 else "")
+        self.drop.configure(text=hint)
+
+    def _review_single(self):
+        """Open one image straight in the review window.
+
+        The batch list is the normal path, but a single photograph being checked
+        by hand should not need a run first."""
+        files = self._files()
+        if not files:
+            messagebox.showinfo("Review", "add an image first")
+            return
+        if len(files) > 1:
+            files = [f for f in files if os.path.isfile(f)][:1]
+        ReviewWindow(self, files[0], self._settings(), self._dest(files[0]))
 
     def _pick_out(self):
         d = filedialog.askdirectory(title="output folder")
@@ -353,18 +470,25 @@ class App(tk.Tk):
 
     # -- run -------------------------------------------------------------
     def _files(self):
-        root = self.v_input.get()
-        if not root or not os.path.isdir(root):
-            return []
-        out = []
-        if self.v_recursive.get():
-            for base, _, names in os.walk(root):
-                out += [os.path.join(base, n) for n in sorted(names)
-                        if os.path.splitext(n)[1].lower() in READABLE]
-        else:
-            out = [os.path.join(root, n) for n in sorted(os.listdir(root))
-                   if os.path.splitext(n)[1].lower() in READABLE
-                   and os.path.isfile(os.path.join(root, n))]
+        """Expand the selection: single images stay as they are, folders are
+        listed (recursively if asked)."""
+        out, seen = [], set()
+        for item in self.items:
+            if os.path.isfile(item):
+                found = [item]
+            elif self.v_recursive.get():
+                found = [os.path.join(b, n) for b, _, names in os.walk(item)
+                         for n in sorted(names)
+                         if os.path.splitext(n)[1].lower() in READABLE]
+            else:
+                found = [os.path.join(item, n) for n in sorted(os.listdir(item))
+                         if os.path.splitext(n)[1].lower() in READABLE
+                         and os.path.isfile(os.path.join(item, n))]
+            for f in found:
+                k = os.path.abspath(f)
+                if k not in seen:
+                    seen.add(k)
+                    out.append(f)
         return out
 
     def _dest(self, src):
@@ -377,7 +501,7 @@ class App(tk.Tk):
     def _start(self):
         files = self._files()
         if not files:
-            messagebox.showinfo("Batch", "no readable images in that folder")
+            messagebox.showinfo("Batch", "add some images or a folder first")
             return
         if self.v_overwrite.get() and not messagebox.askyesno(
                 "Overwrite", f"Replace {len(files)} original file(s)?"):

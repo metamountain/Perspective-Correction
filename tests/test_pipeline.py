@@ -157,3 +157,18 @@ def test_debug_overlay_is_written_when_asked():
         assert os.path.exists(os.path.join(dbg, "h_compare.jpg"))
     finally:
         shutil.rmtree(d, ignore_errors=True)
+
+
+def test_a_skipped_image_can_be_written_into_a_new_output_folder():
+    """The corrected path creates the output folder; the skipped path used not
+    to, so a run into a fresh folder died on the first image it declined."""
+    d = _tmp()
+    try:
+        src = os.path.join(d, "flat.jpg")
+        cv2.imwrite(src, synth.flat_image())
+        out = os.path.join(d, "does", "not", "exist", "flat_corr.jpg")
+        r = process(src, out, Settings())
+        assert r.status == SKIPPED, r.line()
+        assert os.path.exists(out)
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
