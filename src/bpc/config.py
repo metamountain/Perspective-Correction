@@ -12,7 +12,11 @@ from dataclasses import dataclass, asdict, fields
 @dataclass
 class Settings:
     # ---- detection ----
-    detector: str = "auto"              # auto | lsd | fld | hough
+    detector: str = "auto"              # auto | lsd | fld | hough | mlsd | hybrid | union
+    hybrid_dist_tol: float = 8.0
+    mlsd_model: str = ""                # path, or a name in models/
+    mlsd_score_thr: float = 0.10
+    mlsd_dist_thr: float = 20.0
     detect_max_edge: int = 1600         # analysis resolution (long edge, px)
     min_line_length_frac: float = 0.035  # of the short edge
     vertical_window_deg: float = 32.0

@@ -111,6 +111,66 @@ an ordinary photograph; verticals splayed outwards at the top read as a mistake.
 Over-corrections 15/40 → 9/40 at no cost in mean accuracy. Pitch only, and only
 when `f` was not supplied.
 
+## The detector: LSD stays, and it was a close call
+
+The front end was the obvious suspect for the accuracy ceiling, and the
+diagnosis was right: on a real barn LSD returned 4823 raw segments with a
+**median length of 16 px** on a 1600 px grid, only 29 longer than a tenth of the
+short edge. M-LSD (Apache-2.0, 6.1 MB, vendored in `models/`) returns ~110
+segments with a median of **250–318 px** — 20× longer.
+
+**And it is less accurate.** Angular precision scales with length *and* endpoint
+precision, and M-LSD decodes endpoints from a 256×256 displacement map — about
+5.5 px of quantisation at 1400 px, i.e. ~1° on a 300 px line, where LSD's
+sub-pixel endpoints give ~0.1° on a 50 px fragment. **Long and coarse loses to
+short and sharp.**
+
+But the synthetic benchmark is biased for LSD (flat rendered lines are its home
+turf and out-of-distribution for a network trained on photographs), so the
+question was asked again on real photographs, with a **round-trip test**: warp by
+a known rotation `R_d`, and the warped copy's up must be `R_d @ u0` — real
+texture, exact ground truth, no need to know `u0`. That test is shipped as
+`tools/benchmark_detectors.py`.
+
+| | synthetic pitch mean | real round-trip mean | real p90 |
+|---|---|---|---|
+| **LSD** | **0.21°** | 0.94° | 3.44° |
+| M-LSD large | 1.42° | 1.44° | 2.55° |
+| hybrid (LSD gated by M-LSD) | 1.37° | **0.78°** | 2.41° |
+| union (LSD + M-LSD) | 0.48° | 1.25° | **2.23°** |
+
+The picture *inverts* between the benchmarks. LSD stays the default because it
+wins decisively on ground truth and loses only narrowly on 24 real samples, and
+because the hybrid's 7.9° worst-case roll on synthetic scenes shows it can gate
+away evidence it needed. Promoting on 24 measurements against a benchmark it
+loses would be exactly the mistake the rest of these notes documents.
+
+**If a user has real data, run the benchmark tool and let it decide.** That is
+the missing evidence, not more argument.
+
+## Masking: only with a known focal length
+
+`--mask auto` (cheap vegetation/sky) and `--mask file` (a folder of PNGs from an
+external segmenter such as SAM) both go through one seam, `masks.build`. The
+measurement that governs their use:
+
+| | pitch max |
+|---|---|
+| f known, mask off | 2.84° |
+| f known, mask on | **0.93°** |
+| f unknown, mask off | **5.58°** |
+| f unknown, mask on | 10.05° |
+
+Masking removes the worst outliers *and* removes evidence, and the focal
+estimator is the part most starved for it. Default is off. Never recommend
+masking without `--focal-35mm` or EXIF.
+
+Note on SAM: plain SAM has no text encoder and cannot take words at all. Text
+prompting comes from GroundingDINO → SAM, or SAM 3's concept head. Prompt the
+*rejects* (`tree, foliage, sky, car, person`) rather than the building —
+concrete countable nouns ground well, abstractions like "architecture" do not,
+and a missed piece of building is lost evidence.
+
 ## Known weakness, stated plainly
 
 **A flat-on facade with no EXIF.** One horizontal direction fixes one *point* on

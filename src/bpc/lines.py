@@ -67,8 +67,78 @@ def _hough(gray: np.ndarray, min_len: float):
     return np.asarray(seg, dtype=float).reshape(-1, 4), "hough"
 
 
-def detect_segments(gray: np.ndarray, min_len: float, detector: str = "auto"):
+def _mlsd(bgr, settings):
+    from . import mlsd as M
+    seg = M.detect(bgr, getattr(settings, "mlsd_model", ""),
+                   getattr(settings, "mlsd_score_thr", 0.10),
+                   getattr(settings, "mlsd_dist_thr", 20.0))
+    if seg is None or len(seg) == 0:
+        return None
+    return np.asarray(seg, dtype=float).reshape(-1, 4), "mlsd"
+
+
+def gate_by(seg: np.ndarray, guide: np.ndarray, angle_tol_deg: float = 6.0,
+            dist_tol: float = 8.0, extent_margin: float = 0.15) -> np.ndarray:
+    """Keep only segments that lie along one of the ``guide`` segments.
+
+    The point of combining two detectors.  M-LSD is trained on wireframes and
+    knows which edges are *structural*, but it decodes endpoints from a 256x256
+    displacement map, so its geometry is coarse.  LSD has sub-pixel endpoints
+    but no idea what a building is and happily returns every plank seam and
+    twig.  Using M-LSD's segments purely as a spatial gate over LSD's keeps the
+    judgement of the first and the precision of the second.
+    """
+    if len(seg) == 0 or len(guide) == 0:
+        return seg
+    atol = math.radians(angle_tol_deg)
+    ang_s = np.arctan2(seg[:, 3] - seg[:, 1], seg[:, 2] - seg[:, 0]) % math.pi
+    ang_g = np.arctan2(guide[:, 3] - guide[:, 1], guide[:, 2] - guide[:, 0]) % math.pi
+    mid = G.segment_midpoints(seg)
+    gl = G.lines_from_segments(guide)                 # normalised: |a,b| == 1
+    g0 = guide[:, :2]
+    gd = np.column_stack([guide[:, 2] - guide[:, 0], guide[:, 3] - guide[:, 1]])
+    glen = np.linalg.norm(gd, axis=1)
+    glen[glen < 1e-9] = 1e-9
+    gd = gd / glen[:, None]
+
+    da = np.abs(ang_s[:, None] - ang_g[None, :])
+    da = np.minimum(da, math.pi - da)
+    perp = np.abs(mid @ gl[:, :2].T + gl[:, 2][None, :])
+    t = (mid[:, None, :] - g0[None, :, :]) * gd[None, :, :]
+    t = t.sum(axis=2)
+    margin = extent_margin * glen[None, :]
+    within = (t >= -margin) & (t <= glen[None, :] + margin)
+    ok = ((da <= atol) & (perp <= dist_tol) & within).any(axis=1)
+    return seg[ok]
+
+
+def detect_segments(gray: np.ndarray, min_len: float, detector: str = "auto",
+                    bgr=None, settings=None):
     """Return ``(segments, detector_name)``; segments may be empty."""
+    if detector in ("hybrid", "union"):
+        if bgr is None:
+            bgr = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+        guide = _mlsd(bgr, settings)
+        base = _lsd(gray)
+        if base is None:
+            return (guide[0], "mlsd") if guide else (np.zeros((0, 4)), "none")
+        if guide is None:
+            return base[0], "lsd"
+        if detector == "union":
+            return np.vstack([base[0], guide[0]]), "union"
+        gated = gate_by(base[0], guide[0],
+                        dist_tol=getattr(settings, "hybrid_dist_tol", 8.0))
+        # never gate the evidence away entirely
+        if len(gated) < max(8, getattr(settings, "min_vertical_lines", 4) * 2):
+            return base[0], "lsd(hybrid fallback)"
+        return gated, "hybrid"
+    if detector == "mlsd":
+        if bgr is None:
+            bgr = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
+        got = _mlsd(bgr, settings)
+        if got is not None:
+            return got
+        return np.zeros((0, 4)), "mlsd"
     chain = {"auto": (_lsd, _fld), "lsd": (_lsd,), "fld": (_fld,), "hough": ()}[detector]
     for fn in chain:
         got = fn(gray)
@@ -244,7 +314,7 @@ def prepare(gray: np.ndarray, settings, bgr=None, image_path: str = "") -> tuple
     ``(all_lines, vertical, horizontal, detector_name)``."""
     h, w = gray.shape[:2]
     min_len = max(8.0, settings.min_line_length_frac * min(w, h))
-    seg, name = detect_segments(gray, min_len, settings.detector)
+    seg, name = detect_segments(gray, min_len, settings.detector, bgr, settings)
     if len(seg):
         seg = seg[G.segment_lengths(seg) >= min_len]
     if len(seg):

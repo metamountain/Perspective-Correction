@@ -47,6 +47,7 @@ Log lines are one per file:
 | `--min-confidence` | raise to skip more, lower to correct more |
 | `--no-pitch` / `--no-roll` | level only, or straighten verticals only |
 | `--crop aspect\|inside\|none` | keep the original aspect ratio, fit inside, or don't crop |
+| `--detector hybrid` | combine LSD's precision with M-LSD's judgement. Needs `pip install ai-edge-litert` ([measurements](docs/detectors.md)) |
 | `--mask auto` | ignore lines in vegetation and sky. **Pair it with `--focal-35mm`** ([why](docs/masking.md)) |
 | `--mask file --mask-file DIR` | one PNG mask per photo from an external segmenter, e.g. SAM |
 | `--debug-dir DIR` | write line/horizon overlays and before-after pairs |
