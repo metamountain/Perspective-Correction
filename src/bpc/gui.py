@@ -138,7 +138,7 @@ class ReviewWindow(tk.Toplevel):
         ttk.Checkbutton(msk, text="mask marks what to KEEP (SAM output)",
                         variable=self.v_maskinv, command=self._apply_mask
                         ).grid(row=0, column=3, sticky="w", padx=10)
-        self.lbl_mask = ttk.Label(msk, text="")
+        self.lbl_mask = ttk.Label(msk, text="", wraplength=760, justify="left")
         self.lbl_mask.grid(row=1, column=0, columnspan=4, sticky="w", pady=(4, 0))
         self.v_alpha = tk.DoubleVar(value=0.28)
         ttk.Label(msk, text="mask opacity", width=18).grid(row=2, column=0, sticky="w")

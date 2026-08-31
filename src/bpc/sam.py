@@ -34,6 +34,7 @@ Three backends are tried, in this order:
 from __future__ import annotations
 
 import os
+import sys
 import threading
 
 import cv2
@@ -94,11 +95,38 @@ def _load(path: str, device: str = ""):
                 continue
             _CACHE[key] = entry
             return entry
-        raise SAMUnavailable(
-            f"could not load {os.path.basename(path)}.  Install one of: "
-            f"'pip install ultralytics' (handles SAM 1/2/3, AGPL-3.0), "
-            f"'pip install sam2', or 'pip install segment-anything'.  "
-            + " | ".join(errors))
+        raise SAMUnavailable(_install_hint(path, errors))
+
+
+def _install_hint(path: str, errors) -> str:
+    """Lead with the command to run, not with a licence footnote.
+
+    "Nothing is installed" and "the installed backend cannot read this file" are
+    different problems with different answers, and the first message this printed
+    buried both behind a list of three packages and their licences.
+    """
+    missing = all("No module named" in e for e in errors)
+    exe = os.path.basename(sys.executable)
+    name = os.path.basename(path)
+    if missing:
+        pkg = "segment-anything" if _kind(path) == "sam1" else "ultralytics"
+        return (f"no SAM backend installed. Run:\n"
+                f"    {sys.executable} -m pip install {pkg}\n"
+                f"Install into the SAME interpreter that runs this tool ({exe}). "
+                f"On a ComfyUI portable install, use its python_embeded\\python.exe "
+                f"-- it already has torch and CUDA, so you avoid a second "
+                f"multi-gigabyte download.")
+    return (f"a SAM backend is installed but could not read {name}:\n    "
+            + "\n    ".join(errors))
+
+
+def backends():
+    """Which loaders are importable here -- for diagnostics, never for control
+    flow, since importing torch is expensive."""
+    import importlib.util
+    return {n: importlib.util.find_spec(n) is not None
+            for n in ("ultralytics", "sam2", "segment_anything",
+                      "segment_anything_hq", "torch")}
 
 
 def _as_torch_checkpoint(path: str) -> str:

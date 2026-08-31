@@ -81,3 +81,32 @@ def test_density_scales_with_line_length_not_count():
     short = np.array([[10., 10., 10., 30.]] * 4)
     long_ = np.array([[10., 10., 10., 190.]])
     assert S.line_density(region, long_) > S.line_density(region, short)
+
+
+def test_backends_reports_what_is_importable():
+    b = S.backends()
+    assert set(b) >= {"ultralytics", "sam2", "segment_anything", "torch"}
+    assert all(isinstance(v, bool) for v in b.values())
+
+
+def test_the_install_hint_leads_with_the_command():
+    """The first version of this message opened with three package names and
+    their licences, and the actual instruction was off the end of the GUI
+    label. Nothing installed and 'installed but cannot read this file' are
+    different problems and must read differently."""
+    missing = S._install_hint("/x/sam_vit_b.pth", ["ultralytics: No module named 'ultralytics'",
+                                                  "sam2: No module named 'sam2'",
+                                                  "sam1: No module named 'segment_anything'"])
+    assert missing.startswith("no SAM backend installed")
+    assert "pip install segment-anything" in missing
+    assert "python_embeded" in missing            # reuse ComfyUI's torch
+    broken = S._install_hint("/x/sam_vit_b.pth", ["sam1: size mismatch for image_encoder"])
+    assert broken.startswith("a SAM backend is installed")
+    assert "size mismatch" in broken
+
+
+def test_the_hint_names_the_package_that_fits_the_checkpoint():
+    sam1 = S._install_hint("/x/sam_vit_b_01ec64.pth", ["a: No module named 'x'"])
+    sam2 = S._install_hint("/x/sam2.1_hiera_tiny.pt", ["a: No module named 'x'"])
+    assert "segment-anything" in sam1
+    assert "ultralytics" in sam2

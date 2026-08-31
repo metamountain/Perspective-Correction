@@ -77,6 +77,24 @@ GroundingDINO — and it works with SAM 1 and SAM 2 as well as SAM 3.
 relative to the densest region *in that picture*, because line density scales
 with how much of the frame the building occupies.
 
+### Check the setup before running a batch
+
+    python rectify.py --sam-info --sam-model "D:\...\sams\sam_vit_b_01ec64.pth"
+
+Prints the interpreter in use, which backends it can import, and whether that
+checkpoint actually loads. The three ways this goes wrong -- no backend
+installed, a backend installed into a *different* interpreter, and a checkpoint
+needing a different package -- are indistinguishable from a run that simply
+errors on every file.
+
+**Install into the interpreter that runs this tool.** On a ComfyUI portable
+install that is its own python, which already has torch and CUDA:
+
+    D:\ComfyUI_windows_portable\python_embeded\python.exe -m pip install segment-anything
+    D:\ComfyUI_windows_portable\python_embeded\python.exe D:\Batch-Perspective-Correction\rectify.py --gui
+
+Using ComfyUI's python avoids downloading a second multi-gigabyte torch.
+
 ### Backends, and their licences
 
 Tried in order; install whichever suits you.

@@ -172,3 +172,18 @@ def test_a_skipped_image_can_be_written_into_a_new_output_folder():
         assert os.path.exists(out)
     finally:
         shutil.rmtree(d, ignore_errors=True)
+
+
+def test_a_mask_source_with_no_path_fails_once_not_per_file():
+    """`--mask sam` without a checkpoint used to fail every image with what read
+    as an internal fault. It is a configuration error and belongs before the
+    run."""
+    from bpc.cli import main as cli_main
+    d = _tmp()
+    try:
+        cv2.imwrite(os.path.join(d, "a.jpg"), synth.Scene(pitch_deg=8, seed=61).img)
+        assert cli_main([d, "--mask", "sam", "-o", os.path.join(d, "out")]) == 2
+        assert cli_main([d, "--mask", "file", "-o", os.path.join(d, "out")]) == 2
+        assert not os.path.exists(os.path.join(d, "out"))
+    finally:
+        shutil.rmtree(d, ignore_errors=True)

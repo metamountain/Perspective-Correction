@@ -128,6 +128,9 @@ def build_parser():
                         "which works with SAM 1 and 2 as well")
     g.add_argument("--sam-max-edge", type=int, default=Settings.sam_max_edge)
     g.add_argument("--sam-device", default="", help="cuda, cpu; empty picks cuda when present")
+    g.add_argument("--sam-info", action="store_true",
+                   help="report which SAM backends are installed, describe "
+                        "--sam-model, and exit")
     g.add_argument("--sam-min-density", type=float, default=Settings.sam_min_density,
                    help="keep regions whose straight-line density is at least this "
                         "fraction of the densest region in the frame")
@@ -233,8 +236,42 @@ def _job(item):
     return process(src, dst, settings, debug_dir=debug_dir, dry_run=dry)
 
 
+def sam_info(args) -> int:
+    """Answer "is my setup right?" without running a batch first.
+
+    Worth a flag of its own: the failure modes are an uninstalled backend, a
+    backend installed into a different interpreter, and a checkpoint that needs
+    a different package -- and none of them is obvious from a run that simply
+    errors on every file.
+    """
+    import sys as _sys
+
+    from . import sam as SAM
+    print(f"interpreter: {_sys.executable}")
+    for name, ok in SAM.backends().items():
+        print(f"  {'yes' if ok else 'no ':>3}  {name}")
+    if args.sam_model:
+        print(f"\nmodel: {SAM.describe(args.sam_model)}")
+        try:
+            SAM._load(args.sam_model, args.sam_device)
+            print("  loads: yes")
+        except Exception as exc:
+            print(f"  loads: NO\n{exc}")
+    else:
+        print("\n(pass --sam-model to check a specific checkpoint)")
+    return 0
+
+
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
+    if args.sam_info:
+        return sam_info(args)
+    if args.mask == "sam" and not args.sam_model:
+        print("--mask sam needs --sam-model <checkpoint>")
+        return 2
+    if args.mask == "file" and not args.mask_file:
+        print("--mask file needs --mask-file <png or folder>")
+        return 2
     if args.gui or not args.inputs:
         if args.gui or sys.stdin is None or not sys.stdin.isatty():
             try:
