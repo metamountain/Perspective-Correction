@@ -229,8 +229,17 @@ def apply(img: np.ndarray, H_total: np.ndarray, out_w: int, out_h: int, settings
                                borderMode=cv2.BORDER_REPLICATE)
 
 
+FRINGE = 3
+"""Pixels of sub-pixel fringe the resampler leaves along the warped edge.
+
+One number, two users that must agree: ``filled_region`` grows the hole by it
+so an inpaint covers the fringe, and ``ReviewSession.auto_crop`` insets by it so
+a rectangle it calls clean does not end on the same contaminated rows.
+"""
+
+
 def filled_region(H_total: np.ndarray, src_w: int, src_h: int,
-                  out_w: int, out_h: int, grow: int = 3) -> np.ndarray:
+                  out_w: int, out_h: int, grow: int = FRINGE) -> np.ndarray:
     """True where the output has no source pixel behind it.
 
     Warping a white frame the same way is the only reliable way to know: the
