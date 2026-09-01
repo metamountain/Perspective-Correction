@@ -41,13 +41,12 @@ def test_no_mask_is_a_no_op():
     assert MK.build(np.zeros((40, 40, 3), np.uint8), Settings())[0] is None
 
 
-def test_auto_mask_finds_the_trees_and_spares_the_facade():
-    sc = synth.Scene(w=900, h=600, pitch_deg=6, seed=9, occluders=3, clutter=10)
-    m = MK.vegetation_and_sky(sc.img)
-    assert m.any() and not m.all()
-    # the wall occupies the middle band; it must not be masked wholesale
-    middle = m[int(0.35 * 600):int(0.55 * 600), int(0.35 * 900):int(0.55 * 900)]
-    assert middle.mean() < 0.5
+def test_the_retired_auto_mode_is_accepted_and_does_nothing():
+    """``auto`` was a cheap texture heuristic and is gone.  It is still accepted
+    so that an old command line, or a settings file that remembers it, does not
+    abort a batch -- it simply produces no mask."""
+    m, note = MK.build(np.zeros((40, 40, 3), np.uint8), Settings().replace(mask_mode="auto"))
+    assert m is None and note == ""
 
 
 def test_a_mask_folder_is_matched_by_file_stem():

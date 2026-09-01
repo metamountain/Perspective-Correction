@@ -103,25 +103,50 @@ def inscribed_rect(quad: np.ndarray, aspect: float | None, centre: np.ndarray,
     return np.array([centre[0] - hw, centre[1] - hh, centre[0] + hw, centre[1] + hh])
 
 
+def _whole_frame(H, quad, img_w, img_h, settings, area_ratio):
+    """The full warped quad on a canvas big enough to hold it.
+
+    Nothing of the photograph is discarded; the corners the rotation opens up
+    are filled by ``apply``.  ``keep_size`` scales the result back to the
+    original pixel dimensions, so a batch keeps a consistent size.
+    """
+    x0, y0 = quad.min(axis=0)
+    x1, y1 = quad.max(axis=0)
+    ow, oh = int(round(x1 - x0)), int(round(y1 - y0))
+    if ow < 8 or oh < 8:
+        return None
+    T = np.array([[1, 0, -x0], [0, 1, -y0], [0, 0, 1]], dtype=float)
+    if settings.keep_size:
+        s = min(img_w / float(ow), img_h / float(oh))
+        S = np.array([[s, 0, 0], [0, s, 0], [0, 0, 1]], dtype=float)
+        return S @ T @ H, img_w, img_h, 1.0, area_ratio
+    return T @ H, max(ow, 1), max(oh, 1), 1.0, area_ratio
+
+
 def plan(img_w: int, img_h: int, H: np.ndarray, settings):
     """Work out the output canvas.
 
     Returns ``(H_total, out_w, out_h, coverage, area_ratio)`` where ``coverage``
     is the fraction of the original frame that survives -- useful in the log and
     as a sanity gate.
+
+    ``crop="auto"`` is the reason this is not just a crop.  Correcting a strong
+    convergence and then cropping to the largest inscribed rectangle can cost a
+    quarter of the picture, and a quarter of the picture is a real loss to trade
+    for straight verticals -- often a worse one than the convergence was.  So
+    auto crops only while the loss stays small (``max_crop_loss``, 5 % by
+    default) and otherwise keeps the whole frame and pads the corners the
+    rotation opened up.  The choice is per photograph, because whether the loss
+    is small is a property of the photograph and not of the folder.
     """
     quad = warped_quad(H, img_w, img_h)
     area_ratio = quad_area(quad) / float(img_w * img_h)
 
     if settings.crop == "none":
-        x0, y0 = quad.min(axis=0)
-        x1, y1 = quad.max(axis=0)
-        T = np.array([[1, 0, -x0], [0, 1, -y0], [0, 0, 1]], dtype=float)
-        ow, oh = int(round(x1 - x0)), int(round(y1 - y0))
-        return T @ H, max(ow, 1), max(oh, 1), 1.0, area_ratio
+        return _whole_frame(H, quad, img_w, img_h, settings, area_ratio)
 
     centre = G.apply_h(H, np.array([[img_w / 2.0, img_h / 2.0]]))[0]
-    aspect = (img_w / img_h) if settings.crop == "aspect" else None
+    aspect = (img_w / img_h) if settings.crop in ("aspect", "auto") else None
     if settings.crop == "inside" and aspect is None:
         aspect = img_w / img_h
     rect = inscribed_rect(quad, aspect, centre)
@@ -130,6 +155,9 @@ def plan(img_w: int, img_h: int, H: np.ndarray, settings):
         return None
 
     coverage = (rw * rh) / quad_area(quad) if quad_area(quad) > 0 else 0.0
+    if settings.crop == "auto" and (1.0 - coverage) > settings.max_crop_loss:
+        return _whole_frame(H, quad, img_w, img_h, settings, area_ratio)
+
     if settings.keep_size:
         s = min(img_w / rw, img_h / rh)
         ow, oh = img_w, img_h
@@ -141,6 +169,22 @@ def plan(img_w: int, img_h: int, H: np.ndarray, settings):
 
 
 def apply(img: np.ndarray, H_total: np.ndarray, out_w: int, out_h: int, settings):
+    """Render the plan.
+
+    ``pad`` decides what fills the corners a rotation opens up, and only matters
+    when the plan kept the whole frame rather than cropping into it:
+
+    ``edge``   extend the border colour outwards (the default).  It reads as a
+               soft vignette rather than a defect, and it is what makes an
+               un-cropped result usable straight out of the batch.
+    ``black``  honest and obvious.  Better when the output is going into a
+               layout that will crop it anyway, or when a smeared edge would be
+               mistaken for real content.
+    """
     flags = _INTERP.get(settings.interpolation, cv2.INTER_LANCZOS4)
+    if getattr(settings, "pad", "edge") == "black":
+        return cv2.warpPerspective(img, H_total, (out_w, out_h), flags=flags,
+                                   borderMode=cv2.BORDER_CONSTANT,
+                                   borderValue=(0, 0, 0))
     return cv2.warpPerspective(img, H_total, (out_w, out_h), flags=flags,
                                borderMode=cv2.BORDER_REPLICATE)

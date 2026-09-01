@@ -35,7 +35,7 @@ class Settings:
     # 0.61 deg off, 3.58 deg on.  See docs/accuracy.md.
     merge_lines: bool = False
     merge_horizontal: bool = False
-    mask_mode: str = "off"          # off | auto | file | birefnet
+    mask_mode: str = "off"          # off | file | birefnet
     birefnet_model: str = ""        # path to BiRefNet weights
     birefnet_threshold: float = 0.5  # matte is near-binary; not a tuning knob
     birefnet_device: str = ""       # "" = cuda when available
@@ -76,7 +76,9 @@ class Settings:
     max_area_ratio: float = 4.0         # refuse absurd warps
 
     # ---- output ----
-    crop: str = "aspect"                # none | inside | aspect
+    crop: str = "auto"                  # auto | aspect | inside | none
+    max_crop_loss: float = 0.05         # auto pads rather than crop past this
+    pad: str = "edge"                   # edge | black
     keep_size: bool = False
     interpolation: str = "lanczos"      # lanczos | cubic | linear
     jpeg_quality: int = 95

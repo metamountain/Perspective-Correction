@@ -1,5 +1,7 @@
 """Manual review mode -- the part of the GUI that is not Tkinter."""
 import math
+import os
+import tempfile
 
 import numpy as np
 
@@ -12,6 +14,21 @@ def _session(**kw):
     sc = synth.Scene(pitch_deg=kw.pop("pitch_deg", 9), roll_deg=kw.pop("roll_deg", -3),
                      seed=kw.pop("seed", 21), **kw)
     return ReviewSession("in-memory.jpg", Settings(), image=sc.img), sc
+
+
+def _with_painted_mask(sc, tmpdir, right_of=None):
+    """Write a mask covering the right half, so the review tests have a mask
+    source that needs no model.  ``auto`` used to serve this purpose and is
+    retired; a painted PNG exercises exactly the same seam."""
+    import cv2
+    import numpy as np
+    h, w = sc.img.shape[:2]
+    src = os.path.join(tmpdir, "s.jpg")
+    cv2.imwrite(src, sc.img)
+    m = np.zeros((h, w), np.uint8)
+    m[:, (right_of if right_of is not None else w // 2):] = 255
+    cv2.imwrite(os.path.join(tmpdir, "s.png"), m)
+    return src
 
 
 def test_a_fresh_session_starts_from_the_automatic_fit():
@@ -94,16 +111,20 @@ def test_an_unclear_image_reports_why_it_would_be_skipped():
 def test_the_mask_can_be_switched_while_looking_at_the_picture():
     """A mask is only judgeable against the image it is applied to, so the
     review window must be able to turn it on, not only the batch settings."""
-    s, _ = _session(seed=31, occluders=3)
-    assert not s.mask_active
-    assert "mask: off" in s.status_text()
-    n_before = len(s.vert)
-    s.set_mask("auto")
-    assert s.mask_active
-    assert "mask: auto" in s.status_text()
-    assert len(s.vert) <= n_before
-    s.set_mask("off")
-    assert not s.mask_active
+    import synth as _synth
+    sc = _synth.Scene(pitch_deg=9, roll_deg=-3, seed=31, occluders=3)
+    with tempfile.TemporaryDirectory() as d:
+        src = _with_painted_mask(sc, d)
+        s = ReviewSession(src, Settings())
+        assert not s.mask_active
+        assert "mask: off" in s.status_text()
+        n_before = len(s.vert)
+        s.set_mask("file", d)
+        assert s.mask_active
+        assert "mask: file" in s.status_text()
+        assert len(s.vert) <= n_before
+        s.set_mask("off")
+        assert not s.mask_active
 
 
 def test_a_missing_mask_file_is_reported_not_raised():
@@ -117,22 +138,33 @@ def test_a_missing_mask_file_is_reported_not_raised():
 
 def test_mask_opacity_is_adjustable_and_zero_means_invisible():
     import numpy as np
-    s, _ = _session(seed=33, occluders=3)
-    s.set_mask("auto")
+
+    import synth as _synth
+    sc = _synth.Scene(pitch_deg=9, roll_deg=-3, seed=33, occluders=3)
+    d = tempfile.mkdtemp()
+    src = _with_painted_mask(sc, d)
+    s = ReviewSession(src, Settings())
+    s.set_mask("file", d)
     s.mask_alpha = 0.0
     plain = s.render_before(320)
     s.mask_alpha = 0.9
     tinted = s.render_before(320)
+    import shutil
+    shutil.rmtree(d, ignore_errors=True)
     assert plain.shape == tinted.shape
     assert not np.array_equal(plain, tinted), "the opacity slider must do something"
 
 
 def test_the_mask_reports_how_many_lines_it_removed():
-    s, _ = _session(seed=34, occluders=3)
-    s.set_mask("auto")
-    dropped = (s.detect_info or {}).get("masked_out")
-    assert dropped is not None
-    assert f"{len(dropped)} line(s) removed" in s.status_text()
+    import synth as _synth
+    sc = _synth.Scene(pitch_deg=9, roll_deg=-3, seed=34, occluders=3)
+    with tempfile.TemporaryDirectory() as d:
+        src = _with_painted_mask(sc, d)
+        s = ReviewSession(src, Settings())
+        s.set_mask("file", d)
+        dropped = (s.detect_info or {}).get("masked_out")
+        assert dropped is not None
+        assert f"{len(dropped)} line(s) removed" in s.status_text()
 
 
 # --------------------------------------------------------------------------

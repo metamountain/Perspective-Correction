@@ -4,11 +4,13 @@ Trees, sky, cars and people contribute lines that are not part of any building.
 A bare winter tree is the worst case: its twigs are near-vertical, long, and
 plentiful, so they land squarely in the vertical candidate pool.
 
-## The one measurement that decides how to use the *cheap* mask
+## The cheap mask that was here, and why it is gone
 
-40 synthetic scenes with trees occluding the facade. This table is about
-`--mask auto`; `--mask birefnet` does not share its failure and has its own
-numbers below.
+`--mask auto` needed no model at all: excess green, incoherent local gradient
+orientation near vegetation, and bright unsaturated regions connected to the top
+edge. That was its whole appeal, and it is retired.
+
+Its measurement, on 40 synthetic scenes with trees occluding the facade:
 
 | | pitch mean | pitch max | roll max |
 |---|---|---|---|
@@ -17,47 +19,25 @@ numbers below.
 | focal length **unknown**, mask off | **1.51 deg** | **5.58 deg** | 0.469 deg |
 | focal length **unknown**, mask on | 1.82 deg | 10.05 deg | 0.170 deg |
 
-**The cheap mask pays off only when the focal length is known.** It improves
-the geometry -- it removes exactly the outliers that hurt most -- but it also
-removes *evidence*, and the focal length estimator is the part most starved for
-it. Masking a stripped web JPEG with `auto` can nearly double the worst-case
-pitch error.
+It helped where the focal length was known and **nearly doubled the worst-case
+pitch error where it was not** — which is the case a stripped web JPEG puts you
+in, and the one with least to spare. The reason is that it is a *pixel*
+statistic answering a question about *objects*: it removes green, chaotic and
+sky-like pixels, and on a stripped JPEG that takes the horizontals the focal
+estimate needed.
 
-So `--mask auto` belongs with `--focal-35mm`, or with photos that carry EXIF. On
-a folder of unknown-lens web JPEGs, leave it off. That is why the default is
-`off` rather than `auto`.
+Two things it taught, both kept:
 
-The reason `auto` breaks this way is that it is a texture statistic: it removes
-green, chaotic and sky-like *pixels*, which on a stripped JPEG takes horizontals
-the focal estimate needed. A segmenter that removes whole non-building *objects*
-does not, which is why the numbers further down look different -- BiRefNet helps
-*more* where the focal length is unknown (1.12 deg / 2.25 worst becomes
-**0.88 / 1.96**) than where it is known (0.70 / 1.68 -> **0.65 / 1.36**).
+* **A texture cue must not stand alone.** Coherence asks whether *one* direction
+  dominates locally, and a half-timbered facade has *two* — posts and rails — so
+  the beam grid scored as foliage. It was masking **8.2 %** of a real Fachwerk
+  barn's facade, excluding the building from its own measurement. Requiring
+  greenness nearby dropped that to 1.5 % at no measurable cost.
+* **Drawing the mask is what found it.** The numbers showed only a slightly
+  lower confidence; the screen showed speckles all over the timber frame.
 
-Masking the vertical pool only, keeping every horizontal line for the focal
-estimate, was tried as a way to have both: it gained essentially nothing
-(pitch max 3.00 vs 2.84 with masking off) and was removed rather than kept as a
-third mode nobody could choose between.
-
-## The cheap mask, no model required
-
-    python rectify.py "D:\Fotos" --mask auto --focal-35mm 24
-
-`masks.vegetation_and_sky` uses three cues and needs no download:
-
-* **excess green** -- foliage in leaf;
-* **low structure-tensor coherence over busy pixels, but only near vegetation**
-  -- a canopy has no dominant local direction. This cue used to stand alone, and
-  drawing the mask on screen showed why that was wrong: coherence asks whether
-  *one* direction dominates, and a half-timbered facade has *two*, so the beam
-  grid scored as foliage. It was masking **8.2 %** of a real Fachwerk barn's
-  facade -- excluding the building from its own measurement. Requiring greenness
-  nearby costs nothing measurable (pitch mean 0.28 to 0.31 deg on the occluder
-  benchmark, identical worst case) and drops the false masking to **1.5 %**. The
-  price is a bare winter tree, which is not green and is now only partly caught;
-  that case belongs to `--mask file`;
-* **bright, unsaturated or blue regions connected to the top edge** -- sky, as
-  opposed to a white wall, which is not connected to the top.
+`--mask auto` is still accepted on the command line and does nothing, so an old
+script or a remembered setting does not abort a batch.
 
 ## Look at the mask before you trust it
 

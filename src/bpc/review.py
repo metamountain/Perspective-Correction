@@ -349,7 +349,10 @@ class ReviewSession:
         if planned is None:
             return _fit(self.bgr, max_edge)
         H_total, ow, oh, _, _ = planned
-        return W.apply(small, H_total, ow, oh, self.settings)
+        # fit again: with crop="auto" the plan may keep the whole frame and pad
+        # it, which is *larger* than the input, and a preview that ignores the
+        # size it was asked for overflows the pane it was drawn for
+        return _fit(W.apply(small, H_total, ow, oh, self.settings), max_edge)
 
     def render_pair(self, max_edge=900):
         return self.render_before(max_edge), self.render_after(max_edge)

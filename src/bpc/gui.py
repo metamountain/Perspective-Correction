@@ -129,7 +129,7 @@ class ReviewWindow(tk.Toplevel):
         self.v_maskmode = tk.StringVar(value=self.settings.mask_mode)
         ttk.Label(msk, text="source", width=18).grid(row=0, column=0, sticky="w")
         box = ttk.Combobox(msk, textvariable=self.v_maskmode, width=8, state="readonly",
-                           values=["off", "auto", "file", "birefnet"])
+                           values=["off", "file", "birefnet"])
         box.grid(row=0, column=1, sticky="w", padx=(6, 6))
         box.bind("<<ComboboxSelected>>", lambda e: self._apply_mask())
         ttk.Button(msk, text="mask folder...", command=self._pick_mask_folder
@@ -202,6 +202,14 @@ class ReviewWindow(tk.Toplevel):
             filetypes=[("BiRefNet weights", "*.safetensors *.pth *.pt"),
                        ("all files", "*.*")], parent=self)
         if not p:
+            return False
+        try:
+            BN._arch_dir(p)
+        except BN.BiRefNetUnavailable as exc:
+            # remembering a checkpoint that cannot be loaded is worse than not
+            # remembering one: every later run fails with the same message and
+            # nothing points at the file dialog as the cause
+            messagebox.showerror("BiRefNet model", str(exc))
             return False
         self.session.settings = self.session.settings.replace(birefnet_model=p)
         prefs.save(birefnet_model=p)     # typed once, not once per session
@@ -518,7 +526,7 @@ class App(_ROOT_CLASS):
         self._spin(opt, 1, 0, "max pitch (deg)", self.v_maxpitch, 0.0, 45.0, 1.0)
         ttk.Label(opt, text="mask").grid(row=0, column=6, sticky="e", padx=4)
         self.v_mask = tk.StringVar(value=Settings.mask_mode)
-        ttk.Combobox(opt, textvariable=self.v_mask, values=["off", "auto", "file", "birefnet"],
+        ttk.Combobox(opt, textvariable=self.v_mask, values=["off", "file", "birefnet"],
                      width=6, state="readonly").grid(row=0, column=7, sticky="w")
         self.v_maskpath = tk.StringVar(value="")
         ttk.Button(opt, text="mask source...", command=self._pick_mask_source
