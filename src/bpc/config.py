@@ -88,7 +88,7 @@ class Settings:
     # What to do with the band the rotation opens up, once padding has put
     # something there.  "none" keeps the pad.  The others generate pixels the
     # camera never saw, which is why the default is and stays "none".
-    fill: str = "none"                  # none | lama | comfyui
+    fill: str = "none"                  # none | telea | lama | comfyui
     fill_max_edge: int = 2048           # generate at this size, paste back full res
     fill_max_share: float = 0.35        # refuse to invent more of the frame than this
     fill_device: str = ""               # torch device for lama; "" = its default
