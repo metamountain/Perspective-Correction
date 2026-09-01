@@ -10,3 +10,16 @@ out/
 debug/
 tests/_out/
 bpc-run-*/
+
+# a vendored third-party checkout (MIT), kept local, never committed
+tools/DeepLSD/
+
+# model weights are fetched on demand, never committed
+models/*.pt
+models/*.pth
+models/*.onnx
+models/*.safetensors
+models/*.ckpt
+
+.idea/
+.vscode/
