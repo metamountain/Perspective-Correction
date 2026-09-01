@@ -163,6 +163,22 @@ class ReviewSession:
         if focal_35mm is not None:
             self.manual_focal_35mm = float(focal_35mm)
 
+    def use_auto_angles(self):
+        """Go back to the angles the estimator found, and keep everything else.
+
+        Distinct from ``reset_to_auto`` on purpose.  Reset throws away every
+        judgement the user made -- struck-out lines, vertical control lines, a
+        hand-drawn crop -- which is the right thing after a wrong turn and much
+        too much after a mis-dragged slider.  Wanting the found angles back is
+        the common case and should not cost the rest of the work.
+        """
+        self.mode = AUTO
+        if self.model is not None:
+            self.manual_roll, self.manual_pitch = self.model.roll, self.model.pitch
+            self.manual_focal_35mm = (M.focal_35mm_from_px(self.model.f, self.w, self.h)
+                                      if self.model.f else 0.0)
+        return self.model
+
     def reset_to_auto(self):
         self.mode = AUTO
         self.enabled[:] = True
