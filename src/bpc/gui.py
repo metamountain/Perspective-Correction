@@ -45,7 +45,110 @@ from .imageio import READABLE
 from .pipeline import ERROR, OK, SKIPPED, process
 from .review import AUTO, MANUAL, ReviewSession
 
-STATUS_COLOUR = {OK: "#1a7f37", SKIPPED: "#9a6700", ERROR: "#b62324"}
+STATUS_COLOUR = {OK: "#5ac37f", SKIPPED: "#e0b24c", ERROR: "#ef6b6b"}
+
+# --------------------------------------------------------------------------
+# theme
+# --------------------------------------------------------------------------
+# One dark palette, one accent, three type sizes.  Photographs are judged
+# against what surrounds them, and a light chrome around a picture shifts every
+# perceived tone in it -- which is the whole reason image editors are dark.  The
+# restraint is not decoration either: everything here competes for attention
+# with the photograph, and loses on purpose.
+INK = {
+    "bg":      "#16181c",   # window
+    "panel":   "#1d2025",   # raised surfaces
+    "field":   "#101216",   # inputs, canvases, the image well
+    "line":    "#2b2f36",   # hairlines, borders
+    "text":    "#e6e8ec",
+    "dim":     "#8b929c",   # secondary text
+    "accent":  "#4da3ff",
+    "ok":      "#5ac37f",
+    "warn":    "#e0b24c",
+    "err":     "#ef6b6b",
+}
+
+# Grotesque first, then whatever the platform has.  Numbers get a mono face so
+# columns of angles line up -- a table of readings that does not align is harder
+# to scan than one with fewer readings in it.
+_UI_FAMILIES = ("Inter", "Segoe UI Variable", "Segoe UI", "Helvetica Neue", "DejaVu Sans")
+_MONO_FAMILIES = ("JetBrains Mono", "Cascadia Mono", "Consolas", "DejaVu Sans Mono")
+
+
+def _pick_family(root, candidates, fallback):
+    try:
+        from tkinter import font as tkfont
+        have = set(tkfont.families(root))
+    except Exception:
+        return fallback
+    for c in candidates:
+        if c in have:
+            return c
+    return fallback
+
+
+def apply_theme(root):
+    """Dark, flat, and quiet.  Returns ``(ui_family, mono_family)``."""
+    ui = _pick_family(root, _UI_FAMILIES, "TkDefaultFont")
+    mono = _pick_family(root, _MONO_FAMILIES, "TkFixedFont")
+    try:
+        from tkinter import font as tkfont
+        for name, fam, size in (("TkDefaultFont", ui, 10), ("TkTextFont", ui, 10),
+                                ("TkMenuFont", ui, 10), ("TkHeadingFont", ui, 10),
+                                ("TkFixedFont", mono, 10)):
+            f = tkfont.nametofont(name)
+            f.configure(family=fam, size=size)
+    except Exception:
+        pass
+
+    root.configure(background=INK["bg"])
+    st = ttk.Style(root)
+    try:
+        st.theme_use("clam")            # the only stock theme that takes colours
+    except Exception:
+        pass
+    st.configure(".", background=INK["bg"], foreground=INK["text"],
+                 fieldbackground=INK["field"], bordercolor=INK["line"],
+                 lightcolor=INK["panel"], darkcolor=INK["panel"],
+                 focuscolor=INK["accent"], troughcolor=INK["field"],
+                 insertcolor=INK["text"], font=(ui, 10))
+    st.configure("TFrame", background=INK["bg"])
+    st.configure("Panel.TFrame", background=INK["panel"])
+    st.configure("TLabel", background=INK["bg"], foreground=INK["text"])
+    st.configure("Dim.TLabel", foreground=INK["dim"])
+    st.configure("Head.TLabel", foreground=INK["dim"], font=(ui, 9))
+    st.configure("Value.TLabel", foreground=INK["text"], font=(mono, 10))
+    st.configure("Title.TLabel", foreground=INK["text"], font=(ui, 15))
+
+    st.configure("TButton", background=INK["panel"], foreground=INK["text"],
+                 borderwidth=0, focusthickness=0, padding=(12, 6))
+    st.map("TButton",
+           background=[("pressed", INK["line"]), ("active", INK["line"])],
+           foreground=[("disabled", INK["dim"])])
+    st.configure("Accent.TButton", background=INK["accent"], foreground="#0b1017",
+                 padding=(14, 7))
+    st.map("Accent.TButton", background=[("active", "#6bb4ff"),
+                                         ("disabled", INK["line"])])
+
+    st.configure("TEntry", padding=6, borderwidth=0)
+    st.configure("TCombobox", padding=4, borderwidth=0, arrowcolor=INK["dim"])
+    st.map("TCombobox", fieldbackground=[("readonly", INK["field"])],
+           foreground=[("readonly", INK["text"])])
+    st.configure("TCheckbutton", background=INK["bg"], foreground=INK["text"])
+    st.map("TCheckbutton", background=[("active", INK["bg"])])
+    st.configure("TScale", background=INK["bg"], troughcolor=INK["field"])
+    st.configure("TProgressbar", background=INK["accent"], troughcolor=INK["field"],
+                 borderwidth=0, thickness=4)
+    st.configure("Treeview", background=INK["field"], fieldbackground=INK["field"],
+                 foreground=INK["text"], borderwidth=0, rowheight=24)
+    st.configure("Treeview.Heading", background=INK["bg"], foreground=INK["dim"],
+                 borderwidth=0, font=(ui, 9))
+    st.map("Treeview", background=[("selected", INK["line"])],
+           foreground=[("selected", INK["text"])])
+    st.configure("TSpinbox", arrowcolor=INK["dim"], borderwidth=0, padding=4)
+    st.configure("TLabelframe", background=INK["bg"], bordercolor=INK["line"])
+    st.configure("TLabelframe.Label", background=INK["bg"], foreground=INK["dim"])
+    return ui, mono
 
 
 def _to_photo(bgr, box):
@@ -67,8 +170,11 @@ def _to_photo(bgr, box):
 class ReviewWindow(tk.Toplevel):
     def __init__(self, master, path, settings, dest_path, on_saved=None):
         super().__init__(master)
-        self.title(f"Review - {os.path.basename(path)}")
+        self.title(os.path.basename(path))
         self.geometry("1280x820")
+        self.minsize(900, 600)
+        apply_theme(self)
+        self.configure(background=INK["bg"])
         self.settings = settings
         self.dest_path = dest_path
         self.on_saved = on_saved
@@ -101,9 +207,9 @@ class ReviewWindow(tk.Toplevel):
                   ).grid(row=0, column=0, sticky="w")
         ttk.Label(panes, text="after").grid(row=1 - 1, column=1, sticky="w")
 
-        self.c_before = tk.Canvas(panes, bg="#1e1e1e", highlightthickness=0)
+        self.c_before = tk.Canvas(panes, bg=INK["field"], highlightthickness=0)
         self.c_before.grid(row=1, column=0, sticky="nsew", padx=(0, 3))
-        self.c_after = tk.Canvas(panes, bg="#1e1e1e", highlightthickness=0)
+        self.c_after = tk.Canvas(panes, bg=INK["field"], highlightthickness=0)
         self.c_after.grid(row=1, column=1, sticky="nsew", padx=(3, 0))
         self._pending_mark = None
         self.c_before.bind("<Button-1>", self._on_click_before)
@@ -111,11 +217,13 @@ class ReviewWindow(tk.Toplevel):
             c.bind("<Configure>", lambda e: self._schedule_redraw())
 
         self.status = tk.Text(top, height=4, wrap="word", relief="flat",
-                              background="#f4f4f4")
+                              borderwidth=0, highlightthickness=0, padx=10, pady=8,
+                              background=INK["field"], foreground=INK["dim"],
+                              font=("TkFixedFont",))
         self.status.pack(fill="x", pady=(6, 4))
         self.status.configure(state="disabled")
 
-        ctl = ttk.LabelFrame(top, text="manual correction", padding=6)
+        ctl = ttk.Frame(top, padding=(0, 8, 0, 0))
         ctl.pack(fill="x")
         self.v_roll = tk.DoubleVar(value=0.0)
         self.v_pitch = tk.DoubleVar(value=0.0)
@@ -124,8 +232,8 @@ class ReviewWindow(tk.Toplevel):
         self._slider(ctl, 1, "pitch (verticals)", self.v_pitch, -30, 30, "deg")
         self._slider(ctl, 2, "focal length", self.v_focal, 8, 200, "mm eq")
 
-        msk = ttk.LabelFrame(top, text="region mask", padding=6)
-        msk.pack(fill="x", pady=(6, 0))
+        msk = ttk.Frame(top, padding=(0, 8, 0, 0))
+        msk.pack(fill="x")
         self.v_maskmode = tk.StringVar(value=self.settings.mask_mode)
         ttk.Label(msk, text="source", width=18).grid(row=0, column=0, sticky="w")
         box = ttk.Combobox(msk, textvariable=self.v_maskmode, width=8, state="readonly",
@@ -151,22 +259,24 @@ class ReviewWindow(tk.Toplevel):
 
         btns = ttk.Frame(top, padding=(0, 8))
         btns.pack(fill="x")
+        ttk.Button(btns, text="Auto", command=self._use_auto).pack(side="left")
+        ttk.Button(btns, text="Reset", command=self._reset).pack(side="left", padx=6)
         self.v_mark = tk.BooleanVar(value=False)
-        ttk.Checkbutton(btns, text="mark a vertical (2 clicks)",
+        ttk.Checkbutton(btns, text="Mark vertical",
                         variable=self.v_mark, command=self._on_mark_toggle
-                        ).pack(side="left")
-        ttk.Button(btns, text="clear marks",
-                   command=self._clear_marks).pack(side="left", padx=(6, 12))
-        ttk.Button(btns, text="strike out slanted lines (>18 deg)",
-                   command=self._strike_slanted).pack(side="left")
-        ttk.Button(btns, text="reset to automatic",
-                   command=self._reset).pack(side="left", padx=6)
-        ttk.Checkbutton(btns, text="show detected lines", command=self._schedule_redraw,
-                        variable=self._mk_show()).pack(side="left", padx=12)
-        ttk.Checkbutton(btns, text="show mask", command=self._toggle_mask,
-                        variable=self._mk_mask()).pack(side="left")
-        ttk.Button(btns, text="keep original", command=self._keep).pack(side="right")
-        ttk.Button(btns, text="save correction", command=self._save).pack(side="right", padx=6)
+                        ).pack(side="left", padx=(12, 0))
+        ttk.Button(btns, text="Clear marks",
+                   command=self._clear_marks).pack(side="left", padx=6)
+        ttk.Button(btns, text="Strike slanted",
+                   command=self._strike_slanted).pack(side="left", padx=(6, 12))
+        ttk.Checkbutton(btns, text="Lines", command=self._schedule_redraw,
+                        variable=self._mk_show()).pack(side="left")
+        ttk.Checkbutton(btns, text="Mask", command=self._toggle_mask,
+                        variable=self._mk_mask()).pack(side="left", padx=6)
+        ttk.Button(btns, text="Save", command=self._save,
+                   style="Accent.TButton").pack(side="right")
+        ttk.Button(btns, text="Keep original",
+                   command=self._keep).pack(side="right", padx=6)
 
     def _mk_show(self):
         self.v_show_lines = tk.BooleanVar(value=True)
@@ -288,6 +398,17 @@ class ReviewWindow(tk.Toplevel):
         else:
             self._redraw()
         self._set_status_extra(f"struck out {n} slanted candidate(s)")
+
+    def _use_auto(self):
+        """Back to the angles the estimator found, keeping the rest of the work.
+
+        The neighbouring Reset is the big hammer -- it also re-enables every
+        struck line, drops the vertical marks and the hand-drawn crop.  Wanting
+        the found angles back after a mis-dragged slider is the common case and
+        should not cost all of that.
+        """
+        self.session.use_auto_angles()
+        self._sync_from_session()
 
     def _reset(self):
         self.session.reset_to_auto()
@@ -447,8 +568,10 @@ class ReviewWindow(tk.Toplevel):
 class App(_ROOT_CLASS):
     def __init__(self, initial=None):
         super().__init__()
-        self.title("Batch Perspective Correction")
-        self.geometry("1080x720")
+        self.title("Perspective")
+        self.geometry("1120x760")
+        self.minsize(880, 560)
+        apply_theme(self)
         self.queue = queue.Queue()
         self.worker = None
         self.stop_flag = threading.Event()
@@ -471,13 +594,16 @@ class App(_ROOT_CLASS):
         self.v_output = tk.StringVar()
         self.items = []                       # files and/or folders, in order
 
-        hint = ("drop photos or a folder here"
+        hint = ("Drop photographs or a folder"
                 if HAVE_DND else
-                "click to add photos or a folder   (pip install tkinterdnd2 for drag and drop)")
-        self.drop = tk.Label(top, text=hint, relief="ridge", borderwidth=2,
-                             background="#eef1f4", foreground="#334", height=3,
+                "Click to add photographs or a folder")
+        self.drop = tk.Label(top, text=hint, borderwidth=0, height=4,
+                             background=INK["field"], foreground=INK["dim"],
                              cursor="hand2")
         self.drop.grid(row=0, column=0, columnspan=3, sticky="ew", **pad)
+        # one drop, one photograph, straight into it -- see _add
+        self.drop.bind("<Enter>", lambda e: self.drop.configure(foreground=INK["accent"]))
+        self.drop.bind("<Leave>", lambda e: self.drop.configure(foreground=INK["dim"]))
         self.drop.bind("<Button-1>", lambda e: self._add_files())
         if HAVE_DND:
             self.drop.drop_target_register(DND_FILES)
@@ -485,35 +611,39 @@ class App(_ROOT_CLASS):
 
         row = ttk.Frame(top)
         row.grid(row=1, column=0, columnspan=3, sticky="ew", **pad)
-        ttk.Button(row, text="add images...", command=self._add_files).pack(side="left")
-        ttk.Button(row, text="add folder...", command=self._add_folder).pack(side="left", padx=6)
-        ttk.Button(row, text="remove", command=self._remove_selected).pack(side="left")
-        ttk.Button(row, text="clear", command=self._clear).pack(side="left", padx=6)
-        self.lbl_items = ttk.Label(row, text="nothing selected")
-        self.lbl_items.pack(side="left", padx=12)
-        ttk.Button(row, text="review selected image...",
-                   command=self._review_single).pack(side="right")
+        ttk.Button(row, text="Images", command=self._add_files).pack(side="left")
+        ttk.Button(row, text="Folder", command=self._add_folder).pack(side="left", padx=6)
+        ttk.Button(row, text="Remove", command=self._remove_selected).pack(side="left")
+        ttk.Button(row, text="Clear", command=self._clear).pack(side="left", padx=6)
+        self.lbl_items = ttk.Label(row, text="nothing yet", style="Dim.TLabel")
+        self.lbl_items.pack(side="left", padx=14)
+        ttk.Label(row, text="double-click a row to open it",
+                  style="Dim.TLabel").pack(side="right")
 
         # A visible, selectable list.  Without it "review one image" had to guess
         # which of several dropped photos was meant, and it guessed the first --
         # so dropping a second one and clicking review opened the first again.
         listrow = ttk.Frame(top)
         listrow.grid(row=2, column=0, columnspan=3, sticky="ew", **pad)
-        self.lst = tk.Listbox(listrow, height=4, activestyle="dotbox",
-                              exportselection=False)
+        self.lst = tk.Listbox(listrow, height=4, activestyle="none",
+                              exportselection=False, borderwidth=0,
+                              highlightthickness=0, background=INK["field"],
+                              foreground=INK["text"],
+                              selectbackground=INK["line"],
+                              selectforeground=INK["text"])
         self.lst.pack(side="left", fill="both", expand=True)
         sb = ttk.Scrollbar(listrow, orient="vertical", command=self.lst.yview)
         sb.pack(side="right", fill="y")
         self.lst.configure(yscrollcommand=sb.set)
         self.lst.bind("<Double-1>", lambda e: self._review_single())
 
-        ttk.Label(top, text="output folder").grid(row=3, column=0, sticky="w", **pad)
+        ttk.Label(top, text="Output", style="Head.TLabel").grid(row=3, column=0, sticky="w", **pad)
         ttk.Entry(top, textvariable=self.v_output, width=70).grid(row=3, column=1, sticky="ew", **pad)
-        ttk.Button(top, text="browse...", command=self._pick_out).grid(row=3, column=2, **pad)
+        ttk.Button(top, text="Browse", command=self._pick_out).grid(row=3, column=2, **pad)
         top.columnconfigure(1, weight=1)
 
-        opt = ttk.LabelFrame(self, text="settings", padding=8)
-        opt.pack(fill="x", padx=8)
+        opt = ttk.Frame(self, padding=(14, 4, 14, 8))
+        opt.pack(fill="x")
         self.v_strength = tk.DoubleVar(value=1.0)
         self.v_conf = tk.DoubleVar(value=Settings.min_confidence)
         self.v_maxpitch = tk.DoubleVar(value=Settings.max_pitch_deg)
@@ -532,7 +662,8 @@ class App(_ROOT_CLASS):
         ttk.Button(opt, text="mask source...", command=self._pick_mask_source
                    ).grid(row=0, column=8, sticky="w", padx=(6, 0))
         ttk.Label(opt, text="crop").grid(row=1, column=3, sticky="e", padx=4)
-        ttk.Combobox(opt, textvariable=self.v_crop, values=["aspect", "inside", "none"],
+        ttk.Combobox(opt, textvariable=self.v_crop,
+                     values=["auto", "aspect", "inside", "none"],
                      width=8, state="readonly").grid(row=1, column=4, sticky="w")
         ttk.Checkbutton(opt, text="subfolders", variable=self.v_recursive).grid(row=2, column=0, sticky="w")
         ttk.Checkbutton(opt, text="overwrite originals", variable=self.v_overwrite).grid(row=2, column=1, sticky="w")
@@ -541,14 +672,14 @@ class App(_ROOT_CLASS):
 
         bar = ttk.Frame(self, padding=8)
         bar.pack(fill="x")
-        self.btn_run = ttk.Button(bar, text="start", command=self._start)
+        self.btn_run = ttk.Button(bar, text="Start", command=self._start,
+                                  style="Accent.TButton")
         self.btn_run.pack(side="left")
-        self.btn_stop = ttk.Button(bar, text="stop", command=self._stop, state="disabled")
+        self.btn_stop = ttk.Button(bar, text="Stop", command=self._stop, state="disabled")
         self.btn_stop.pack(side="left", padx=6)
-        ttk.Button(bar, text="review selected...", command=self._review_selected).pack(side="left", padx=6)
         self.progress = ttk.Progressbar(bar, mode="determinate")
         self.progress.pack(side="left", fill="x", expand=True, padx=10)
-        self.lbl_count = ttk.Label(bar, text="")
+        self.lbl_count = ttk.Label(bar, text="", style="Value.TLabel")
         self.lbl_count.pack(side="right")
 
         cols = ("status", "file", "roll", "pitch", "conf", "note")
@@ -608,6 +739,7 @@ class App(_ROOT_CLASS):
     def _add(self, paths):
         added = 0
         first_new = len(self.items)
+        was_empty = not self.items
         for p in paths:
             p = os.path.abspath(p)
             if not os.path.exists(p) or p in self.items:
@@ -622,6 +754,12 @@ class App(_ROOT_CLASS):
             self.lst.selection_clear(0, "end")
             self.lst.selection_set(first_new)
             self.lst.see(first_new)
+        # One photograph dropped on an empty window means "work on this one".
+        # Making that cost a second click, on a list of one, was the window
+        # asking a question it already had the answer to.  A folder, or several
+        # files, still lands in the list: there the question is real.
+        if was_empty and added == 1 and os.path.isfile(self.items[0]):
+            self.after(60, self._review_single)
         return added
 
     def _add_files(self):

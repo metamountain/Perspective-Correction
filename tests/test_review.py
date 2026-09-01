@@ -357,3 +357,30 @@ def test_reset_to_auto_forgets_the_crop_too():
     s.set_crop_rect(10, 10, 200, 150, shown_w=300, shown_h=200)
     s.reset_to_auto()
     assert s.crop_rect is None
+
+
+def test_auto_returns_the_found_angles_without_undoing_the_rest():
+    """Two different retreats, and conflating them loses work.
+
+    ``reset_to_auto`` discards every judgement the user made -- struck-out
+    lines, control lines, a hand-drawn crop -- which is right after a wrong turn
+    and far too much after a mis-dragged slider. ``use_auto_angles`` puts the
+    found angles back and leaves the rest standing.
+    """
+    s, _ = _session(seed=45)
+    s.toggle_line(0)
+    s.set_crop_rect(20, 20, 280, 180, shown_w=300, shown_h=200)
+    # captured *after* the line edit: striking a line refits, so "the angles it
+    # found" means the current fit, not the one from before the user edited it
+    found_roll, found_pitch = s.model.roll, s.model.pitch
+    struck = int((~s.enabled).sum())
+    s.set_manual(roll_deg=11.0, pitch_deg=-9.0)
+    assert s.mode == MANUAL
+    s.use_auto_angles()
+    assert s.mode == AUTO
+    assert abs(s.manual_roll - found_roll) < 1e-9
+    assert abs(s.manual_pitch - found_pitch) < 1e-9
+    assert int((~s.enabled).sum()) == struck, "line edits must survive"
+    assert s.crop_rect is not None, "the crop must survive"
+    s.reset_to_auto()
+    assert s.enabled.all() and s.crop_rect is None, "reset is the big hammer"
