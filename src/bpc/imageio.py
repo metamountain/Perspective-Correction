@@ -7,10 +7,15 @@ Two things here are easy to get wrong and ruin a batch run:
     for verticals along the wrong axis.  So the tag is applied on load, and the
     tag is then reset to 1 on save -- otherwise the viewer would rotate the
     already-rotated result a second time.
-*   **The focal length.**  ``FocalLengthIn35mmFilm`` is the tag that can be used
-    directly; plain ``FocalLength`` is in millimetres on an unknown sensor and
-    is useless without the crop factor, so it is only used when the 35 mm tag is
-    missing and a crop factor can be inferred from the two together.
+*   **The focal length.**  ``FocalLengthIn35mmFilm`` is the only tag used, and
+    the only one that can be.  Plain ``FocalLength`` is millimetres on an
+    unknown sensor, so it needs a crop factor, and the crop factor needs
+    ``FocalPlaneXResolution`` -- which is the first thing every resave and
+    downscale strips.  Measured on the shipped assets: all three that carry
+    ``FocalLength`` have lost the focal-plane tags, so a fallback would have no
+    data to work from on exactly the files that would need it.  A photograph
+    whose 35 mm equivalent is known but unreadable is handled by
+    ``--focal-35mm``, and in ``tests/assets`` by the ``_f<NN>`` name suffix.
 """
 from __future__ import annotations
 

@@ -4,9 +4,11 @@ Trees, sky, cars and people contribute lines that are not part of any building.
 A bare winter tree is the worst case: its twigs are near-vertical, long, and
 plentiful, so they land squarely in the vertical candidate pool.
 
-## The one measurement that decides how to use this
+## The one measurement that decides how to use the *cheap* mask
 
-40 synthetic scenes with trees occluding the facade:
+40 synthetic scenes with trees occluding the facade. This table is about
+`--mask auto`; `--mask birefnet` does not share its failure and has its own
+numbers below.
 
 | | pitch mean | pitch max | roll max |
 |---|---|---|---|
@@ -15,14 +17,22 @@ plentiful, so they land squarely in the vertical candidate pool.
 | focal length **unknown**, mask off | **1.51 deg** | **5.58 deg** | 0.469 deg |
 | focal length **unknown**, mask on | 1.82 deg | 10.05 deg | 0.170 deg |
 
-**Masking pays off only when the focal length is known.** It improves the
-geometry -- it removes exactly the outliers that hurt most -- but it also removes
-*evidence*, and the focal length estimator is the part most starved for it.
-Masking a stripped web JPEG can nearly double the worst-case pitch error.
+**The cheap mask pays off only when the focal length is known.** It improves
+the geometry -- it removes exactly the outliers that hurt most -- but it also
+removes *evidence*, and the focal length estimator is the part most starved for
+it. Masking a stripped web JPEG with `auto` can nearly double the worst-case
+pitch error.
 
-So: `--mask auto` or `--mask file` belongs with `--focal-35mm`, or with photos
-that carry EXIF. On a folder of unknown-lens web JPEGs, leave masking off. This
-is why the default is `off` rather than `auto`.
+So `--mask auto` belongs with `--focal-35mm`, or with photos that carry EXIF. On
+a folder of unknown-lens web JPEGs, leave it off. That is why the default is
+`off` rather than `auto`.
+
+The reason `auto` breaks this way is that it is a texture statistic: it removes
+green, chaotic and sky-like *pixels*, which on a stripped JPEG takes horizontals
+the focal estimate needed. A segmenter that removes whole non-building *objects*
+does not, which is why the numbers further down look different -- BiRefNet helps
+*more* where the focal length is unknown (1.12 deg / 2.25 worst becomes
+**0.88 / 1.96**) than where it is known (0.70 / 1.68 -> **0.65 / 1.36**).
 
 Masking the vertical pool only, keeping every horizontal line for the focal
 estimate, was tried as a way to have both: it gained essentially nothing
@@ -56,162 +66,219 @@ and the GUI review window has a **show mask** toggle. Both exist because the
 Fachwerk failure above was invisible in the numbers -- the only symptom was a
 slightly lower confidence -- and obvious the instant the mask was drawn.
 
-## Segment Anything, built in
+## BiRefNet, built in
 
-    python rectify.py "D:\Fotos" --mask sam ^
-        --sam-model "D:\ComfyUI_windows_portable\ComfyUI\models\sams\sam_vit_b_01ec64.pth" ^
-        --focal-35mm 24
+    python rectify.py "D:\Fotos" --mask birefnet --birefnet-model auto --focal-35mm 24
 
-**SAM finds boundaries superbly and has no idea what they mean.** Nothing in its
-output says which of the forty regions it returned is the building. That gap,
-not loading the model, is the whole problem, and it is closed with evidence the
-pipeline already has:
+BiRefNet is a *dichotomous* segmenter: one high-resolution matte separating the
+salient object from everything else. On an architectural photograph the salient
+object is the building, so the mask is the whole of it —
 
-> SAM supplies the edges. The line detector supplies the labels.
+    ignore := foreground < 0.5
 
-Every region SAM returns is judged by **two independent signals**, and survives
-on either:
+— with no scoring criterion in between and nothing for the line detector to
+adjudicate. Round-trip on the six shipped assets, focal length fixed at 24 mm in
+both passes so the metric stays self-consistent:
 
-* **line evidence in or around it.** A facade is threaded with long straight
-  lines; foliage, sky, cars and people are not. Counted over a slightly dilated
-  region, which matters more than it sounds: a stucco panel between two windows
-  contains no straight lines at all -- its edges are the window frames and floor
-  bands *around* it -- so counting only the interior scored the wall of a
-  building as foliage and masked it out of its own measurement.
-* **how straight its own outline is.** A wall, a window or a roof plane is
-  bounded by a handful of straight edges; a tree crown has a fractal outline
-  that no small number of segments approximates. This needs no lines at all and
-  rescues a plain surface that happens to sit away from any of them.
+| | mean | worst |
+|---|---|---|
+| mask off | 0.70° | 1.68° |
+| **BiRefNet-HR** | **0.65°** | **1.36°** |
 
-Foliage fails both, which is the only thing that has to be true. No text model,
-no GroundingDINO, and it works with SAM 1 and 2 as well as SAM 3.
-`--sam-min-density` sets how empty a region must be before it is dropped,
-relative to the densest region *in that picture*, because line density scales
-with how much of the frame the building occupies.
+and with the focal length *unknown*, the regime a stripped web JPEG puts you in,
+1.12°/2.25° becomes **0.88°/1.96°** — a *larger* relative gain, which is exactly
+where it parts company with `--mask auto`.
+
+> All numbers on this page were re-measured after the round-trip harness gained
+> a border guard. Before it, the same comparison read 0.98°/2.80° → 0.56°/1.40°;
+> that spread was the harness smearing frame-edge pixels into straight lines,
+> not the mask. See CLAUDE.md, "The round trip measured itself for a while".
+
+It runs in ~0.3 s per photograph at 2048 px inference, and 0.0 s if the masks
+were exported once (below).
+
+### It masks most of the frame and almost none of the evidence
+
+This is the number that decides whether the guard in `masks.credible` is thick
+enough, and it is the distinction that module was written for:
+
+| asset | share of frame masked | share of **line evidence** lost |
+|---|---|---|
+| XYZ | 70 % | **1.2 %** |
+| white sparrow | 47 % | **0.9 %** |
+| Alte Scheune | 53 % | 7.0 % |
+| 79cb3387… | 63 % | **11.1 %** |
+
+Masking 40–70 % of the pixels costs 1–11 % of the straight-line length, because
+what it removes is sky, grass and road — large, and empty of lines. The refusal
+threshold is 55 % of the evidence, so on this set the guard has a wide margin.
+It is still the outermost check, and it is what catches a mask applied with the
+wrong polarity or belonging to a different photograph.
+
+### Which lines a mask actually removes
+
+**Both endpoints inside, or the line stays.** That is the whole rule
+(`masks.drop_by_endpoints`). A line crossing the mask boundary keeps its full
+weight, because the part of it on the building is real evidence and the fit is
+length-weighted regardless. There is no threshold to choose and nothing is
+half-removed.
+
+Two earlier rules, kept here because both sound reasonable:
+
+* a **sampled threshold** — drop the segment once 60 % of five points along it
+  fall inside. It discards straddling lines wholesale, and which side of the
+  line a segment lands on turns on a sample or two of noise.
+* a **per-segment weight** equal to the visible fraction. It measures a shade
+  better (0.558° mean / 1.01° worst against 0.556° / 1.15° for endpoints) but
+  makes the segmenter a soft influence on every line in the frame rather than a
+  decision about a few, and it needs a third factor in the weight for that.
+  Within noise, and more machinery; the endpoint rule won on simplicity.
+
+### The threshold is not a knob; the shrink is the whole game
+
+**The threshold.** The matte comes back essentially binary. Sweeping the cut-off
+from 0.1 to 0.9 on a real barn moved the masked share from 50.5 % to 51.1 %.
+There is nothing in between to select.
+
+**The shrink.** BiRefNet cuts exactly along the building's silhouette, so the
+building's own corner and roof edges have both endpoints just inside the mask —
+they are precisely what the endpoint rule throws away first, and they are the
+longest and best-conditioned evidence in the frame. Pulling the reject region
+off the silhouette first hands them back:
+
+| reject mask shrunk by | mean | worst |
+|---|---|---|
+| 0.000 (~0 px) | 0.663° | 1.95° |
+| 0.002 (~4 px) | 0.597° | 1.43° |
+| 0.004 (~8 px) | 0.575° | 1.43° |
+| **0.008 (~15 px, default)** | **0.556°** | **1.15°** |
+| 0.016 (~31 px) | 0.639° | 1.64° |
+| **no mask at all** | 0.661° | 1.69° |
+
+**Read the first row against the last.** Unshrunk, the mask is worth nothing —
+0.663° against 0.661° for not masking at all. It removes as much good evidence
+as clutter. Everything the segmenter buys is bought by handing the silhouette
+back. `--birefnet-shrink 0` disables it; the value is a fraction of the frame
+diagonal, so it does not change meaning with `--detect-max-edge`.
+
+`masks.protect_structure` works alongside it, un-masking whatever a long
+straight line runs through — a second, selective way of keeping architecture
+that a mask happens to cover.
+
+### Export the masks once instead of computing them every run
+
+    python rectify.py "D:\Fotos" --mask-export "D:\Masken"
+    python rectify.py "D:\Fotos" --mask file --mask-file "D:\Masken" --focal-35mm 24
+
+Two problems, one seam. It bridges the interpreter split — the Python with torch
+has no tkinter and the one with tkinter has no torch — and it turns a repeated
+run, or a benchmark that re-analyses a folder many times, into a file read. The
+PNGs are written at the analysis resolution and `masks.load` resamples, so the
+six masks in `tests/assets/masks` total 42 KB. White means ignore, so they need
+no `--mask-invert`.
+
+**One thing the cache must not be used for: the round-trip test.** That test
+warps each photograph by a known rotation, so the building has moved while the
+cached mask still describes the original. On `Alte_Scheune.jpg` the live and
+cached masks agree at **IoU 1.000** on the unwarped original and only 0.802 on a
+warped copy, and using the cache anyway reports 0.69°/2.35° for an estimator
+that actually achieves 0.65°/1.36°. It fails quietly, which is the dangerous
+kind. See `tests/assets/masks/README.md`.
 
 ### Check the setup before running a batch
 
-    python rectify.py --sam-info --sam-model "D:\...\sams\sam_vit_b_01ec64.pth"
+    python rectify.py --mask-info --birefnet-model auto
 
-Prints the interpreter in use, which backends it can import, and whether that
-checkpoint actually loads. The three ways this goes wrong -- no backend
-installed, a backend installed into a *different* interpreter, and a checkpoint
-needing a different package -- are indistinguishable from a run that simply
-errors on every file.
+It names the interpreter, which of `torch`, `timm`, `transformers`,
+`safetensors` and `torchvision` it can import, whether `tkinter` is present, and
+whether the weights actually load. The failure modes are a missing torch, a
+torch installed into a *different* interpreter, and weights sitting apart from
+the architecture that defines them — none of which is obvious from a run that
+simply errors on every file.
 
-**Install into the interpreter that runs this tool.** On a ComfyUI portable
-install that is its own python, which already has torch and CUDA:
+`--birefnet-model auto` searches the usual ComfyUI locations, and a folder is
+only a candidate if `birefnet.py` sits beside the weights: a 444 MB file that
+cannot be loaded is a worse answer than finding nothing. Pass a path as a hint
+and **only** that path is searched.
 
-    D:\ComfyUI_windows_portable\python_embeded\python.exe -m pip install segment-anything
-    D:\ComfyUI_windows_portable\python_embeded\python.exe D:\Batch-Perspective-Correction\rectify.py --gui
+`--remember` stores the path so it is typed once.
 
-Using ComfyUI's python avoids downloading a second multi-gigabyte torch.
+### Nothing is vendored
 
-### When torch and the GUI live in different Pythons
+The weights are Apache-2.0 and the BiRefNet architecture is MIT, so either could
+be redistributed — but both live in the user's ComfyUI install and this project
+only knows how to talk to them, exactly as it did with SAM checkpoints. That
+keeps a torch dependency out of a project that is otherwise numpy, OpenCV and
+Pillow, and `--mask-export` means the machine that has torch need not be the
+machine that runs the correction.
 
-They usually do, and neither side is wrong:
+`--mask birefnet` caps the worker pool at 2 unless `-j` is explicit, because
+workers are separate processes with their own model cache: eight of them load
+444 MB eight times and then queue for one GPU.
 
-| | torch + SAM | tkinter (the GUI) |
+## What was here before: Segment Anything
+
+SAM was the first implementation and it is gone. The reason is worth keeping,
+because the argument for it still sounds right.
+
+SAM returns forty boundaries and no labels. Nothing in its output says which
+region is the building, so that had to be decided by an invented criterion, and
+two were used with a region surviving on **either**:
+
+* **line density in and around the region.** A facade is threaded with long
+  straight lines; foliage, sky and cars are not. This one works.
+* **how straight the region's own outline is.** A wall is bounded by a handful
+  of straight edges, a tree crown by a fractal outline no small number of
+  segments approximates. This one has no signal at all.
+
+Measured over the 42 regions SAM returns for `Alte_Scheune.jpg`, the outline
+score (`6/n` vertices from `approxPolyDP` at 1 % of perimeter) had median **1.00**
+and **41 of 42** regions cleared the 0.45 floor:
+
+| region | share of frame | line density | outline score | fate |
+|---|---|---|---|---|
+| the barn | 46.2 % | 30.1 | 0.86 | kept, correctly |
+| **sky** | 23.5 % | 1.7 | **0.67** | **rescued** |
+| **foreground grass** | 10.2 % | 0.9 | **1.00** | **rescued** |
+
+Line density alone dropped 34 of 42 regions; the outline rescue put 33 back. The
+surviving mask covered 11 %, 2.6 % and **0.0 %** of the frame on three test
+photographs — so `--mask sam` cost 30 seconds a batch and changed almost nothing.
+Sharpening the epsilon does not save it: at 0.2 % of perimeter the ranking
+*inverts*, the barn scoring 0.18 against the sky's 0.22, because SAM's blob
+outlines are already smooth at 768 px.
+
+| | mean | worst |
 |---|---|---|
-| ComfyUI's `python_embeded` | yes | **no** -- the Windows embeddable Python omits tcl/tk |
-| the system Python | usually not | yes |
+| mask off | 0.98° | 2.80° |
+| **SAM as shipped** | **1.04°** | **3.52°** |
+| SAM, line density only | 0.62° | **1.18°** |
+| BiRefNet-HR | **0.56°** | 1.40° |
+| SAM ∪ BiRefNet | **0.52°** | **1.18°** |
 
-`--sam-info` prints both halves, because seeing only the SAM half hides half the
-diagnosis. And when the mask fails in the Python that has tkinter, the error
-offers the export route *before* suggesting an install -- putting a
-multi-gigabyte CUDA torch into a second interpreter, on a machine that already
-has one three folders away, is the wrong first answer.
+Three things are recorded here rather than deleted:
 
-Rather than choosing between the segmenter and the review window, run SAM once
-from whichever Python can load it and consume the result anywhere:
+1. **The rescue made masking worse than not masking at all.** A broken half of
+   an "either" test silently vetoes the working half — that is the failure shape
+   to watch for, not the specific statistic.
+2. **It was validated on synthetic shapes, and both tests passed.** A drawn
+   rectangle scores 0.9+ and a drawn ragged blob under 0.6; real SAM regions are
+   neither. Synthetic fixtures are the right instrument for a *geometric*
+   question with known ground truth and the wrong one for a *statistical*
+   question about real texture — and "is this region foliage" is the second kind.
+3. **Repaired SAM still won the worst case, and the union of the two won both.**
+   0.52°/1.18° against BiRefNet's 0.56°/1.40°, because the two models fail on
+   different photographs. On six assets that is too thin to justify carrying two
+   models, a checkpoint hunt and an AGPL-3.0 optional dependency — but it is the
+   first thing to re-measure if more ground truth ever exists.
 
-    rem from ComfyUI's python, which has torch
-    D:\ComfyUI_windows_portable\python_embeded\python.exe rectify.py "D:\Fotos" ^
-        --sam-export "D:\Masken" ^
-        --sam-model "D:\ComfyUI_windows_portable\ComfyUI\models\sams\sam_vit_b_01ec64.pth"
-
-    rem afterwards, from any python -- batch, GUI, another machine
-    python rectify.py "D:\Fotos" --mask file --mask-file "D:\Masken" --focal-35mm 24
-
-The masks are written at analysis resolution and resampled on load, so the
-folder stays small and the segmenter runs once per photograph rather than once
-per experiment.
-
-### Or do not type it at all
-
-    --mask sam --sam-model auto
-
-Searches the usual ComfyUI locations and prefers what actually works over what
-is largest: plain `sam_vit_b` first, because HQ checkpoints need another
-package, safetensors need converting, and ViT-H buys nothing for a mask that is
-resampled to a few hundred pixels. Files far too small to be the model their
-name claims are skipped. It reports what it chose.
-
-### Type the checkpoint path once
-
-    python rectify.py "D:\Fotos" --mask sam --sam-model "D:\...\sam_vit_b_01ec64.pth" --remember
-
-After that the path fills itself in, and the GUI remembers whatever you pick in
-its file dialogs. `--forget` clears it; an explicit flag always wins over a
-remembered one.
-
-Only *paths* are remembered -- the checkpoint, a mask folder, the output folder
-and the focal length. Correction parameters deliberately are not: a setting that
-silently persists between runs is one nobody can reason about, and a batch
-should stay reproducible from its command line.
-
-### Backends, and their licences
-
-Tried in order; install whichever suits you.
-
-| package | handles | licence |
-|---|---|---|
-| `ultralytics` | SAM 1, 2 and 3 from one class, picks the predictor from the file name | **AGPL-3.0** |
-| `sam2` | SAM 2 checkpoints, needs the matching architecture config | Apache-2.0 |
-| `segment_anything` | SAM 1 | Apache-2.0 |
-| `segment_anything_hq` | the `sam_hq_*` checkpoints | Apache-2.0 |
-
-This project is MIT and bundles none of them: torch is imported only when
-`--mask sam` is actually used, so a default install stays numpy, OpenCV and
-Pillow. If you care about copyleft reaching your work, prefer the Apache-2.0
-packages.
-
-### Text prompting needs SAM 3
-
-    --sam-text "tree, foliage, sky, car, person"
-
-Only SAM 3 has a concept head; SAM 1 and SAM 2 have no text encoder at all and
-cannot take words. Prompt the *rejects* rather than the building: concrete
-countable nouns ground reliably, "architecture" does not, and a missed piece of
-building is lost evidence rather than a cosmetic flaw. Without `--sam-text` the
-line-density route above is used, which needs no text head.
-
-### A folder of SAM checkpoints is full of look-alikes
-
-Each of these fails differently, so each is named on sight — the GUI shows it
-when you pick the file, and `--mask sam` reports it in the log:
-
-| file | what happens |
-|---|---|
-| `sam_vit_b_01ec64.pth` | works, the sensible default |
-| `sam_hq_vit_*.pth` | different architecture; needs `segment-anything-hq` |
-| `sam2.1_*.safetensors` | converted to `.pt` once, beside the original |
-| `mobile_sam.pt` at 129 kB | far too small to be MobileSAM; flagged |
-| no `sam3*` present | text prompting unavailable |
-
-### Whatever the source, a mask that eats the evidence is refused
-
-Judged on **line evidence lost, not pixels covered**, and the difference is not
-academic. Measured on six real barns: one photograph has 64 % of its frame
-masked and loses 1.5 % of its vertical line weight — a grassy foreground,
-harmless — while another masks 71 % and loses **74.5 %**, because that barn is
-painted green and the vegetation cue took the wall for foliage. A coverage test
-rejects the harmless one and passes the dangerous one.
-
-For an external segmenter this is the check that matters most: a SAM mask
-applied with the wrong polarity, or one belonging to a different photograph,
-both show up as nearly all the evidence vanishing, and both are refused with a
-reason rather than quietly ruining the fit.
+One incidental trap died with SAM and is worth remembering as a *class* of bug:
+**`ultralytics` replaces `cv2.imread` on import**, to support non-ASCII paths,
+and its wrapper returns `(h, w, 1)` for a greyscale read where OpenCV returns
+`(h, w)`. It was the first SAM backend tried, so merely having it installed
+broke `--mask file` — the very folder the export path writes. `masks.load` now
+insists on two dimensions rather than trusting whichever `imread` is installed.
+An optional dependency can change the behaviour of a required one, at import.
 
 ## A hand-painted mask, or another tool's output
 
@@ -226,33 +293,29 @@ Convention: **white means ignore**. A segmenter normally returns the *subject*
 in white, so if the mask marks the building rather than the clutter, add
 `--mask-invert`.
 
-### Choosing a model
+### Which BiRefNet weights
 
-Plain SAM is *promptable* segmentation without semantics: it will happily cut
-out a tree, but it does not know that the tree is what you want removed. So it
-needs either a text-grounded front end or an explicit prompt.
+| file | size | inference | notes |
+|---|---|---|---|
+| **BiRefNet-HR** | 444 MB | 2048 px | what was measured; the default of `auto` |
+| BiRefNet-general | 885 MB | 1024 px | larger file, lower inference resolution |
+| BiRefNet_lite / lite-2K | 178 MB | 1024 / 2048 px | faster, untested here |
 
-| option | size | notes |
-|---|---|---|
-| **SAM 3** (text-promptable concepts) | large | best fit if available -- prompt the *rejects* directly: "tree, foliage, sky, car, person, person" |
-| GroundingDINO + SAM ViT-B | ~700 MB total | the established ComfyUI pairing; same effect, two models |
-| GroundingDINO + MobileSAM | ~40 MB for SAM | markedly faster, and coarse masks are all this needs |
-| SAM alone, hand-prompted | -- | fine for a handful of images, not for a batch |
+The resolution is read from the file name, because that is what every ComfyUI
+node does and the names are consistent enough for it. Override with
+`--birefnet-res`.
 
-**Resolution barely matters.** Analysis runs at 1600 px on the long edge and
-masks are resampled nearest-neighbour, so a 1024 px mask is already finer than
-the geometry can use. Segment small and fast.
-
-Prompt for what should be *ignored* and no `--mask-invert` is needed. Prompt for
-the building and add it.
+**Analysis resolution barely matters downstream.** The correction runs at 1600 px
+on the long edge and masks are resampled nearest-neighbour, so a mask finer than
+a few pixels is wasted work. What the 2048 px inference buys is a cleaner
+*decision* about what the subject is, not a finer edge.
 
 ### Why this is a seam rather than a dependency
 
 Everything above goes through one function, `masks.build`, returning a boolean
-array the size of the analysis image. Adding a bundled segmentation model would
-mean a torch dependency and hundreds of megabytes in a project that is otherwise
-numpy, OpenCV and Pillow -- and the table at the top of this page shows that
-masking is not an unconditional win. A user who already runs a segmenter gets
-the benefit through `--mask file` today; if the cheap `auto` mask ever proves
-insufficient, a small ONNX segmentation model can be loaded through
-`cv2.dnn` behind the same interface without adding torch.
+array the size of the analysis image. `off`, `auto`, `file` and `birefnet` are
+interchangeable behind it, which is what makes `--mask-export` possible: the
+model runs in whichever interpreter can load it, and everything afterwards --
+batch runs, the GUI, another machine -- consumes a folder of PNGs. A user who
+prefers a different segmenter gets the same benefit through `--mask file`
+without this project learning about it.

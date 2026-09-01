@@ -146,13 +146,44 @@ away evidence it needed. Promoting on 24 measurements against a benchmark it
 loses would be exactly the mistake the rest of these notes documents.
 
 **If a user has real data, run the benchmark tool and let it decide.** That is
-the missing evidence, not more argument.
+the missing evidence, not more argument. `tools/benchmark_detectors.py` now
+actually exists -- this section claimed it shipped while the repository held a
+zero-byte `tools_placeholder`.
 
-## Masking: only with a known focal length
+**FLD had never been measured; it does not beat LSD.** It was in the chain only
+as a fallback for OpenCV builds without LSD, so it was worth measuring. On the
+seven assets, round-trip with the border guard, `f` fixed:
 
-`--mask auto` (cheap vegetation/sky) and `--mask file` (a folder of PNGs from an
-external segmenter such as SAM) both go through one seam, `masks.build`. The
-measurement that governs their use:
+| | mean | p90 | worst |
+|---|---|---|---|
+| **lsd, masked** | **0.65°** | **1.52°** | **2.02°** |
+| lsd, unmasked | 0.70° | 1.66° | 2.89° |
+| fld, unmasked | 0.99° | 2.13° | 3.19° |
+| fld, masked | 1.36° | 2.85° | 4.76° |
+| hough | 2.6-2.7° | ~4° | **36°** |
+
+LSD wins in both conditions and masking helps it further, so the default stands.
+Note that masking *hurts* FLD -- it returns fewer, cleaner segments and has less
+to spare. Hough is not competitive and its 36° worst case is the argument for
+keeping it a last resort.
+
+An earlier run of this table said FLD won unmasked. That was the border
+artifact; see the section on it below.
+
+M-LSD could not be measured here at all -- it needs a TFLite runtime
+(`pip install ai-edge-litert`) that this interpreter lacks. SOLD2 is available
+through `kornia.feature.sold2` with no extra install, and DeepLSD needs the
+`cvg/DeepLSD` repository plus weights from `cvg-data.inf.ethz.ch`.
+
+## Masking: BiRefNet, and the two knobs that are not knobs
+
+`--mask auto` (cheap vegetation/sky), `--mask birefnet` (Segment-anything's
+replacement) and `--mask file` (a folder of PNGs) all go through one seam,
+`masks.build`. The producers are **not interchangeable**, and using one table
+for both was the mistake that hid a broken feature for a release.
+
+`--mask auto` is a texture statistic and its measurement is unchanged — it is
+why the default is off:
 
 | | pitch max |
 |---|---|
@@ -161,47 +192,186 @@ measurement that governs their use:
 | f unknown, mask off | **5.58°** |
 | f unknown, mask on | 10.05° |
 
-Masking removes the worst outliers *and* removes evidence, and the focal
-estimator is the part most starved for it. Default is off. Never recommend
-masking without `--focal-35mm` or EXIF.
+**Never recommend `--mask auto` without `--focal-35mm` or EXIF.** It removes
+green, chaotic and sky-like *pixels*, and on a stripped JPEG that takes the
+horizontals the focal estimate needed.
 
-Note on SAM: plain SAM has no text encoder and cannot take words at all. Text
-prompting comes from GroundingDINO → SAM, or SAM 3's concept head. Prompt the
-*rejects* (`tree, foliage, sky, car, person`) rather than the building —
-concrete countable nouns ground well, abstractions like "architecture" do not,
-and a missed piece of building is lost evidence.
+`--mask birefnet` removes whole non-building *objects* and does not share that
+failure. Round-trip on the seven assets, with the border guard:
 
-## The confidence score is validated, not just plausible
+| | mean | worst |
+|---|---|---|
+| mask off, f known | 0.70° | 1.68° |
+| **BiRefNet-HR, f known** | **0.65°** | **1.36°** |
+| mask off, f unknown | 1.12° | 2.25° |
+| **BiRefNet-HR, f unknown** | **0.88°** | **1.96°** |
 
-Six real barn photographs, round-trip tested (warp by a known `R_d`; the warped
-copy's up must be `R_d @ u0`, so real texture gets exact ground truth without
-knowing the true pose):
+The gain is real but modest, and **larger where the focal length is unknown** --
+the opposite of how `--mask auto` behaves. Earlier drafts of this table claimed
+0.98° → 0.56°; that spread was the border artifact, not the mask.
+
+**It masks 40–70 % of the frame and 1–11 % of the line evidence**, because what
+it removes is sky, grass and road. That gap is the whole reason `masks.credible`
+judges on evidence rather than coverage, and it means the 55 % refusal threshold
+has a wide margin here.
+
+**A line is dropped only when both its endpoints are inside the mask.** No
+threshold, no weight. Anything crossing the boundary -- a facade edge running
+down into shrubbery, a roofline against the sky -- keeps its full say, because
+the half of it on the building is real evidence and the fit is length-weighted
+anyway.
+
+Two earlier rules were tried and both are worse or more complicated:
+
+* a **sampled threshold** dropping a segment once 60 % of five points along it
+  fell inside. It discarded straddling lines wholesale and which side of the
+  threshold a line landed on turned on a sample or two.
+* a **per-segment weight** equal to the visible fraction. Measurably slightly
+  better (0.558 deg mean / 1.01 worst against 0.556 / 1.15 for endpoints) but it
+  makes the segmenter a soft influence on every line rather than a decision
+  about a few, and it needs a third factor in the weight. The endpoint rule is
+  within noise of it and has nothing to tune.
+
+**The shrink is what makes the mask worth having at all.** BiRefNet cuts exactly
+along the silhouette, so the building's own corner and roof edges have both ends
+just inside the mask and are the first thing the endpoint rule throws away.
+Round-trip over ten assets, shrink as a fraction of the frame diagonal:
+
+| shrink | mean | worst |
+|---|---|---|
+| 0.000 (~0 px) | 0.663° | 1.95° |
+| 0.002 (~4 px) | 0.597° | 1.43° |
+| 0.004 (~8 px) | 0.575° | 1.43° |
+| **0.008 (~15 px, default)** | **0.556°** | **1.15°** |
+| 0.016 (~31 px) | 0.639° | 1.64° |
+| no mask at all | 0.661° | 1.69° |
+
+Read the first row against the last: **unshrunk, the mask buys nothing** --
+0.663° against 0.661° for not masking. It removes as much good evidence as
+clutter. Everything the segmenter is worth here is bought by handing the
+silhouette back. A fraction of the diagonal rather than a pixel count, so it
+does not change meaning with `--detect-max-edge`.
+
+**Two things that look like knobs and are not.** The matte is near-binary, so
+the threshold does nothing: 0.1 to 0.9 moves the masked share 50.5 % → 51.1 %.
+And *shrinking* the mask a few pixels, so silhouette lines survive
+`drop_masked`, measures worse — 0.556° → **0.839°** at **2 px**, and 16 px is
+barely worse than 2. It is a step, not a slope: a thin ring re-admits the
+*neighbouring building's* lines, which are long, straight, and converge
+somewhere else. The selective version of that rescue already exists and is
+load-bearing: without `masks.protect_structure` the same set measures
+0.906°/3.76°.
+
+**`--mask-export` writes the masks once.** It bridges the interpreter split
+(torch without tkinter, tkinter without torch) *and* turns a repeated run into a
+file read. `tests/assets/masks` is that cache, 42 KB for six photographs, white
+meaning ignore. It must never be used for the round-trip test — the warped copy
+has moved and the cached mask has not (IoU 1.000 unwarped, 0.802 warped), which
+reports 0.69°/2.35° for an estimator that achieves 0.56°/1.40°.
+
+## Segment Anything was here, and what its failure teaches
+
+SAM is deleted. It needed an invented criterion to say which of its forty
+regions was the building, and a region survived on **either** line density (which
+works) **or** how straight its outline is (which has no signal: median 1.00 over
+42 real regions, 41 of 42 above the floor, rescuing the sky and the foreground
+grass). The broken half of an "either" test silently vetoed the working half, and
+`--mask sam` measured **worse than not masking** — 1.04°/3.52° against
+0.98°/2.80°.
+
+Three things to carry forward:
+
+1. **It was validated on synthetic shapes and both tests passed.** A drawn
+   rectangle scores 0.9+, a ragged blob under 0.6; real SAM regions are neither.
+   Synthetic fixtures are right for a *geometric* question with ground truth and
+   wrong for a *statistical* one about real texture.
+2. **Repaired SAM still won the worst case** (0.62°/1.18°) and the union of both
+   models won outright (0.52°/1.18°), because they fail on different
+   photographs. Six assets is too thin to justify two models, a checkpoint hunt
+   and an AGPL-3.0 dependency — but it is the first thing to re-measure if more
+   ground truth appears.
+3. **An optional dependency can change a required one at import.**
+   `ultralytics` replaces `cv2.imread`, returning `(h, w, 1)` for a greyscale
+   read, which broke `--mask file` for anyone who merely had it installed.
+   `masks.load` now insists on two dimensions.
+
+## The confidence score: a gate, not a ranking
+
+This section used to say the score was *validated* because it ranked six barn
+photographs by their real error (rho = -0.68, asserted by a test). **That
+correlation was the border artifact.** With the guard in place it is **-0.11**:
 
 | photo | conf | real error |
 |---|---|---|
-| quaker | 0.75 | 0.33° |
-| small red barn | 0.70 | 0.34° |
-| white sparrow | 0.66 | 0.63° |
-| XYZ | 0.42 | 0.78° |
-| pole barn | 0.49 | 1.01° |
-| Alte Scheune | 0.44 | **2.80°** |
+| quaker | 0.75 | 0.45° |
+| 79cb3387… | 0.70 | 0.54° |
+| white sparrow | 0.66 | 0.33° |
+| hospital | 0.52 | 0.58° |
+| pole barn | 0.49 | 1.68° |
+| Alte Scheune | 0.44 | 1.11° |
+| XYZ | 0.40 | 0.19° |
 
-**Confidence ranks them by actual error.** It is a product of six heuristic
-factors and there was no guarantee of that, so
-`test_confidence_ranks_the_photographs_by_their_real_error` asserts it. The
-whole skip-and-review design rests on this property; do not change the factors
-without re-running that test.
+The honest reading is not "the score is broken". Once the artifact is gone the
+errors span 0.19° to 1.68° -- there is almost nothing left to rank, and a rank
+correlation over seven nearly-equal values is mostly noise. What the old test
+was ranking was how much of the frame each photograph filled.
 
-Two traps when measuring a correction by re-analysing its output:
+So the assertion moved to the property the skip-and-review design actually
+rests on, which is a **bound and not an ordering**: everything the gate admits
+must be measured accurately (`< 2°`), and the gate must still admit most of a
+set of ordinary architectural photographs, or "nothing it touches is wrong"
+could be satisfied by refusing everything. Both are asserted;
+`test_every_photograph_it_is_confident_about_is_measured_accurately` and
+`test_the_confidence_gate_admits_most_of_a_good_set`.
+
+Restore a ranking test only with assets that genuinely span a range of accuracy.
+Two traps when measuring a correction by re-analysing its output remain true:
+
 - **Cropping moves the principal point** away from the image centre, which the
-  model assumes coincide. Worth 0.2–0.8° of apparent residual on these six.
-  It is also a real limitation on any *previously cropped* input — web JPEGs.
+  model assumes coincide. It is a real limitation on any *previously cropped*
+  input -- web JPEGs.
 - **A re-estimated focal length makes the metric self-inconsistent.** Fix `f`
   in both passes or the number means nothing.
 
-With `f` fixed correctly, Alte Scheune goes 7.09° → **0.63°**; with `f` wrong
-(35mm) it goes 6.87° → **9.42°**, worse than doing nothing. The auto estimate
-picked 41mm for it. That is the whole argument for `--focal-35mm` in one line.
+## The round trip measured itself for a while, and it cost two conclusions
+
+`tests/assets/_round_trip_error` warps a photograph by a known rotation and
+re-estimates. `warpPerspective` has to invent the band that rotates in from
+outside the frame, and `BORDER_REPLICATE` invents it by smearing edge pixels
+into **long, perfectly straight streaks**. Where a photograph's content reaches
+the frame edge -- the ordinary architectural case -- the detector reads those
+streaks as lines.
+
+It hid for as long as every asset was a barn with sky at its edges, where the
+smear is bland. One modern facade that fills the frame exposed it:
+
+| | mean | worst |
+|---|---|---|
+| harness as it was | 1.71° | 6.08° |
+| **with the border guard** | **0.66°** | **1.68°** |
+
+`hospital-nikon-d60_f27.jpg` went **6.08° → 0.33°**, from the worst photograph in
+the set to one of the best. Both passes are now cropped by 8 % before analysis,
+which also keeps them the same size and therefore the same focal length in
+pixels. Pinned by `test_the_border_guard_is_what_makes_the_measurement_honest`.
+
+**It produced two confident wrong conclusions before it was found**, and both
+are worth remembering as a shape:
+
+1. **"Wide-angle lens distortion."** It had a mechanism, a camera that fits (an
+   18-55 kit zoom at 18 mm), and a crop experiment that appeared to confirm it
+   (full frame 6.08°, centre 80 % 0.53°). It was wrong. Implementing Hugin's
+   radial model and sweeping the `b` coefficient moved 6.08° to 5.70° at a
+   realistic value -- while discarding the invented band moved it to 0.33°. The
+   crop "confirmed" the hypothesis because cropping the base also removes the
+   content that gets smeared.
+2. **"FLD beats LSD."** Measured 0.84° against 0.98° unmasked. With the guard,
+   LSD wins in both conditions (0.70/2.89 against 0.99/3.19 unmasked;
+   0.65/2.02 against 1.36/4.76 masked). FLD was simply biting less on the
+   artifact.
+
+**A benchmark that is wrong in the incumbent's disfavour is the dangerous kind**,
+because it reads as a discovery rather than a bug.
 
 ## Known weakness, stated plainly
 
@@ -240,6 +410,38 @@ results look under-corrected.
   function of state and is tested headlessly; `gui.py` is only the shell. This
   was forced by the dev container having no Tkinter and turned out to be the
   right split anyway.
+
+## Vertical control lines, taken from Hugin
+
+The manual mode has three ways in, and this is the third: the user clicks two
+points on something they *know* is vertical in the world — a door jamb, a
+downpipe, a building corner. It is Hugin's `t2` control point, and Hugin's own
+advice carries over: place the two points as far apart as the structure allows,
+because the direction of a short segment is badly conditioned. A segment under
+8 % of the short edge is refused rather than quietly accepted, since a mis-click
+would otherwise steer the whole fit.
+
+**They replace the detected pool rather than joining it.** A user who marks two
+door jambs is not adding two votes to three hundred, they are saying the three
+hundred were beside the point. Adding them with a large weight instead would
+mean choosing how large, and the answer would be "large enough to win", which is
+the same thing with a fudge factor in it. Two is the threshold because two lines
+determine a vanishing point — Hugin needs two as well — so `min_vertical_lines`
+drops from 4 to 2 while they are in force.
+
+This is the case that striking lines out cannot fix: on a corner view every line
+the detector found may be real and still belong to the wrong plane. There is
+then nothing to delete, only something to state.
+
+**The trap it walks into, and the fix.** Confidence is largely a count of
+supporting lines, so two of them scored **0.04** and the photograph came back
+`SKIP, weakest: count` — the feature refusing its own input. Control lines now
+count as a decision, exactly like moving a slider, and `would_skip` returns
+`None` while they are active. Refusing evidence for being scarce is right when a
+detector produced it and wrong when a person did. Pinned by
+`test_marking_verticals_does_not_get_the_photo_skipped`; validated against a
+synthetic scene's exact pose by
+`test_a_control_line_that_is_really_vertical_recovers_the_true_pose`.
 
 ## Testing
 

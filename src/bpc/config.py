@@ -35,12 +35,12 @@ class Settings:
     # 0.61 deg off, 3.58 deg on.  See docs/accuracy.md.
     merge_lines: bool = False
     merge_horizontal: bool = False
-    mask_mode: str = "off"          # off | auto | file | sam
-    sam_model: str = ""             # path to a SAM checkpoint
-    sam_max_edge: int = 768
-    sam_device: str = ""            # "" = cuda when available
-    sam_min_density: float = 0.25   # of the densest region in the frame
-    sam_text: str = ""              # SAM 3 only; empty = line-density route
+    mask_mode: str = "off"          # off | auto | file | birefnet
+    birefnet_model: str = ""        # path to BiRefNet weights
+    birefnet_threshold: float = 0.5  # matte is near-binary; not a tuning knob
+    birefnet_device: str = ""       # "" = cuda when available
+    birefnet_res: int = 0           # 0 = the size implied by the weight name
+    birefnet_shrink_frac: float = 0.008  # of the diagonal; ~15 px at 1600
     mask_file: str = ""             # a PNG, or a folder of <stem>.png
     mask_invert: bool = False       # set when white means "keep"
 

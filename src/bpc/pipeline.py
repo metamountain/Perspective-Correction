@@ -32,9 +32,16 @@ class Result:
             return f"ERROR   {name}  {self.reason}"
         if self.status == SKIPPED:
             return f"SKIPPED {name}  {self.reason}"
+        mask = ""
+        d = self.diagnostics or {}
+        if d.get("mask_refused"):
+            mask = f" mask=REFUSED(would lose {d.get('evidence_lost', 0.0) * 100:.0f}% lines)"
+        elif d.get("mask_note"):
+            mask = (f" mask={d.get('mask_share', 0.0) * 100:.0f}%"
+                    f"(-{d.get('evidence_lost', 0.0) * 100:.0f}% lines)")
         return (f"OK      {name}  roll={self.roll_deg:+.2f}deg pitch={self.pitch_deg:+.2f}deg "
                 f"conf={self.confidence:.2f} f={self.focal_35mm:.0f}mm({self.focal_source}) "
-                f"keep={self.coverage * 100:.0f}% {self.out_size[0]}x{self.out_size[1]} "
+                f"keep={self.coverage * 100:.0f}%{mask} {self.out_size[0]}x{self.out_size[1]} "
                 f"{self.seconds:.2f}s" + ("  [clamped]" if self.clamped else ""))
 
     def as_dict(self):
@@ -88,6 +95,14 @@ def process(src_path, dst_path, settings, debug_dir=None, dry_run=False):
         return Result(status=ERROR, reason=f"analysis failed ({exc})",
                       seconds=time.time() - t0, **base)
 
+    # fold what the mask did into the diagnostics the log and report already
+    # carry, rather than opening a second channel for it.  Until this existed a
+    # mask covering 0.0% of the frame was indistinguishable from a working one.
+    if info.get("mask_note"):
+        for key in ("mask_note", "mask_share", "evidence_lost", "mask_refused"):
+            # copied even when zero: "0% of the frame" is the finding, not the
+            # absence of one
+            m.diagnostics[key] = info.get(key, 0.0)
     base.update(n_lines=len(vert) + len(horiz), detector=detector,
                 confidence=m.confidence, diagnostics=m.diagnostics)
     if m.f:

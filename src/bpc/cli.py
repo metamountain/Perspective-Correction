@@ -115,44 +115,49 @@ def build_parser():
                         "(see docs/detectors.md for the measurements)")
     g.add_argument("--mlsd-model", default="",
                    help="M-LSD tflite model path, or a filename inside models/")
-    g.add_argument("--mask", choices=["off", "auto", "file", "sam"],
+    g.add_argument("--mask", choices=["off", "auto", "file", "birefnet"],
                    default=Settings.mask_mode,
                    help="'auto' vegetation/sky heuristic, 'file' a painted PNG or folder, "
-                        "'sam' a Segment Anything checkpoint (see --sam-model)")
-    g.add_argument("--sam-model", default="",
-                   help="SAM checkpoint, or 'auto' to search the usual ComfyUI "
+                        "'birefnet' segment the building out (see --birefnet-model)")
+    g.add_argument("--birefnet-model", default="",
+                   help="BiRefNet weights, or 'auto' to search the usual ComfyUI "
                         "folders. Example: "
-                        r'"D:\ComfyUI_windows_portable\ComfyUI\models\sams\sam_vit_b_01ec64.pth"')
-    g.add_argument("--sam-text", default="",
-                   help="SAM 3 only: segment these instead, e.g. "
-                        "'tree, foliage, sky, car'. Empty uses the line-density route, "
-                        "which works with SAM 1 and 2 as well")
-    g.add_argument("--sam-max-edge", type=int, default=Settings.sam_max_edge)
-    g.add_argument("--sam-device", default="", help="cuda, cpu; empty picks cuda when present")
+                        r'"D:\ComfyUI_windows_portable\ComfyUI\models\RMBG\BiRefNet\BiRefNet-HR.safetensors"')
+    g.add_argument("--birefnet-threshold", type=float, default=Settings.birefnet_threshold,
+                   help="matte cut-off. The matte is near-binary, so this is not a "
+                        "tuning knob: 0.1 to 0.9 moves the masked share by half a percent")
+    g.add_argument("--birefnet-res", type=int, default=Settings.birefnet_res,
+                   help="inference size; 0 takes the size implied by the weight name "
+                        "(2048 for HR and 2K, else 1024)")
+    g.add_argument("--birefnet-shrink", type=float, default=Settings.birefnet_shrink_frac,
+                   metavar="FRAC",
+                   help="pull the masked region off the building silhouette by this "
+                        "fraction of the frame diagonal, so its own corner and roof "
+                        "edges survive (0.008 is ~15 px at 1600; 0 disables)")
+    g.add_argument("--birefnet-device", default="",
+                   help="cuda, cpu; empty picks cuda when present")
     g.add_argument("--remember", action="store_true",
-                   help="store --sam-model, --mask-file, -o and --focal-35mm as "
+                   help="store --birefnet-model, --mask-file, -o and --focal-35mm as "
                         "defaults for future runs")
     g.add_argument("--forget", action="store_true",
                    help="delete the remembered defaults and exit")
-    g.add_argument("--sam-export", metavar="DIR",
-                   help="run SAM over the inputs and write one mask PNG per photo "
-                        "into DIR, then exit. Use it from the interpreter that has "
-                        "torch (ComfyUI's python_embeded), and consume the folder "
-                        "afterwards with --mask file --mask-file DIR from anywhere, "
-                        "including the GUI")
+    g.add_argument("--mask-export", metavar="DIR",
+                   help="write one mask PNG per photo into DIR, then exit. Two uses: "
+                        "run it from the interpreter that has torch (ComfyUI's "
+                        "python_embeded) and consume the folder anywhere with "
+                        "--mask file --mask-file DIR, including the GUI; or cache the "
+                        "masks so a repeated run does not recompute them")
     g.add_argument("--diagnostics", action="store_true",
                    help="print the environment (interpreter, versions, backends, "
                         "settings) before the run, so a log is self-describing")
-    g.add_argument("--sam-info", action="store_true",
-                   help="report which SAM backends are installed, describe "
-                        "--sam-model, and exit")
-    g.add_argument("--sam-min-density", type=float, default=Settings.sam_min_density,
-                   help="keep regions whose straight-line density is at least this "
-                        "fraction of the densest region in the frame")
+    g.add_argument("--mask-info", action="store_true",
+                   help="report whether BiRefNet can run here, describe "
+                        "--birefnet-model, and exit")
     g.add_argument("--mask-file", default="",
                    help="a PNG mask, or a folder holding one <stem>.png per image")
     g.add_argument("--mask-invert", action="store_true",
-                   help="the mask marks what to KEEP (what a segmenter such as SAM outputs)")
+                   help="the mask marks what to KEEP, which is what a segmenter "
+                        "naturally outputs; --mask-export already inverts")
     g.add_argument("--detect-max-edge", type=int, default=Settings.detect_max_edge)
     g.add_argument("--min-line-length", type=float, default=Settings.min_line_length_frac,
                    help="minimum line length as a fraction of the short edge")
@@ -195,11 +200,11 @@ def settings_from(args) -> Settings:
     s.mask_mode = args.mask
     s.mask_file = args.mask_file
     s.mask_invert = args.mask_invert
-    s.sam_model = args.sam_model
-    s.sam_text = args.sam_text
-    s.sam_max_edge = args.sam_max_edge
-    s.sam_device = args.sam_device
-    s.sam_min_density = args.sam_min_density
+    s.birefnet_model = args.birefnet_model
+    s.birefnet_threshold = args.birefnet_threshold
+    s.birefnet_res = args.birefnet_res
+    s.birefnet_shrink_frac = args.birefnet_shrink
+    s.birefnet_device = args.birefnet_device
     s.detect_max_edge = args.detect_max_edge
     s.min_line_length_frac = args.min_line_length
     s.inlier_threshold_deg = args.inlier_threshold
@@ -263,7 +268,7 @@ def diagnostics_text(args, settings) -> str:
     import sys as _sys
 
     from . import __version__
-    from . import sam as SAM
+    from . import birefnet as BN
 
     out = ["# --- environment " + "-" * 48]
     out.append(f"# bpc {__version__} on {platform.platform()}")
@@ -275,11 +280,11 @@ def diagnostics_text(args, settings) -> str:
         except Exception as exc:
             out.append(f"#   {mod:8s} MISSING ({type(exc).__name__})")
     out.append("# optional backends: " + ", ".join(
-        f"{k}={'yes' if v else 'no'}" for k, v in SAM.backends().items()))
-    if settings.mask_mode == "sam" and settings.sam_model:
-        out.append(f"# sam model: {SAM.describe(settings.sam_model)}")
-    interesting = ("detector", "mask_mode", "mask_file", "sam_model", "sam_text",
-                   "sam_min_density", "focal_35mm", "default_focal_35mm",
+        f"{k}={'yes' if v else 'no'}" for k, v in BN.backends().items()))
+    if settings.mask_mode == "birefnet" and settings.birefnet_model:
+        out.append(f"# birefnet: {BN.describe(settings.birefnet_model)}")
+    interesting = ("detector", "mask_mode", "mask_file", "birefnet_model",
+                   "birefnet_threshold", "focal_35mm", "default_focal_35mm",
                    "focal_estimate", "min_confidence", "max_pitch_deg",
                    "max_roll_deg", "pitch_strength", "roll_strength", "crop",
                    "detect_max_edge", "inlier_threshold_deg", "angular_softness",
@@ -290,29 +295,29 @@ def diagnostics_text(args, settings) -> str:
     return "\n".join(out)
 
 
-def sam_info(args) -> int:
+def mask_info(args) -> int:
     """Answer "is my setup right?" without running a batch first.
 
-    Worth a flag of its own: the failure modes are an uninstalled backend, a
-    backend installed into a different interpreter, and a checkpoint that needs
-    a different package -- and none of them is obvious from a run that simply
-    errors on every file.
+    Worth a flag of its own: the failure modes are a missing torch, a torch
+    installed into a *different* interpreter, and weights sitting apart from the
+    architecture that defines them -- and none of them is obvious from a run
+    that simply errors on every file.
     """
     import sys as _sys
 
-    from . import sam as SAM
+    from . import birefnet as BN
     print(f"interpreter: {_sys.executable}")
-    for name, ok in SAM.backends().items():
+    for name, ok in BN.backends().items():
         print(f"  {'yes' if ok else 'no ':>3}  {name}")
-    if args.sam_model:
-        print(f"\nmodel: {SAM.describe(args.sam_model)}")
+    if args.birefnet_model:
+        print(f"\nmodel: {BN.describe(args.birefnet_model)}")
         try:
-            SAM._load(args.sam_model, args.sam_device)
+            BN._load(args.birefnet_model, args.birefnet_device)
             print("  loads: yes")
         except Exception as exc:
             print(f"  loads: NO\n{exc}")
     else:
-        print("\n(pass --sam-model to check a specific checkpoint)")
+        print("\n(pass --birefnet-model to check specific weights)")
     return 0
 
 
@@ -321,12 +326,12 @@ def apply_prefs(args, parser):
 
     Only fills what the command line left at its default, so an explicit flag
     always wins and a run is still fully described by what was typed plus what
-    ``--sam-info`` reports.
+    ``--mask-info`` reports.
     """
     from . import prefs
     stored = prefs.load()
     used = []
-    for key in ("sam_model", "mask_file", "output"):
+    for key in ("birefnet_model", "mask_file", "output"):
         if not getattr(args, key, None) and stored.get(key):
             setattr(args, key, stored[key])
             used.append(key)
@@ -343,41 +348,43 @@ def main(argv=None) -> int:
     if args.forget:
         print("forgot remembered defaults" if prefs.forget() else "nothing was remembered")
         return 0
-    if args.sam_model == "auto":
-        from . import sam as SAM
-        found = SAM.find_checkpoint()
+    if args.birefnet_model == "auto":
+        from . import birefnet as BN
+        found = BN.find_weights()
         if not found:
-            print("--sam-model auto found no checkpoint; pass a path")
+            print("--birefnet-model auto found no weights; pass a path")
             return 2
-        args.sam_model = found
+        args.birefnet_model = found
         if not args.quiet:
-            print(f"# using {SAM.describe(found)}")
+            print(f"# using {BN.describe(found)}")
     used = apply_prefs(args, parser)
     if used and not args.quiet:
         print(f"# using remembered {', '.join(used)} from {prefs.path()}")
     if args.remember:
-        ok = prefs.save(sam_model=args.sam_model, mask_file=args.mask_file,
+        ok = prefs.save(birefnet_model=args.birefnet_model, mask_file=args.mask_file,
                         output=args.output,
                         focal_35mm=args.focal_35mm if args.focal_35mm else None)
         print(f"# remembered in {prefs.path()}" if ok else "# nothing to remember")
-    if args.sam_info:
-        return sam_info(args)
-    if args.sam_export:
-        if not args.sam_model:
-            print("--sam-export needs --sam-model <checkpoint>")
+    if args.mask_info:
+        return mask_info(args)
+    if args.mask_export:
+        from . import birefnet as BN
+        if not args.birefnet_model:
+            args.birefnet_model = BN.find_weights()
+        if not args.birefnet_model:
+            print("--mask-export needs --birefnet-model <weights>")
             return 2
         files = collect(args.inputs, args.recursive)
         if not files:
             print("no readable images found")
             return 1
-        from . import sam as SAM
         log = _Log(args.log_file, args.quiet)
-        _, failed = SAM.export_masks(files, args.sam_model, args.sam_export,
-                                     settings_from(args), log=log)
+        _, failed = BN.export_masks(files, args.birefnet_model, args.mask_export,
+                                    settings_from(args), log=log)
         log.close()
         return 0 if failed == 0 else 3
-    if args.mask == "sam" and not args.sam_model:
-        print("--mask sam needs --sam-model <checkpoint>")
+    if args.mask == "birefnet" and not args.birefnet_model:
+        print("--mask birefnet needs --birefnet-model <weights>, or 'auto'")
         return 2
     if args.mask == "file" and not args.mask_file:
         print("--mask file needs --mask-file <png or folder>")
@@ -427,6 +434,16 @@ def main(argv=None) -> int:
         jobs.append((src, dst, settings, args.debug_dir, args.dry_run))
 
     workers = args.workers or min(8, (os.cpu_count() or 1))
+    if not args.workers and settings.mask_mode == "birefnet" and workers > 2:
+        # Each worker is a separate process with its own birefnet._CACHE, so
+        # eight of them load the 444 MB checkpoint eight times and then queue
+        # for one GPU.  On a ten-image folder that is most of the runtime; on a
+        # large batch it amortises, but never usefully past a couple of workers.
+        # An explicit -j is left alone -- the user may know their machine better.
+        # --mask-export once and --mask file avoids the question entirely.
+        workers = 2
+        log(f"# --mask birefnet: capped at {workers} workers "
+            f"(each loads the checkpoint; pass -j to override, or --mask-export once)")
     results = []
     t0 = time.time()
     if workers <= 1 or len(jobs) <= 1:

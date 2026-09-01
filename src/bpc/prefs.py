@@ -1,6 +1,6 @@
 """Remembered paths, so they are typed once.
 
-Deliberately tiny and deliberately limited to *paths*: a SAM checkpoint, a mask
+Deliberately tiny and deliberately limited to *paths*: model weights, a mask
 folder, the last output folder. Correction parameters are not remembered,
 because a setting that silently persists between runs is a setting nobody can
 reason about -- the whole project turns on a batch being reproducible from its
@@ -17,7 +17,7 @@ import json
 import os
 
 APP = "batch-perspective-correction"
-REMEMBERED = ("sam_model", "mask_file", "output", "focal_35mm")
+REMEMBERED = ("birefnet_model", "mask_file", "output", "focal_35mm")
 
 
 def path() -> str:

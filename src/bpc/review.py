@@ -10,6 +10,14 @@ Auswahl von Linien zur Bestaetigung bzw. Loeschung".  Both are supported and
 they compose: disabling the roof rafters that the detector mistook for
 verticals re-fits the model, and the sliders then start from that better fit
 instead of from the bad one.
+
+A third way in was added after reading how Hugin does it: a **vertical control
+line**, Hugin's ``t2`` control point.  The user clicks two points on something
+they know is vertical in the world -- a door jamb, a downpipe, a building corner
+-- and that assertion outranks the detector entirely.  It is the answer to the
+case no amount of striking-out fixes: when the lines the detector found are all
+real but all belong to the wrong plane, there is nothing to delete, only
+something to state.
 """
 from __future__ import annotations
 
@@ -57,6 +65,9 @@ class ReviewSession:
         self.manual_roll = 0.0
         self.manual_pitch = 0.0
         self.manual_focal_35mm = 0.0
+        # Hugin-style vertical control lines, in analysis-image coordinates.
+        # (N, 4) of x0, y0, x1, y1.
+        self.control_lines = np.zeros((0, 4))
         self.model = None
         self.refit()
 
@@ -97,19 +108,38 @@ class ReviewSession:
 
     # -- fitting ---------------------------------------------------------
     def refit(self):
-        """Re-run the estimator over the currently enabled lines."""
-        vert = self.vert.subset(self.enabled)
+        """Re-run the estimator over the currently enabled lines.
+
+        Vertical control lines, when there are enough of them, **replace** the
+        detected pool rather than joining it.  That is Hugin's semantics and it
+        is the only reading that makes them worth having: a user who marks two
+        door jambs is not adding two votes to three hundred, they are saying the
+        three hundred were beside the point.  Adding them with a large weight
+        instead would mean choosing how large, and the answer would be "large
+        enough to win", which is the same thing with a fudge factor in it.
+        """
         gh, gw = self.gray.shape[:2]
+        settings = self.settings
+        if len(self.control_lines) >= 2:
+            vert = L.LineSet(self.control_lines)
+            # two lines already determine a vanishing point, and the floor of
+            # four exists to keep the detector from fitting noise -- which is
+            # not what these are
+            settings = settings.replace(min_vertical_lines=2)
+        else:
+            vert = self.vert.subset(self.enabled)
         exif_px = IO.focal_px_from_exif(self.src, self.w, self.h) \
             if self.settings.use_exif_focal else None
-        m = M.estimate(vert, self.horiz, gw, gh, self.settings,
+        m = M.estimate(vert, self.horiz, gw, gh, settings,
                        exif_px * self.scale if exif_px else None)
         if m.f:
             m.f = m.f / self.scale
         # map the inlier mask back onto the full line list, so the overlay can
         # distinguish "not an inlier" from "struck out by the user"
         full = np.zeros(len(self.vert), dtype=bool)
-        if m.vert_inliers is not None and len(m.vert_inliers) == int(self.enabled.sum()):
+        if (not self.control_active
+                and m.vert_inliers is not None
+                and len(m.vert_inliers) == int(self.enabled.sum())):
             full[np.flatnonzero(self.enabled)] = m.vert_inliers
         m.vert_inliers = full
         self.model = m
@@ -131,7 +161,63 @@ class ReviewSession:
     def reset_to_auto(self):
         self.mode = AUTO
         self.enabled[:] = True
+        self.control_lines = np.zeros((0, 4))
         self.refit()
+
+    @property
+    def control_active(self):
+        """True when the user's own verticals are driving the fit."""
+        return len(self.control_lines) >= 2
+
+    MIN_CONTROL_LENGTH_FRAC = 0.08
+
+    def add_control_line(self, x0, y0, x1, y1, display_scale: float = 1.0):
+        """Assert that this segment is vertical in the world -- Hugin's ``t2``.
+
+        Two points on one structure, and Hugin's own advice is to put them "as
+        far apart from each other as possible": the direction of a short segment
+        is poorly conditioned, and the whole point of drawing it by hand is that
+        it should be better evidence than anything the detector found.  A
+        segment shorter than ``MIN_CONTROL_LENGTH_FRAC`` of the short edge is
+        refused rather than quietly accepted, because a mis-click that lands two
+        points near each other would otherwise steer the entire fit.
+
+        Returns the new index, or ``None`` if it was refused.
+        """
+        inv = self.scale / max(display_scale, 1e-9)
+        seg = np.array([[x0 * inv, y0 * inv, x1 * inv, y1 * inv]], dtype=float)
+        gh, gw = self.gray.shape[:2]
+        if float(np.hypot(seg[0, 2] - seg[0, 0], seg[0, 3] - seg[0, 1])) < \
+                self.MIN_CONTROL_LENGTH_FRAC * min(gw, gh):
+            return None
+        self.control_lines = np.vstack([self.control_lines, seg])
+        self.refit()
+        return len(self.control_lines) - 1
+
+    def remove_control_line(self, index: int):
+        if not (0 <= index < len(self.control_lines)):
+            return False
+        self.control_lines = np.delete(self.control_lines, index, axis=0)
+        self.refit()
+        return True
+
+    def clear_control_lines(self):
+        had = len(self.control_lines)
+        self.control_lines = np.zeros((0, 4))
+        if had:
+            self.refit()
+        return had
+
+    def pick_control_line(self, x: float, y: float, display_scale: float = 1.0,
+                          radius: float = 12.0):
+        """Index of the control line nearest a click, or ``None``."""
+        return self._nearest(self.control_lines, x, y, display_scale, radius)
+
+    def control_lines_for_display(self, display_scale: float = 1.0):
+        """The control lines in displayed-image pixels, for drawing."""
+        if len(self.control_lines) == 0:
+            return np.zeros((0, 4))
+        return self.control_lines * (display_scale / max(self.scale, 1e-9))
 
     def toggle_line(self, index: int):
         if 0 <= index < len(self.enabled):
@@ -161,11 +247,13 @@ class ReviewSession:
         displayed / original.  Distance is to the segment, not to its infinite
         line, so clicking above a short window mullion does not select it.
         """
-        if len(self.vert) == 0:
+        return self._nearest(self.vert.seg, x, y, display_scale, radius)
+
+    def _nearest(self, seg, x, y, display_scale, radius):
+        if len(seg) == 0:
             return None
         inv = self.scale / max(display_scale, 1e-9)
         p = np.array([x * inv, y * inv])
-        seg = self.vert.seg
         a, b = seg[:, :2], seg[:, 2:]
         ab = b - a
         t = np.clip(np.sum((p - a) * ab, axis=1) / np.maximum(np.sum(ab * ab, axis=1), 1e-9), 0, 1)
@@ -193,8 +281,17 @@ class ReviewSession:
         return roll, pitch, self.model.f, clamped
 
     def would_skip(self):
-        """``None`` if the image would be corrected, else the reason it would not."""
-        if self.mode == MANUAL:
+        """``None`` if the image would be corrected, else the reason it would not.
+
+        Vertical control lines count as a decision, exactly like moving a
+        slider.  Without this the feature defeats itself: the confidence score
+        is largely a count of supporting lines, two is far below what it expects
+        of a detector, and a photograph the user had just told the truth about
+        came back "SKIP, conf=0.04, weakest: count".  Refusing evidence because
+        there is little of it is right when a detector produced it and wrong
+        when a person did.
+        """
+        if self.mode == MANUAL or self.control_active:
             return None
         if self.model is None:
             return "no model"
@@ -263,7 +360,9 @@ class ReviewSession:
         skip = self.would_skip()
         conf = self.model.confidence if self.model else 0.0
         src = self.model.f_source if self.model else "-"
-        head = "MANUAL" if self.mode == MANUAL else ("SKIP" if skip else "AUTO")
+        head = ("MANUAL" if self.mode == MANUAL
+                else "MARKED" if self.control_active
+                else ("SKIP" if skip else "AUTO"))
         mask_note = ""
         if self.detect_error:
             mask_note = f"mask problem: {self.detect_error}"
@@ -276,10 +375,18 @@ class ReviewSession:
             mask_note = f"mask: {self.settings.mask_mode}, {n} line(s) removed"
         else:
             mask_note = f"mask: {self.settings.mask_mode} produced nothing"
+        conf_note = (f"conf={conf:.2f}" if not self.control_active
+                     else "conf=n/a (you stated the verticals)")
         parts = [f"{head}  roll={math.degrees(roll):+.2f}deg  pitch={math.degrees(pitch):+.2f}deg",
-                 f"f={f35:.0f}mm ({src if self.mode == AUTO else 'manual'})  conf={conf:.2f}  "
+                 f"f={f35:.0f}mm ({src if self.mode == AUTO else 'manual'})  {conf_note}  "
                  f"lines={int(self.enabled.sum())}/{len(self.vert)}"]
         parts.append(mask_note)
+        if self.control_active:
+            parts.append(f"{len(self.control_lines)} vertical control line(s) in "
+                         f"force -- the detected verticals are not being used")
+        elif len(self.control_lines) == 1:
+            parts.append("1 vertical control line -- one more is needed before "
+                         "they take over, since two determine a vanishing point")
         if clamped:
             parts.append("correction hit the configured limit")
         if skip:

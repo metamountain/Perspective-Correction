@@ -301,12 +301,35 @@ def split_by_orientation(ls: LineSet, vertical_window_deg: float,
     hmask = a_h <= hw
     vert = ls.subset(vmask)
     horiz = ls.subset(hmask)
+    # Two factors: how long the segment is, and how well its direction fits the
+    # pool.  The mask is deliberately *not* a third one -- it either removes a
+    # line or it does not, and that decision is taken in prepare() on the
+    # endpoints.  A mask that also nudged every surviving line's weight would
+    # make the segmenter a soft influence on the whole fit rather than a
+    # judgement about which lines belong to the building.
     if len(vert):
         vert.weight = vert.length * angular_prior(vert.angle_to_vert, vw, softness)
     if len(horiz):
         horiz.weight = horiz.length * angular_prior(math.pi / 2.0 - horiz.angle_to_vert,
                                                     hw, softness)
     return vert, horiz
+
+
+def _evidence_lost(before: np.ndarray, after: np.ndarray) -> float:
+    """Fraction of straight-line *length* a mask removed.
+
+    Length, not segment count: masking a hundred short twigs and masking one
+    facade edge are not the same event, and only the second one matters.  This
+    is the number ``masks.credible`` judges on, reported so a user can see how
+    close a mask came to that limit instead of only learning when it trips.
+    """
+    if len(before) == 0:
+        return 0.0
+    w0 = float(G.segment_lengths(before).sum())
+    if w0 <= 0:
+        return 0.0
+    w1 = float(G.segment_lengths(after).sum()) if len(after) else 0.0
+    return max(0.0, 1.0 - w1 / w0)
 
 
 def prepare(gray: np.ndarray, settings, bgr=None, image_path: str = "") -> tuple:
@@ -320,23 +343,28 @@ def prepare(gray: np.ndarray, settings, bgr=None, image_path: str = "") -> tuple
     if len(seg):
         seg = drop_border_segments(seg, w, h, settings.border_margin_px)
     mask, masked_out, mask_note = None, np.zeros((0, 4)), ""
+    mask_share, evidence_lost, mask_refused = 0.0, 0.0, False
     if len(seg) and bgr is not None and getattr(settings, "mask_mode", "off") != "off":
-        # SAM needs the lines to decide which of its regions is a building, so
-        # detection has to happen before masking, not after.
+        # detection happens before masking, not after: a mask producer may want
+        # the lines (the old SAM route scored its regions by them), and the
+        # credibility guard needs the unmasked evidence to compare against.
         mask, mask_note = MK.build(bgr, settings, image_path, seg)
         if mask is not None:
             # a long straight line is architecture, whatever the texture
-            # statistics think; protect it before anything is discarded
+            # statistics think; protect it before anything is down-weighted
             mask = MK.protect_structure(mask, seg, min_len * 1.8)
         if mask is not None:
-            kept = MK.drop_masked(seg, mask)
+            kept = MK.drop_by_endpoints(seg, mask)
             ok, why = MK.credible(seg, kept)
+            mask_share = float(mask.mean())
+            evidence_lost = _evidence_lost(seg, kept)
             if not ok:
-                mask, kept, mask_note = None, seg, why
-            # keep what was thrown away, so the preview can show it.  A mask the
-            # user cannot see is a mask the user cannot trust: when SAM removes
-            # the wrong half of a building, the only symptom otherwise is a
-            # quietly worse answer.
+                mask, kept, mask_note, mask_refused = None, seg, why, True
+                evidence_lost = 0.0
+            # keep what was removed, so the preview can show it.  A mask the
+            # user cannot see is a mask the user cannot trust: when the
+            # segmenter removes the wrong half of a building, the only symptom
+            # otherwise is a quietly worse answer.
             kept_set = {tuple(r) for r in kept.tolist()}
             masked_out = np.array([r for r in seg.tolist()
                                    if tuple(r) not in kept_set], dtype=float)
@@ -350,7 +378,9 @@ def prepare(gray: np.ndarray, settings, bgr=None, image_path: str = "") -> tuple
     vert, horiz = split_by_orientation(ls, settings.vertical_window_deg,
                                        settings.horizontal_window_deg,
                                        settings.angular_softness)
-    info = {"mask": mask, "masked_out": masked_out, "mask_note": mask_note}
+    info = {"mask": mask, "masked_out": masked_out, "mask_note": mask_note,
+            "mask_share": mask_share, "evidence_lost": evidence_lost,
+            "mask_refused": mask_refused}
     if settings.merge_horizontal and len(horiz):
         # Merge the horizontal pool only.  The two pools have opposite needs: a
         # facade offers many unoccluded verticals, and merging them destroys

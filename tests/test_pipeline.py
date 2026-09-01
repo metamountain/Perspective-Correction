@@ -175,17 +175,30 @@ def test_a_skipped_image_can_be_written_into_a_new_output_folder():
 
 
 def test_a_mask_source_with_no_path_fails_once_not_per_file():
-    """`--mask sam` without a checkpoint used to fail every image with what read
-    as an internal fault. It is a configuration error and belongs before the
-    run."""
+    """`--mask birefnet` without weights used to fail every image with what read
+    as an internal fault. It is a configuration error and belongs before the run.
+
+    The preferences file has to be isolated here or the test asserts on
+    behaviour the developer's own machine cannot produce: a remembered
+    ``birefnet_model`` fills the missing path in and the run succeeds, so this
+    passed in CI and failed for anyone who had ever used ``--remember``.
+    """
     from bpc.cli import main as cli_main
     d = _tmp()
+    old = (os.environ.get("XDG_CONFIG_HOME"), os.environ.get("APPDATA"))
     try:
+        os.environ["XDG_CONFIG_HOME"] = d
+        os.environ.pop("APPDATA", None)
         cv2.imwrite(os.path.join(d, "a.jpg"), synth.Scene(pitch_deg=8, seed=61).img)
-        assert cli_main([d, "--mask", "sam", "-o", os.path.join(d, "out")]) == 2
+        assert cli_main([d, "--mask", "birefnet", "-o", os.path.join(d, "out")]) == 2
         assert cli_main([d, "--mask", "file", "-o", os.path.join(d, "out")]) == 2
         assert not os.path.exists(os.path.join(d, "out"))
     finally:
+        for k, v in zip(("XDG_CONFIG_HOME", "APPDATA"), old):
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
         shutil.rmtree(d, ignore_errors=True)
 
 

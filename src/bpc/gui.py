@@ -105,6 +105,7 @@ class ReviewWindow(tk.Toplevel):
         self.c_before.grid(row=1, column=0, sticky="nsew", padx=(0, 3))
         self.c_after = tk.Canvas(panes, bg="#1e1e1e", highlightthickness=0)
         self.c_after.grid(row=1, column=1, sticky="nsew", padx=(3, 0))
+        self._pending_mark = None
         self.c_before.bind("<Button-1>", self._on_click_before)
         for c in (self.c_before, self.c_after):
             c.bind("<Configure>", lambda e: self._schedule_redraw())
@@ -128,15 +129,15 @@ class ReviewWindow(tk.Toplevel):
         self.v_maskmode = tk.StringVar(value=self.settings.mask_mode)
         ttk.Label(msk, text="source", width=18).grid(row=0, column=0, sticky="w")
         box = ttk.Combobox(msk, textvariable=self.v_maskmode, width=8, state="readonly",
-                           values=["off", "auto", "file", "sam"])
+                           values=["off", "auto", "file", "birefnet"])
         box.grid(row=0, column=1, sticky="w", padx=(6, 6))
         box.bind("<<ComboboxSelected>>", lambda e: self._apply_mask())
         ttk.Button(msk, text="mask folder...", command=self._pick_mask_folder
                    ).grid(row=0, column=2, sticky="w")
-        ttk.Button(msk, text="SAM model...", command=self._pick_sam_model
+        ttk.Button(msk, text="BiRefNet model...", command=self._pick_birefnet_model
                    ).grid(row=0, column=4, sticky="w", padx=(10, 0))
         self.v_maskinv = tk.BooleanVar(value=self.settings.mask_invert)
-        ttk.Checkbutton(msk, text="mask marks what to KEEP (SAM output)",
+        ttk.Checkbutton(msk, text="mask marks what to KEEP",
                         variable=self.v_maskinv, command=self._apply_mask
                         ).grid(row=0, column=3, sticky="w", padx=10)
         self.lbl_mask = ttk.Label(msk, text="", wraplength=760, justify="left")
@@ -150,6 +151,12 @@ class ReviewWindow(tk.Toplevel):
 
         btns = ttk.Frame(top, padding=(0, 8))
         btns.pack(fill="x")
+        self.v_mark = tk.BooleanVar(value=False)
+        ttk.Checkbutton(btns, text="mark a vertical (2 clicks)",
+                        variable=self.v_mark, command=self._on_mark_toggle
+                        ).pack(side="left")
+        ttk.Button(btns, text="clear marks",
+                   command=self._clear_marks).pack(side="left", padx=(6, 12))
         ttk.Button(btns, text="strike out slanted lines (>18 deg)",
                    command=self._strike_slanted).pack(side="left")
         ttk.Button(btns, text="reset to automatic",
@@ -171,8 +178,8 @@ class ReviewWindow(tk.Toplevel):
             if not self._pick_mask_folder(apply_now=False):
                 self.v_maskmode.set(self.session.settings.mask_mode)
                 return
-        if mode == "sam" and not self.session.settings.sam_model:
-            if not self._pick_sam_model(apply_now=False):
+        if mode == "birefnet" and not self.session.settings.birefnet_model:
+            if not self._pick_birefnet_model(apply_now=False):
                 self.v_maskmode.set(self.session.settings.mask_mode)
                 return
         err = self.session.set_mask(mode, invert=bool(self.v_maskinv.get()))
@@ -182,31 +189,31 @@ class ReviewWindow(tk.Toplevel):
         else:
             self._redraw()
 
-    def _pick_sam_model(self, apply_now=True):
-        """Point at a SAM checkpoint and say what it is.
+    def _pick_birefnet_model(self, apply_now=True):
+        """Point at BiRefNet weights and say what they are.
 
-        A ComfyUI sams folder holds look-alikes that fail differently -- HQ
-        variants needing another package, safetensors needing conversion, stubs
-        far too small to be the model they are named after -- so the choice is
-        described immediately rather than after a failed batch."""
-        from . import sam as SAM
+        A folder of these holds look-alikes -- HR, lite, matting, 2K variants
+        that run at different resolutions -- and the architecture has to sit
+        beside them, so the choice is described immediately rather than after a
+        failed batch."""
+        from . import birefnet as BN
         p = filedialog.askopenfilename(
-            title="SAM checkpoint",
-            filetypes=[("SAM checkpoints", "*.pt *.pth *.safetensors"),
+            title="BiRefNet weights",
+            filetypes=[("BiRefNet weights", "*.safetensors *.pth *.pt"),
                        ("all files", "*.*")], parent=self)
         if not p:
             return False
-        self.session.settings = self.session.settings.replace(sam_model=p)
-        prefs.save(sam_model=p)          # typed once, not once per session
-        self.lbl_mask.configure(text=SAM.describe(p))
+        self.session.settings = self.session.settings.replace(birefnet_model=p)
+        prefs.save(birefnet_model=p)     # typed once, not once per session
+        self.lbl_mask.configure(text=BN.describe(p))
         if apply_now:
-            self.v_maskmode.set("sam")
+            self.v_maskmode.set("birefnet")
             self._apply_mask()
         return True
 
     def _pick_mask_folder(self, apply_now=True):
-        """A folder of one mask per photo is what an external segmenter such as
-        SAM produces; a single PNG is the hand-painted case."""
+        """A folder of one mask per photo is what ``--mask-export`` writes; a
+        single PNG is the hand-painted case."""
         d = filedialog.askdirectory(title="folder of mask images (one per photo)",
                                     parent=self)
         if not d:
@@ -278,10 +285,24 @@ class ReviewWindow(tk.Toplevel):
         self.session.reset_to_auto()
         self._sync_from_session()
 
+    def _on_mark_toggle(self):
+        """Entering or leaving vertical-marking mode; a half-finished line is
+        forgotten rather than left dangling."""
+        self._pending_mark = None
+        self._set_status(self.session.status_text())
+        self._redraw()
+
+    def _clear_marks(self):
+        if self.session.clear_control_lines():
+            self._sync_from_session()
+
     def _on_click_before(self, event):
-        idx = self.session.pick_line(event.x - self._before_off[0],
-                                     event.y - self._before_off[1],
-                                     display_scale=self._before_scale)
+        x = event.x - self._before_off[0]
+        y = event.y - self._before_off[1]
+        if getattr(self, "v_mark", None) is not None and self.v_mark.get():
+            self._click_mark(x, y)
+            return
+        idx = self.session.pick_line(x, y, display_scale=self._before_scale)
         if idx is None:
             return
         self.session.toggle_line(idx)
@@ -289,6 +310,36 @@ class ReviewWindow(tk.Toplevel):
             self._sync_from_session()
         else:
             self._redraw()
+
+    def _click_mark(self, x, y):
+        """Two clicks make one vertical control line; a click on an existing one
+        removes it.
+
+        Removal shares the same gesture on purpose: the alternative is a
+        modifier key nobody discovers, and a mark placed by mistake has to be as
+        easy to take back as it was to make.
+        """
+        hit = self.session.pick_control_line(x, y, display_scale=self._before_scale)
+        if hit is not None and self._pending_mark is None:
+            self.session.remove_control_line(hit)
+            self._sync_from_session()
+            return
+        if self._pending_mark is None:
+            self._pending_mark = (x, y)
+            self._set_status("marking a vertical: click the other end\n"
+                             "(as far from the first point as the structure allows)")
+            self._redraw()
+            return
+        x0, y0 = self._pending_mark
+        self._pending_mark = None
+        added = self.session.add_control_line(x0, y0, x, y,
+                                              display_scale=self._before_scale)
+        if added is None:
+            self._set_status("too short to be trusted -- mark the full height of "
+                             "the structure, not a few pixels of it")
+            self._redraw()
+            return
+        self._sync_from_session()
 
     # -- drawing ---------------------------------------------------------
     def _schedule_redraw(self):
@@ -318,6 +369,7 @@ class ReviewWindow(tk.Toplevel):
             self.c_before.create_image(self._before_off[0], self._before_off[1],
                                        anchor="nw", image=ph_b)
             self._ph_b = ph_b
+            self._draw_marks()
             self.c_after.delete("all")
             self.c_after.create_image((box_a[0] - ph_a.width()) // 2,
                                       (box_a[1] - ph_a.height()) // 2,
@@ -327,6 +379,26 @@ class ReviewWindow(tk.Toplevel):
             self._update_slider_labels()
         except Exception:
             self._set_status("preview failed:\n" + traceback.format_exc(limit=2))
+
+    def _draw_marks(self):
+        """Vertical control lines, over the preview.
+
+        Drawn by the canvas rather than burnt into the rendered image because
+        they are interaction state, not detection: they have to appear the
+        instant a click lands, without waiting for a re-render, and the pending
+        first point has to be visible while it is still only half a line.
+        """
+        ox, oy = self._before_off
+        active = self.session.control_active
+        for x0, y0, x1, y1 in self.session.control_lines_for_display(self._before_scale):
+            self.c_before.create_line(ox + x0, oy + y0, ox + x1, oy + y1,
+                                      fill="#00e5ff" if active else "#ffb300",
+                                      width=3, arrow="both", arrowshape=(9, 11, 4))
+        pend = getattr(self, "_pending_mark", None)
+        if pend is not None:
+            px, py = ox + pend[0], oy + pend[1]
+            self.c_before.create_oval(px - 6, py - 6, px + 6, py + 6,
+                                      outline="#00e5ff", width=2)
 
     def _set_status(self, text):
         self.status.configure(state="normal")
@@ -446,7 +518,7 @@ class App(_ROOT_CLASS):
         self._spin(opt, 1, 0, "max pitch (deg)", self.v_maxpitch, 0.0, 45.0, 1.0)
         ttk.Label(opt, text="mask").grid(row=0, column=6, sticky="e", padx=4)
         self.v_mask = tk.StringVar(value=Settings.mask_mode)
-        ttk.Combobox(opt, textvariable=self.v_mask, values=["off", "auto", "file", "sam"],
+        ttk.Combobox(opt, textvariable=self.v_mask, values=["off", "auto", "file", "birefnet"],
                      width=6, state="readonly").grid(row=0, column=7, sticky="w")
         self.v_maskpath = tk.StringVar(value="")
         ttk.Button(opt, text="mask source...", command=self._pick_mask_source
@@ -495,11 +567,11 @@ class App(_ROOT_CLASS):
         s.crop = self.v_crop.get()
         s.mask_mode = self.v_mask.get()
         path = self.v_maskpath.get() or self._remembered.get(
-            "sam_model" if self.v_mask.get() == "sam" else "mask_file", "")
+            "birefnet_model" if self.v_mask.get() == "birefnet" else "mask_file", "")
         if s.mask_mode == "file":
             s.mask_file = path
-        elif s.mask_mode == "sam":
-            s.sam_model = path
+        elif s.mask_mode == "birefnet":
+            s.birefnet_model = path
         return s
 
     def _pick_mask_source(self):
@@ -507,23 +579,23 @@ class App(_ROOT_CLASS):
         no way to say *which* mask -- so choosing 'file' made every image fail
         with what looked like an internal error."""
         mode = self.v_mask.get()
-        if mode == "sam":
+        if mode == "birefnet":
             p = filedialog.askopenfilename(
-                title="SAM checkpoint",
-                filetypes=[("SAM checkpoints", "*.pt *.pth *.safetensors"),
+                title="BiRefNet weights",
+                filetypes=[("BiRefNet weights", "*.safetensors *.pth *.pt"),
                            ("all files", "*.*")])
             if p:
-                from . import sam as SAM
+                from . import birefnet as BN
                 self.v_maskpath.set(p)
-                prefs.save(sam_model=p)
-                messagebox.showinfo("SAM model", SAM.describe(p))
+                prefs.save(birefnet_model=p)
+                messagebox.showinfo("BiRefNet model", BN.describe(p))
         elif mode == "file":
             d = filedialog.askdirectory(title="folder of mask images (one per photo)")
             if d:
                 self.v_maskpath.set(d)
                 prefs.save(mask_file=d)
         else:
-            messagebox.showinfo("Mask", "set the mask selector to 'file' or 'sam' first")
+            messagebox.showinfo("Mask", "set the mask selector to 'file' or 'birefnet' first")
 
     def _add(self, paths):
         added = 0
