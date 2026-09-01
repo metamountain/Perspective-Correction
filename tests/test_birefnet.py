@@ -28,18 +28,40 @@ def test_the_resolution_comes_from_the_checkpoint_name():
     assert BN.resolution_for(r"C:\models\BiRefNet_dynamic.safetensors") == 1024
 
 
-def test_weights_without_an_architecture_beside_them_are_rejected():
-    """The failure this prevents is a 444 MB file that looks perfectly fine and
-    cannot be loaded, reported as an unrelated import error deep in torch."""
+def test_the_architecture_is_looked_for_beyond_the_weights_folder():
+    """A checkpoint and the file that defines its network are separate things,
+    and ComfyUI does not keep them together.
+
+    This was a real failure, reported as "BiRefNet does not work": a remembered
+    checkpoint pointed into ``models/BiRefNet``, which held three perfectly good
+    checkpoints and no ``birefnet.py``, while ``models/RMBG/BiRefNet`` next door
+    held both. The architecture is generic across BiRefNet checkpoints, so
+    pairing them is correct rather than a workaround -- and ``load_state_dict``
+    catches it at once if it ever is not.
+    """
     with tempfile.TemporaryDirectory() as d:
-        w = os.path.join(d, "BiRefNet-HR.safetensors")
+        beside = os.path.join(d, "beside")
+        os.makedirs(beside)
+        w = os.path.join(beside, "BiRefNet-HR.safetensors")
         open(w, "wb").write(b"0" * 32)
-        try:
-            BN._arch_dir(w)
-            assert False, "must refuse weights with no birefnet.py beside them"
-        except BN.BiRefNetUnavailable as exc:
-            assert "birefnet.py" in str(exc)
-        assert "cannot be loaded" in BN.describe(w)
+        open(os.path.join(beside, "birefnet.py"), "w").write("# architecture\n")
+        assert BN._arch_dir(w) == os.path.abspath(beside), \
+            "beside the weights must still win"
+
+    real = BN.architecture_dirs
+    try:
+        BN.architecture_dirs = lambda: []
+        with tempfile.TemporaryDirectory() as d:
+            w = os.path.join(d, "BiRefNet-HR.safetensors")
+            open(w, "wb").write(b"0" * 32)
+            try:
+                BN._arch_dir(w)
+                assert False, "with no architecture anywhere it must refuse"
+            except BN.BiRefNetUnavailable as exc:
+                assert "birefnet.py" in str(exc)
+            assert "cannot be loaded" in BN.describe(w)
+    finally:
+        BN.architecture_dirs = real
 
 
 def test_describe_names_the_size_and_the_resolution():
@@ -86,20 +108,19 @@ def test_the_install_hint_adapts_to_which_interpreter_you_are_in():
     assert "--mask-export" not in cli
 
 
-def test_find_weights_ignores_a_folder_with_no_architecture():
-    """A bare .safetensors somewhere else is not a candidate however well its
-    name ranks -- it cannot be loaded, so offering it is a worse answer than
-    finding nothing."""
+def test_find_weights_looks_only_where_it_was_told():
+    """A hint searches *only* there. The predecessor searched the hint **and**
+    every usual location, so asking about one folder could return weights from
+    another -- unpredictable in use, and untestable in principle, because the
+    answer depended on what the developer's machine happened to have."""
     with tempfile.TemporaryDirectory() as d:
-        open(os.path.join(d, "BiRefNet-HR.safetensors"), "wb").write(b"0" * 32)
         assert BN.find_weights(d) == ""
-        open(os.path.join(d, "birefnet.py"), "w").write("# architecture\n")
+        open(os.path.join(d, "BiRefNet-HR.safetensors"), "wb").write(b"0" * 40_000_000)
         assert os.path.basename(BN.find_weights(d)) == "BiRefNet-HR.safetensors"
 
 
 def test_find_weights_prefers_hr_and_skips_stubs():
     with tempfile.TemporaryDirectory() as d:
-        open(os.path.join(d, "birefnet.py"), "w").write("# architecture\n")
         open(os.path.join(d, "BiRefNet_lite.safetensors"), "wb").write(b"0" * 30_000_000)
         open(os.path.join(d, "BiRefNet-HR.safetensors"), "wb").write(b"0" * 40_000_000)
         assert os.path.basename(BN.find_weights(d)) == "BiRefNet-HR.safetensors"

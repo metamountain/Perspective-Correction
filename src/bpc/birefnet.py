@@ -85,15 +85,111 @@ def resolution_for(weights: str) -> int:
     return 2048 if ("hr" in name or "2k" in name) else 1024
 
 
+# Exactly what has to be on disk, named, because "it does not work" is what a
+# missing file looks like from the outside.
+WEIGHTS_FILE = "BiRefNet-HR.safetensors"
+WEIGHTS_REPO = "1038lab/BiRefNet"
+ARCH_FILES = ("birefnet.py", "BiRefNet_config.py")
+TARGET_DIR = os.path.join("ComfyUI", "models", "RMBG", "BiRefNet")
+
+
+def what_you_need(missing_weights=True, missing_arch=True) -> str:
+    """The setup instructions, naming files and giving commands to run.
+
+    Written to be **copy-pasteable**.  An error that describes a situation but
+    leaves the reader to work out the fix is only half an error message, and the
+    fix here is two downloads into one folder -- easy to state exactly, and
+    impossible to guess.
+    """
+    lines = ["BiRefNet needs two things in one folder, and they arrive separately:"]
+    if missing_weights:
+        lines += ["",
+                  "  1. the weights   " + WEIGHTS_FILE + "   (444 MB)"]
+    if missing_arch:
+        lines += ["",
+                  "  2. the network   " + " + ".join(ARCH_FILES),
+                  "     (a few KB; these define the model the weights fill in)"]
+    lines += ["",
+              "Put them in your ComfyUI install, under:",
+              "    " + TARGET_DIR,
+              "",
+              "Both come from the same Hugging Face repository. With the",
+              "huggingface_hub package installed, this fetches exactly them:",
+              "",
+              '    huggingface-cli download ' + WEIGHTS_REPO + ' \\',
+              '        ' + WEIGHTS_FILE + ' ' + ' '.join(ARCH_FILES) + ' \\',
+              '        --local-dir "<your ComfyUI>/' + TARGET_DIR.replace("\\", "/") + '"',
+              "",
+              "Or install the ComfyUI-RMBG custom nodes, which place all three",
+              "there on first use, and then pass --birefnet-model auto.",
+              "",
+              "Check the result with:",
+              "    python rectify.py --mask-info --birefnet-model auto"]
+    return "\n".join(lines)
+
+
+def _found_report() -> str:
+    """What *is* on this machine, so the reader can see how close they are."""
+    weights = find_weights()
+    arch = architecture_dirs()
+    bits = []
+    bits.append("  weights found:      " + (weights or "none"))
+    bits.append("  network found in:   " + (arch[0] if arch else "nowhere"))
+    return "\n".join(bits)
+
+
+def architecture_dirs():
+    """Folders that might hold ``birefnet.py``, best first.
+
+    Separate from the weights on purpose.  ComfyUI installs put checkpoints in
+    more than one place -- ``models/BiRefNet`` and ``models/RMBG/BiRefNet`` are
+    both common -- and only one of them tends to carry the architecture, because
+    the node that downloads the architecture is not the node that downloads
+    every checkpoint.
+    """
+    import glob
+    pats = [os.path.join(d + ":\\", p) for d in "CDEFG"
+            for p in ("ComfyUI*/ComfyUI/models/RMBG/BiRefNet",
+                      "ComfyUI*/models/RMBG/BiRefNet",
+                      "*/ComfyUI*/ComfyUI/models/RMBG/BiRefNet",
+                      "ComfyUI*/ComfyUI/models/BiRefNet",
+                      "ComfyUI*/models/BiRefNet")]
+    pats += [os.path.expanduser("~/ComfyUI/models/RMBG/BiRefNet"),
+             os.path.expanduser("~/comfyui/models/RMBG/BiRefNet"),
+             os.path.join(os.getcwd(), "models", "BiRefNet")]
+    out = []
+    for pat in pats:
+        for base in glob.glob(pat):
+            if os.path.isfile(os.path.join(base, "birefnet.py")) and base not in out:
+                out.append(base)
+    return out
+
+
 def _arch_dir(weights: str) -> str:
-    """The folder holding ``birefnet.py``; it must sit beside the weights."""
+    """The folder holding ``birefnet.py``.
+
+    Beside the weights if it is there, otherwise wherever it can be found.  The
+    architecture is generic across BiRefNet checkpoints -- HR, general, lite and
+    dynamic are the same network with different weights -- so pairing a
+    checkpoint with an architecture from another folder is correct, not a
+    workaround, and ``load_state_dict`` catches it immediately if it ever is not.
+
+    This exists because of a real failure: a user's remembered checkpoint pointed
+    into ``models/BiRefNet``, which on that machine holds three perfectly good
+    checkpoints and no ``birefnet.py``, while ``models/RMBG/BiRefNet`` next door
+    holds both.  Refusing it read as "BiRefNet does not work".
+    """
     d = os.path.dirname(os.path.abspath(weights))
     if os.path.isfile(os.path.join(d, "birefnet.py")):
         return d
+    found = architecture_dirs()
+    if found:
+        return found[0]
     raise BiRefNetUnavailable(
-        "no birefnet.py beside " + os.path.basename(weights) + ".\n"
-        "The architecture has to sit next to the weights; in ComfyUI that is\n"
-        "    models\\RMBG\\BiRefNet\\  (birefnet.py + BiRefNet_config.py)")
+        "found the weights but not the network that defines them.\n\n"
+        "  have: " + os.path.abspath(weights) + "\n"
+        "  need: " + " + ".join(ARCH_FILES) + " (searched beside the weights and "
+        "every usual ComfyUI folder)\n\n" + what_you_need(missing_weights=False))
 
 
 def _load(weights: str, device: str = ""):
@@ -107,7 +203,9 @@ def _load(weights: str, device: str = ""):
         if key in _CACHE:
             return _CACHE[key]
         if not os.path.isfile(weights):
-            raise BiRefNetUnavailable("BiRefNet weights not found: " + weights)
+            raise BiRefNetUnavailable(
+                "BiRefNet weights not found:\n  " + os.path.abspath(weights) +
+                "\n\n" + _found_report() + "\n\n" + what_you_need())
         try:
             import torch
             from safetensors.torch import load_file
@@ -147,7 +245,12 @@ def _load(weights: str, device: str = ""):
             torch.set_float32_matmul_precision("high")
         except Exception as exc:
             raise BiRefNetUnavailable(
-                "could not load " + os.path.basename(weights) + ": " + str(exc)) from exc
+                "could not load " + os.path.basename(weights) + " with the network "
+                "in\n  " + d + "\n\n" + str(exc).split(chr(10))[0] + "\n\n"
+                "The two do not match.  BiRefNet checkpoints share one network, so "
+                "this\nusually means the file is a different model wearing a "
+                "BiRefNet name.\nThe known-good pairing is:\n\n" +
+                what_you_need()) from exc
         entry = {"model": model, "device": dev, "res": resolution_for(weights),
                  "half": dev != "cpu"}
         _CACHE[key] = entry
@@ -225,10 +328,6 @@ def backends() -> dict:
 def find_weights(hint: str = "") -> str:
     """Locate usable BiRefNet weights without making anyone type a path.
 
-    "Usable" means the architecture sits beside them: a bare ``.safetensors``
-    in some other folder cannot be loaded, so it is not a candidate however
-    well its name ranks.
-
     A ``hint`` searches *only* there.  The predecessor searched the hint **and**
     every usual location, which meant asking about one folder could return
     weights from another -- unpredictable in use, and untestable in principle,
@@ -243,7 +342,9 @@ def find_weights(hint: str = "") -> str:
         roots = [os.path.join(d + ":\\", p) for d in "CDEFG"
                  for p in ("ComfyUI*/ComfyUI/models/RMBG/BiRefNet",
                            "ComfyUI*/models/RMBG/BiRefNet",
-                           "*/ComfyUI*/ComfyUI/models/RMBG/BiRefNet")]
+                           "*/ComfyUI*/ComfyUI/models/RMBG/BiRefNet",
+                           "ComfyUI*/ComfyUI/models/BiRefNet",
+                           "ComfyUI*/models/BiRefNet")]
         roots += [os.path.expanduser("~/ComfyUI/models/RMBG/BiRefNet"),
                   os.path.expanduser("~/comfyui/models/RMBG/BiRefNet"),
                   os.path.join(os.getcwd(), "models", "BiRefNet")]
@@ -253,8 +354,6 @@ def find_weights(hint: str = "") -> str:
         for base in glob.glob(root):
             if not os.path.isdir(base):
                 continue
-            if not os.path.isfile(os.path.join(base, "birefnet.py")):
-                continue                      # weights without an architecture
             found += glob.glob(os.path.join(base, "*.safetensors"))
     if not found:
         return ""
@@ -278,9 +377,11 @@ def describe(weights: str) -> str:
     size = os.path.getsize(weights) / 1e6 if os.path.isfile(weights) else 0.0
     bits = ["{} ({:.0f} MB, {} px)".format(name, size, resolution_for(weights))]
     try:
-        _arch_dir(weights)
+        d = _arch_dir(weights)
+        if os.path.dirname(os.path.abspath(weights)) != d:
+            bits.append("architecture from " + d)
     except BiRefNetUnavailable:
-        bits.append("no birefnet.py beside it -- cannot be loaded")
+        bits.append("no birefnet.py anywhere -- cannot be loaded")
     if size and size < 20:
         bits.append("suspiciously small for a BiRefNet checkpoint")
     return "; ".join(bits)

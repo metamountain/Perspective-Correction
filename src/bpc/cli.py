@@ -120,10 +120,10 @@ def build_parser():
                         "(see docs/detectors.md for the measurements)")
     g.add_argument("--mlsd-model", default="",
                    help="M-LSD tflite model path, or a filename inside models/")
-    g.add_argument("--mask", choices=["off", "auto", "file", "birefnet"],
+    g.add_argument("--mask", choices=["off", "file", "birefnet"],
                    default=Settings.mask_mode,
-                   help="'auto' vegetation/sky heuristic, 'file' a painted PNG or folder, "
-                        "'birefnet' segment the building out (see --birefnet-model)")
+                   help="'file' a painted PNG or a folder of them, 'birefnet' segment "
+                        "the building out (see --birefnet-model)")
     g.add_argument("--birefnet-model", default="",
                    help="BiRefNet weights, or 'auto' to search the usual ComfyUI "
                         "folders. Example: "
@@ -177,7 +177,17 @@ def build_parser():
                         "kept for images whose edges are heavily broken up)")
 
     g = p.add_argument_group("output")
-    g.add_argument("--crop", choices=["aspect", "inside", "none"], default=Settings.crop)
+    g.add_argument("--crop", choices=["auto", "aspect", "inside", "none"],
+                   default=Settings.crop,
+                   help="'auto' crops while the loss stays under --max-crop-loss and "
+                        "keeps the whole frame otherwise; 'aspect'/'inside' always crop; "
+                        "'none' never does")
+    g.add_argument("--max-crop-loss", type=float, default=Settings.max_crop_loss,
+                   help="with --crop auto, the share of the frame a crop may cost "
+                        "before the whole frame is kept and padded instead")
+    g.add_argument("--pad", choices=["edge", "black"], default=Settings.pad,
+                   help="what fills the corners a rotation opens up when the frame "
+                        "is kept: extend the border colour, or black")
     g.add_argument("--keep-size", action="store_true",
                    help="rescale the crop back to the original pixel dimensions")
     g.add_argument("--jpeg-quality", type=int, default=Settings.jpeg_quality)
@@ -233,6 +243,8 @@ def settings_from(args) -> Settings:
     s.min_confidence = args.min_confidence
     s.max_area_ratio = args.max_area
     s.crop = args.crop
+    s.max_crop_loss = args.max_crop_loss
+    s.pad = args.pad
     s.keep_size = args.keep_size
     s.jpeg_quality = args.jpeg_quality
     s.keep_exif = not args.no_exif
@@ -293,6 +305,7 @@ def diagnostics_text(args, settings) -> str:
                    "birefnet_threshold", "focal_35mm", "default_focal_35mm",
                    "focal_estimate", "min_confidence", "max_pitch_deg",
                    "max_roll_deg", "pitch_strength", "roll_strength", "crop",
+                   "max_crop_loss", "pad",
                    "detect_max_edge", "inlier_threshold_deg", "angular_softness",
                    "uncertain_pitch_damping", "seed")
     out.append("# settings: " + ", ".join(
@@ -390,7 +403,15 @@ def main(argv=None) -> int:
         log.close()
         return 0 if failed == 0 else 3
     if args.mask == "birefnet" and not args.birefnet_model:
-        print("--mask birefnet needs --birefnet-model <weights>, or 'auto'")
+        from . import birefnet as BN
+        found = BN.find_weights()
+        if found:
+            print("--mask birefnet needs --birefnet-model. This machine has:\n"
+                  "  " + found + "\n\nRun it with:\n"
+                  "    --mask birefnet --birefnet-model auto --remember")
+        else:
+            print("--mask birefnet needs --birefnet-model <weights>, or 'auto'.\n\n"
+                  + BN.what_you_need())
         return 2
     if args.mask == "file" and not args.mask_file:
         print("--mask file needs --mask-file <png or folder>")
