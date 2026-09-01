@@ -133,3 +133,140 @@ def test_the_mask_reports_how_many_lines_it_removed():
     dropped = (s.detect_info or {}).get("masked_out")
     assert dropped is not None
     assert f"{len(dropped)} line(s) removed" in s.status_text()
+
+
+# --------------------------------------------------------------------------
+# Hugin-style vertical control lines
+# --------------------------------------------------------------------------
+def _session_with_known_pose(pitch_deg=9.0, roll_deg=-2.0, seed=31):
+    """A synthetic scene whose true camera pose is known exactly."""
+    import synth
+    sc = synth.Scene(w=900, h=600, pitch_deg=pitch_deg, roll_deg=roll_deg, seed=seed)
+    return ReviewSession("scene.jpg", Settings(), image=sc.img), sc
+
+
+def test_two_control_lines_replace_the_detected_verticals():
+    """The contract: the user's assertion outranks the detector, it does not
+    join it. Two lines is the threshold because two is what determines a
+    vanishing point -- Hugin needs two as well."""
+    s, _ = _session_with_known_pose()
+    assert not s.control_active
+    before = len(s.model.vert_inliers)
+    i = s.add_control_line(300, 60, 300, 540)
+    assert i == 0
+    assert not s.control_active, "one line cannot determine a vanishing point"
+    s.add_control_line(600, 60, 600, 540)
+    assert s.control_active
+    # the detected pool is no longer what is being fitted, so no detected line
+    # is reported as an inlier
+    assert len(s.model.vert_inliers) == before
+    assert not s.model.vert_inliers.any()
+
+
+def test_a_control_line_that_is_really_vertical_recovers_the_true_pose():
+    """Drawn along the scene's actual world-verticals, the fit has to come back
+    to the pose the scene was rendered with.  Without this the feature is only a
+    way of replacing one guess with another.
+
+    The scene's world y axis is its vertical, so two points differing only in y
+    project to a genuine image vertical -- ground truth, not a detection.
+    """
+    s, sc = _session_with_known_pose(pitch_deg=9.0, roll_deg=-2.0)
+    for x_world in (-3.0, 3.0):
+        a = sc.project((x_world, -9.0, 16.0))
+        b = sc.project((x_world, 3.0, 16.0))
+        assert a and b
+        assert s.add_control_line(a[0], a[1], b[0], b[1]) is not None
+    assert s.control_active
+    tr, tp = sc.true_roll_pitch()
+    assert abs(math.degrees(s.model.roll - tr)) < 1.0,         f"roll off by {math.degrees(s.model.roll - tr):.2f} deg"
+    assert abs(math.degrees(s.model.pitch - tp)) < 1.5,         f"pitch off by {math.degrees(s.model.pitch - tp):.2f} deg"
+
+
+def test_control_lines_beat_a_detector_led_astray():
+    """The case striking-out cannot fix.
+
+    Every line the detector found may be real and still belong to the wrong
+    plane -- a corner view where the stronger facade is not the one the user
+    cares about.  There is then nothing to delete, only something to state, and
+    two clicks on the right wall have to move the answer.
+    """
+    import synth
+    sc = synth.Scene(w=900, h=600, pitch_deg=9.0, roll_deg=-2.0, seed=5, corner=True)
+    s = ReviewSession("corner.jpg", Settings(), image=sc.img)
+    auto_pitch = math.degrees(s.model.pitch)
+    for x_world in (-3.0, 3.0):
+        a = sc.project((x_world, -9.0, 16.0))
+        b = sc.project((x_world, 3.0, 16.0))
+        assert s.add_control_line(a[0], a[1], b[0], b[1]) is not None
+    tr, tp = sc.true_roll_pitch()
+    stated = math.degrees(s.model.pitch - tp)
+    assert abs(stated) < 1.5, (
+        f"pitch off by {stated:.2f} deg after stating the verticals; "
+        f"the automatic fit was off by {auto_pitch - math.degrees(tp):.2f}")
+
+
+def test_a_mis_click_that_marks_a_stub_is_refused():
+    """A control line steers the whole fit, so two points landing near each
+    other must not be quietly accepted: the direction of a short segment is
+    badly conditioned, and Hugin's own advice is to place the two points as far
+    apart as possible."""
+    s, _ = _session_with_known_pose()
+    assert s.add_control_line(300, 300, 306, 318) is None
+    assert len(s.control_lines) == 0
+    assert not s.control_active
+
+
+def test_control_lines_can_be_removed_and_reset():
+    s, _ = _session_with_known_pose()
+    s.add_control_line(300, 60, 300, 540)
+    s.add_control_line(600, 60, 600, 540)
+    assert s.control_active
+    assert s.pick_control_line(300, 300) == 0
+    assert s.remove_control_line(0)
+    assert not s.control_active
+    s.add_control_line(300, 60, 300, 540)
+    assert s.clear_control_lines() == 2
+    assert not s.control_active
+    assert s.pick_control_line(300, 300) is None
+
+
+def test_control_lines_survive_the_display_scaling():
+    """They are stored in analysis pixels but drawn and clicked in display
+    pixels; a round trip through both must land back where it started."""
+    import numpy as np
+    s, _ = _session_with_known_pose()
+    s.add_control_line(150, 30, 150, 270, display_scale=0.5)
+    back = s.control_lines_for_display(display_scale=0.5)
+    assert np.allclose(back[0], [150, 30, 150, 270], atol=1.0)
+
+
+def test_reset_to_auto_forgets_the_control_lines():
+    s, _ = _session_with_known_pose()
+    s.add_control_line(300, 60, 300, 540)
+    s.add_control_line(600, 60, 600, 540)
+    s.reset_to_auto()
+    assert len(s.control_lines) == 0
+    assert not s.control_active
+
+
+def test_marking_verticals_does_not_get_the_photo_skipped():
+    """The trap this feature walks straight into if nobody looks.
+
+    The confidence score is largely a count of supporting lines. Two control
+    lines are far below what it expects of a detector, so a photograph the user
+    had just told the truth about came back ``SKIP, conf=0.04, weakest: count``
+    -- the feature refusing its own input. Refusing evidence for being scarce is
+    right when a detector produced it and wrong when a person did.
+    """
+    import synth
+    sc = synth.Scene(w=900, h=600, pitch_deg=9.0, roll_deg=-2.0, seed=31)
+    s = ReviewSession("x.jpg", Settings(), image=sc.img)
+    for x_world in (-3.0, 3.0):
+        a = sc.project((x_world, -9.0, 16.0))
+        b = sc.project((x_world, 3.0, 16.0))
+        s.add_control_line(a[0], a[1], b[0], b[1])
+    assert s.control_active
+    assert s.would_skip() is None, f"would skip: {s.would_skip()}"
+    assert "MARKED" in s.status_text()
+    assert "conf=n/a" in s.status_text(), "a confidence built on line count is not meaningful here"

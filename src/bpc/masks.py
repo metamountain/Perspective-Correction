@@ -125,6 +125,14 @@ def load(path: str, shape, invert: bool = False) -> np.ndarray:
     img = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
     if img is None:
         raise ValueError(f"cannot read mask {path}")
+    # ultralytics replaces cv2.imread with its own wrapper on import -- to
+    # support non-ASCII paths -- and that wrapper returns (h, w, 1) for a
+    # greyscale read where OpenCV returns (h, w).  It is the first SAM backend
+    # tried, so merely *having* it installed silently broke --mask file, which
+    # is the bridge --mask-export writes for.  Squeeze rather than test for the
+    # patch: a mask is two dimensional by definition.
+    while img.ndim > 2:
+        img = img[..., 0]
     if img.shape[:2] != tuple(shape[:2]):
         img = cv2.resize(img, (shape[1], shape[0]), interpolation=cv2.INTER_NEAREST)
     m = img > 127
@@ -168,23 +176,17 @@ def build(bgr: np.ndarray, settings, image_path: str = "", seg=None):
     if mode == "file":
         return load(resolve(settings.mask_file, image_path), bgr.shape,
                     getattr(settings, "mask_invert", False)), "painted mask"
-    if mode == "sam":
-        from . import sam as SAM
-        path = getattr(settings, "sam_model", "")
+    if mode == "birefnet":
+        from . import birefnet as BN
+        path = getattr(settings, "birefnet_model", "")
         if not path:
-            raise ValueError("--mask sam needs --sam-model <checkpoint>")
-        text = (getattr(settings, "sam_text", "") or "").strip()
-        if text:
-            return SAM.mask_from_text(bgr, path, text,
-                                      getattr(settings, "sam_max_edge", 768),
-                                      getattr(settings, "sam_device", ""))
-        if seg is None:
-            seg = np.zeros((0, 4))
-        return SAM.mask_from_segments(
-            bgr, seg, path,
-            min_density_ratio=getattr(settings, "sam_min_density", 0.25),
-            max_edge=getattr(settings, "sam_max_edge", 768),
-            device=getattr(settings, "sam_device", ""))
+            raise ValueError("--mask birefnet needs --birefnet-model <weights>")
+        return BN.build_mask(
+            bgr, path,
+            threshold=getattr(settings, "birefnet_threshold", BN.DEFAULT_THRESHOLD),
+            device=getattr(settings, "birefnet_device", ""),
+            res=getattr(settings, "birefnet_res", 0),
+            shrink_frac=getattr(settings, "birefnet_shrink_frac", 0.008))
     return vegetation_and_sky(bgr), "vegetation and sky heuristic"
 
 
@@ -223,13 +225,43 @@ def credible(before: np.ndarray, after: np.ndarray, max_lost: float = MAX_EVIDEN
     return True, ""
 
 
+def drop_by_endpoints(seg: np.ndarray, mask: np.ndarray) -> np.ndarray:
+    """Keep every segment unless **both** its endpoints lie inside the mask.
+
+    The strictest reading of what a mask is for, and deliberately the most
+    conservative one: a line is discarded only when there is no doubt at all
+    that it belongs to the masked region.  Anything crossing the boundary --
+    a facade edge running down into shrubbery, a roofline against the sky --
+    keeps its full say, because the half of it that is on the building is real
+    evidence and the fit is length-weighted anyway.
+
+    Two rules it replaced, in order.  First a sampled threshold that dropped a
+    segment once 60 % of five points along it fell inside; that discarded
+    straddling lines wholesale, and which side of the threshold a line landed on
+    turned on a sample or two.  Then a per-segment weight equal to the visible
+    fraction, which is gentler but makes the mask a soft influence on every line
+    rather than a decision about a few.  Endpoints are unambiguous, need no
+    constant, and cannot half-remove anything.
+    """
+    if len(seg) == 0 or mask is None:
+        return seg
+    h, w = mask.shape[:2]
+    x0 = np.clip(seg[:, 0].astype(int), 0, w - 1)
+    y0 = np.clip(seg[:, 1].astype(int), 0, h - 1)
+    x1 = np.clip(seg[:, 2].astype(int), 0, w - 1)
+    y1 = np.clip(seg[:, 3].astype(int), 0, h - 1)
+    both_inside = mask[y0, x0] & mask[y1, x1]
+    return seg[~both_inside]
+
+
 def drop_masked(seg: np.ndarray, mask: np.ndarray, samples: int = 5,
                 tolerance: float = 0.6) -> np.ndarray:
     """Remove segments that lie mostly inside the mask.
 
-    Sampled along the segment rather than tested at the midpoint: a line running
-    from a wall into a tree is half evidence, and dropping it only when most of
-    it is masked keeps the useful half from being thrown away with the rest.
+    Superseded in the pipeline by ``drop_by_endpoints``, which needs no
+    threshold at all.  Kept because a sampled test is the right primitive when
+    the question really is "how much of this lies inside", and because the
+    threshold behaviour is worth keeping tested.
     """
     if len(seg) == 0 or mask is None:
         return seg

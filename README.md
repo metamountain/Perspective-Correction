@@ -32,7 +32,7 @@ or double-click `run_gui.bat` on Windows.
 
 To produce something reviewable — by a colleague, or by an assistant helping you
 tune it — drop a photo folder onto **`run_and_log.bat`**. It finds ComfyUI's
-python by itself (the one with torch and CUDA), offers any SAM checkpoint it
+python by itself (the one with torch and CUDA), offers the BiRefNet weights it
 finds, and writes one folder holding the corrected images, the detection
 overlays, a `log.txt` that begins with the environment and settings that
 produced it, and a machine-readable `report.json`. A log that says "SKIPPED, low
@@ -58,11 +58,11 @@ Log lines are one per file:
 | `--crop aspect\|inside\|none` | keep the original aspect ratio, fit inside, or don't crop |
 | `--detector hybrid` | combine LSD's precision with M-LSD's judgement. Needs `pip install ai-edge-litert` ([measurements](docs/detectors.md)) |
 | `--mask auto` | ignore lines in vegetation and sky. **Pair it with `--focal-35mm`** ([why](docs/masking.md)) |
-| `--remember` | store `--sam-model`, `--mask-file`, `-o` and `--focal-35mm` as defaults; `--forget` clears them |
-| `--sam-model auto` | find a usable checkpoint in the usual ComfyUI folders |
-| `--sam-info` | which backends this Python has, and whether a checkpoint loads |
-| `--sam-export DIR` | run SAM once from the Python that has torch; use the folder anywhere afterwards |
-| `--mask sam --sam-model PATH` | Segment Anything decides what is clutter; SAM supplies the boundaries, the line detector the labels ([details](docs/masking.md)) |
+| `--remember` | store `--birefnet-model`, `--mask-file`, `-o` and `--focal-35mm` as defaults; `--forget` clears them |
+| `--birefnet-model auto` | find usable weights in the usual ComfyUI folders |
+| `--mask-info` | what this Python can import, and whether the weights load |
+| `--mask-export DIR` | write the masks once -- from the Python that has torch, or just to stop recomputing them |
+| `--mask birefnet --birefnet-model PATH` | segment the building out and ignore everything else ([details](docs/masking.md)) |
 | `--mask file --mask-file DIR` | one PNG mask per photo from any other tool |
 | `--debug-dir DIR` | write line/horizon overlays and before-after pairs |
 | `--json-report FILE` | machine-readable results |
@@ -100,8 +100,13 @@ row -- especially a SKIPPED one -- to open manual review:
   without it. One button strikes out everything leaning more than 18 deg, which
   is usually the roof;
 * **save correction** or **keep original**;
-* a **region mask** panel: switch between `off`, `auto` and a folder of masks
-  from an external segmenter such as SAM, with an **opacity slider**, and see
+* **mark a vertical** — click two points on something you know is vertical (a
+  door jamb, a downpipe, a building corner) and that outranks the detector
+  entirely. Hugin's `t2` control point; two of them determine the answer. The
+  case for it is the corner view where every detected line is real and belongs
+  to the wrong wall — nothing to delete, only something to state.
+* a **region mask** panel: switch between `off`, `auto`, `birefnet` and a folder
+  of masks from any other tool, with an **opacity slider**, and see
   the excluded area and the lines it removed straight away. A mask you cannot
   see is a mask you cannot trust.
 
