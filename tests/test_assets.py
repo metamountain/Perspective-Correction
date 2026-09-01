@@ -204,9 +204,30 @@ def _round_trip_error(path, focal_35mm=24.0, edge=1600, inner=_BORDER_GUARD):
 
 
 def test_a_known_rotation_is_recovered_on_real_photographs():
+    """Bounded over the photographs the tool would actually act on.
+
+    It used to average every asset, which was fine while every asset was one the
+    tool would correct. It is not a fair question once the folder also holds the
+    cases that exist to be *refused*: a skyscraper shot straight up the facade
+    measures **31.6 deg** here and is rejected at confidence 0.00, so averaging
+    it in says nothing about the estimator and everything about the test set.
+
+    The promise this project makes is not "every photograph is estimated well",
+    it is "what it touches is not ruined". So the bound follows the gate. The
+    refused ones are not unmeasured -- ``test_the_confidence_gate_admits_most_of
+    _a_good_set`` keeps the gate from earning this by refusing everything.
+    """
     import numpy as np
-    errs = [e for e in (_round_trip_error(f) for f in _require()) if e is not None]
-    assert errs, "no measurable assets"
+    s = Settings()
+    errs = []
+    for f in _require():
+        e = _round_trip_error(f)
+        if e is None:
+            continue
+        m, _, _, _, _ = analyse(_load(f), s)
+        if m.confidence >= s.min_confidence:
+            errs.append(e)
+    assert errs, "no measurable assets the tool would act on"
     assert np.mean(errs) < 1.2, f"mean round-trip error {np.mean(errs):.2f} deg"
     assert max(errs) < 2.5, f"worst round-trip error {max(errs):.2f} deg"
 

@@ -373,6 +373,42 @@ are worth remembering as a shape:
 **A benchmark that is wrong in the incumbent's disfavour is the dangerous kind**,
 because it reads as a discovery rather than a bug.
 
+## Beyond the limit means refuse, not trim
+
+`--max-pitch` and `--max-roll` used to be caps: an estimate past them was
+clamped to the cap and applied. That turns "I do not believe this" into "I will
+do as much of it as I am allowed to", which is the opposite of every other
+decision in this tool.
+
+What exposed it was a photograph of a railway station ceiling, added while
+filling in the asset wishlist. A coffered ceiling has a strong, clean bundle of
+parallel lines and a perfectly good vanishing point, so the estimator found it
+correctly and every confidence factor scored well — **0.57**, better than most
+of the barns. Nothing in the model can tell that the bundle it locked onto is
+the ceiling grid rather than the world vertical. The result was pitch pinned to
+the `-20 deg` clamp and 41 % of the frame thrown away, at high confidence.
+
+**Confidence cannot catch this and is not built to.** Every factor it scores —
+share, count, spread, horizon support, focal, stability — measures *how well the
+lines agree*, never *whether they are the right lines*. On a ceiling they agree
+beautifully.
+
+The magnitude of the correction can, and does. Two ceilings wanted 24 and 26
+degrees of pitch; the most extreme genuine facade in the asset set, a modern
+hospital shot from below, wants 16.6 and is untouched by the rule. So
+`refuse_beyond_limit` is on by default and `--clamp-beyond-limit` restores the
+old behaviour for anyone who wants it.
+
+It is a magnitude test, not a semantic one, so it does not *understand* the
+difference between a ceiling and a wall — it only notices that one of them asks
+for something no photographer plausibly wanted. That is enough here and it is
+the kind of guard this project prefers: cheap, and wrong in the safe direction.
+
+**Masking catches the same case independently**, which is worth knowing: with
+`--mask birefnet` the Prague ceiling falls to confidence 0.09, because a
+segmenter looking for a salient object finds almost nothing in a ceiling texture
+(95 % of the frame masked). A semantic check in front of a geometric one.
+
 ## Known weakness, stated plainly
 
 **A flat-on facade with no EXIF.** One horizontal direction fixes one *point* on

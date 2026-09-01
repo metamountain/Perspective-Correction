@@ -83,6 +83,11 @@ def build_parser():
                    help="cap on the converging-verticals fix, degrees")
     g.add_argument("--max-roll", type=float, default=Settings.max_roll_deg,
                    help="cap on levelling, degrees")
+    g.add_argument("--clamp-beyond-limit", action="store_true",
+                   help="apply the capped correction when the estimate runs past "
+                        "--max-pitch/--max-roll, instead of refusing the photo. "
+                        "The default is to refuse: an estimate that extreme is "
+                        "usually about something that is not a facade")
     g.add_argument("--min-correction", type=float, default=Settings.min_correction_deg,
                    help="below this the photo counts as already upright, degrees")
     g.add_argument("--no-roll", action="store_true", help="never level, only fix verticals")
@@ -221,6 +226,7 @@ def settings_from(args) -> Settings:
     s.roll_strength = args.strength if args.roll_strength is None else args.roll_strength
     s.max_pitch_deg = args.max_pitch
     s.max_roll_deg = args.max_roll
+    s.refuse_beyond_limit = not args.clamp_beyond_limit
     s.min_correction_deg = args.min_correction
     s.correct_roll = not args.no_roll
     s.correct_pitch = not args.no_pitch

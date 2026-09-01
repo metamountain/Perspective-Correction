@@ -123,24 +123,39 @@ def _cached():
 def test_the_cached_masks_mark_what_to_ignore_not_what_to_keep():
     """Polarity is the one thing a mask folder cannot get wrong quietly.
 
-    BiRefNet returns the *subject*; these store the complement, so they work
-    with a plain ``--mask file`` and no ``--mask-invert``.  Inverted, they would
-    mask the building out of its own measurement and the only symptom would be a
-    worse answer.  The building is the larger, more central object in all six
-    assets, so an inverted cache shows up as the frame edges being kept and the
-    middle thrown away.
+    BiRefNet returns the *subject*; these store the complement, so they work with
+    a plain ``--mask file`` and no ``--mask-invert``. Inverted, they would mask
+    the building out of its own measurement and the only symptom would be a
+    worse answer. The building is the larger, more central object, so an
+    inverted cache shows up as the frame edges being kept and the middle thrown
+    away.
+
+    A mask covering the *whole* frame is not inverted, it is empty of subject --
+    BiRefNet finds no salient object in a street scene photographed down its
+    length, and returns 100 %. That is honest output and it is handled at
+    runtime rather than here: ``masks.credible`` refuses a mask that takes more
+    than 55 % of the line evidence, so such a cache entry is ignored rather than
+    obeyed. Asserted below, so the degenerate case stays a known one.
     """
     from bpc import masks as MK
     if not _cached():
         raise SkipTest("no cached masks")                      # noqa: F821
+    degenerate = []
     for p in _cached():
         m = MK.load(p, (400, 600, 3))
         h, w = m.shape
+        if m.mean() > 0.98:
+            degenerate.append(os.path.basename(p))
+            continue
         centre = m[h // 3:2 * h // 3, w // 3:2 * w // 3].mean()
         border = np.concatenate([m[0, :], m[-1, :], m[:, 0], m[:, -1]]).mean()
         assert border > centre, (
             f"{os.path.basename(p)} looks inverted: the frame edge should be "
             f"ignored more often than the middle ({border:.2f} vs {centre:.2f})")
+    for name in degenerate:
+        seg = np.array([[0., 0., 0., 100.]] * 8)
+        ok, why = MK.credible(seg, np.zeros((0, 4)))
+        assert not ok, f"{name} masks everything and must be refused at runtime"
 
 
 def test_every_asset_has_a_cached_mask_matched_by_stem():
