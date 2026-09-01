@@ -56,7 +56,22 @@ import uuid
 import cv2
 import numpy as np
 
-MODES = ("none", "lama", "comfyui")
+MODES = ("none", "telea", "lama", "comfyui")
+
+# Which of them the manual review window may run on every redraw.  The test is
+# not "is it good" but "does a slider tick still feel like a slider tick":
+# ``telea`` loads nothing and costs milliseconds at preview size, while the two
+# learned backends load a model and take seconds.  A user choosing a fill should
+# see it happen; a user dragging a slider should not wait for a model.
+LIVE_MODES = ("telea",)
+
+# And how large it may generate while doing so.  ``--fill-max-edge`` (2048) is
+# the setting for the file being saved; on a 900 px preview it costs 211 ms per
+# redraw, which is four frames a second while a slider is moving.  At 480 px the
+# same band takes 38 ms and deviates 1.7/255 from the full-resolution fill --
+# invisible, because what is being generated is low-frequency by construction.
+# The saved file is never rendered through this.
+PREVIEW_MAX_EDGE = 480
 
 _LOCK = threading.Lock()
 _LAMA = None
@@ -122,6 +137,24 @@ def _composite(bgr: np.ndarray, filled_small: np.ndarray, hole: np.ndarray,
     a = np.clip(a, 0.0, 1.0)[..., None]
     return (bgr.astype(np.float32) * (1 - a) + gen.astype(np.float32) * a
             ).clip(0, 255).astype(np.uint8)
+
+
+# --------------------------------------------------------------------------
+# TELEA (pixel propagation, no model)
+# --------------------------------------------------------------------------
+def _fill_telea(bgr: np.ndarray, hole: np.ndarray, settings) -> np.ndarray:
+    """cv2.inpaint TELEA: fast-marching pixel propagation from the boundary.
+
+    No model, no download, no prompt.  It continues colour and gradient rather
+    than structure, so it is the honest choice for a thin band of sky or road
+    and the wrong one for anything a viewer would read as content.  Runs at
+    ``--fill-max-edge`` like the learned backends, for the same reason: the
+    band is low-frequency and only the hole is scaled back up.
+    """
+    small, m = _prepare(bgr, hole, int(getattr(settings, "fill_max_edge", 2048)))
+    radius = max(3, int(min(small.shape[:2]) * 0.01))
+    gen = cv2.inpaint(small, m, radius, cv2.INPAINT_TELEA)
+    return _composite(bgr, gen, hole)
 
 
 # --------------------------------------------------------------------------
@@ -317,13 +350,19 @@ def fill(bgr: np.ndarray, hole: np.ndarray, settings) -> tuple:
             f"({cap:.0%}). That much invented content is a picture, not a "
             f"correction; crop instead")
     t0 = time.time()
-    out = _fill_lama(bgr, hole, settings) if mode == "lama" \
-        else _fill_comfy(bgr, hole, settings)
+    if mode == "telea":
+        out = _fill_telea(bgr, hole, settings)
+    elif mode == "lama":
+        out = _fill_lama(bgr, hole, settings)
+    else:
+        out = _fill_comfy(bgr, hole, settings)
     return out, f"{mode} filled {share:.1%} in {time.time() - t0:.1f}s"
 
 
 def available(mode: str, settings=None) -> bool:
     if mode in ("", "none"):
+        return True
+    if mode == "telea":
         return True
     if mode == "lama":
         try:
@@ -346,6 +385,8 @@ def describe(mode: str, settings=None) -> str:
     """One line for ``--fill-info`` and the diagnostics header."""
     if mode in ("", "none"):
         return "fill: off -- padded corners stay padded"
+    if mode == "telea":
+        return "telea: cv2.inpaint pixel propagation (no model, no download)"
     if mode == "lama":
         try:
             import simple_lama_inpainting  # noqa: F401

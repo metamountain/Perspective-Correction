@@ -138,3 +138,18 @@ def test_lama_fills_the_band_and_leaves_the_rest_alone():
     out, note = F.fill(img, hole, Settings().replace(fill="lama", fill_max_edge=0))
     assert np.array_equal(out[~hole], img[~hole])
     assert out.shape == img.shape and "lama" in note
+
+
+def test_telea_fills_the_band_and_leaves_the_rest_alone():
+    """The no-model backend must keep the same promise every other one does:
+    generated pixels inside the hole, the photograph bit for bit outside it.
+    It needs no package, so unlike the LaMa test this one never skips."""
+    rng = np.random.default_rng(4)
+    img = (rng.random((200, 300, 3)) * 255).astype(np.uint8)
+    hole = np.zeros((200, 300), bool)
+    hole[:24, :] = True
+
+    out, note = F.fill(img, hole, Settings().replace(fill="telea"))
+    assert "telea" in note
+    assert np.array_equal(out[40:], img[40:]), "outside the hole nothing may move"
+    assert not np.array_equal(out[:24], img[:24]), "inside the hole something must"

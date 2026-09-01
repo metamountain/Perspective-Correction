@@ -202,9 +202,10 @@ def build_parser():
                    help="what fills the corners a rotation opens up when the frame "
                         "is kept: 'edge' extends the border colour, or give a colour "
                         "as a name (black, white, grey), #rrggbb, or r,g,b")
-    g.add_argument("--fill", choices=["none", "lama", "comfyui"], default=Settings.fill,
+    g.add_argument("--fill", choices=["none", "telea", "lama", "comfyui"], default=Settings.fill,
                    help="generate the padded band instead of leaving it padded. "
-                        "'lama' needs simple-lama-inpainting, 'comfyui' a running "
+                        "'telea' needs nothing, 'lama' needs "
+                        "simple-lama-inpainting, 'comfyui' a running "
                         "ComfyUI. Off by default: these pixels were never "
                         "photographed, and only the padded band is ever touched. "
                         "Each -j worker loads its own copy of the model")
@@ -463,7 +464,7 @@ def main(argv=None) -> int:
                                 comfy_workflow=args.comfy_workflow)
         print(FILL.describe(args.fill, st))
         if args.fill == "none":
-            print("(pass --fill lama or --fill comfyui to check a backend)")
+            print("(pass --fill telea, lama or comfyui to check a backend)")
         return 0
     if args.detector_info:
         return detector_info(args)
