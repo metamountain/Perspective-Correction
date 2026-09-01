@@ -78,7 +78,7 @@ class Settings:
     # ---- output ----
     crop: str = "auto"                  # auto | aspect | inside | none
     max_crop_loss: float = 0.05         # auto pads rather than crop past this
-    pad: str = "edge"                   # edge | black
+    pad: str = "edge"                   # edge | black | white | #rrggbb | r,g,b
     keep_size: bool = False
     interpolation: str = "lanczos"      # lanczos | cubic | linear
     jpeg_quality: int = 95

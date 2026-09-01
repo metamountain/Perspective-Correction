@@ -302,3 +302,58 @@ def test_marking_verticals_does_not_get_the_photo_skipped():
     assert s.would_skip() is None, f"would skip: {s.would_skip()}"
     assert "MARKED" in s.status_text()
     assert "conf=n/a" in s.status_text(), "a confidence built on line count is not meaningful here"
+
+
+# --------------------------------------------------------------------------
+# manual crop, after the frame has been kept and padded
+# --------------------------------------------------------------------------
+def test_a_hand_drawn_crop_is_kept_in_fractions_not_pixels():
+    """The preview is a few hundred pixels and the file is saved at full size,
+    so a rectangle in pixels would mean two different things. Fractions mean the
+    same thing at both, which is what makes the preview honest."""
+    s, _ = _session(seed=41)
+    assert s.crop_rect is None
+    assert s.set_crop_rect(50, 25, 250, 175, shown_w=300, shown_h=200)
+    assert s.crop_rect == (50 / 300, 25 / 200, 250 / 300, 175 / 200)
+    small = s.render_after(240)
+    big = s.render_after(700)
+    a = small.shape[1] / small.shape[0]
+    b = big.shape[1] / big.shape[0]
+    assert abs(a - b) < 0.05, f"the crop changed shape with the preview size: {a} vs {b}"
+
+
+def test_a_crop_drawn_backwards_or_by_accident_is_handled():
+    """Dragging right-to-left is the same rectangle, and a stray click is not a
+    crop -- a rectangle a few pixels across would otherwise delete the picture."""
+    s, _ = _session(seed=42)
+    assert s.set_crop_rect(250, 175, 50, 25, shown_w=300, shown_h=200)
+    assert s.crop_rect[0] < s.crop_rect[2] and s.crop_rect[1] < s.crop_rect[3]
+    s.clear_crop_rect()
+    assert not s.set_crop_rect(100, 100, 104, 103, shown_w=300, shown_h=200)
+    assert s.crop_rect is None
+
+
+def test_the_crop_survives_into_the_saved_file():
+    import os
+    import tempfile
+
+    import cv2
+    s, _ = _session(seed=43)
+    with tempfile.TemporaryDirectory() as d:
+        plain = os.path.join(d, "plain.jpg")
+        s.save(plain)
+        h0, w0 = cv2.imread(plain).shape[:2]
+        s.set_crop_rect(0.25 * 300, 0.25 * 200, 0.75 * 300, 0.75 * 200,
+                        shown_w=300, shown_h=200)
+        cropped = os.path.join(d, "cropped.jpg")
+        s.save(cropped)
+        h1, w1 = cv2.imread(cropped).shape[:2]
+    assert w1 < w0 and h1 < h0, f"{w1}x{h1} is not inside {w0}x{h0}"
+    assert abs(w1 / w0 - 0.5) < 0.05 and abs(h1 / h0 - 0.5) < 0.05
+
+
+def test_reset_to_auto_forgets_the_crop_too():
+    s, _ = _session(seed=44)
+    s.set_crop_rect(10, 10, 200, 150, shown_w=300, shown_h=200)
+    s.reset_to_auto()
+    assert s.crop_rect is None

@@ -168,23 +168,80 @@ def plan(img_w: int, img_h: int, H: np.ndarray, settings):
     return S @ H, max(ow, 1), max(oh, 1), float(coverage), area_ratio
 
 
+def pad_colour(spec: str):
+    """``(b, g, r)`` for a colour spec, or ``None`` meaning "extend the edge".
+
+    Accepts ``edge``, a colour name, ``#rrggbb``/``#rgb``, or ``r,g,b``.  A
+    spec that cannot be read falls back to ``edge`` rather than raising: a
+    mistyped colour should not abort a batch that is otherwise fine, and the
+    fallback is the safe-looking one.
+    """
+    s = (spec or "edge").strip().lower()
+    if s in ("", "edge", "replicate", "extend"):
+        return None
+    named = {"black": (0, 0, 0), "white": (255, 255, 255), "grey": (128, 128, 128),
+             "gray": (128, 128, 128), "mid": (128, 128, 128)}
+    if s in named:
+        return named[s]
+    if s.startswith("#"):
+        h = s[1:]
+        if len(h) == 3:
+            h = "".join(c * 2 for c in h)
+        if len(h) == 6:
+            try:
+                r, g, b = (int(h[i:i + 2], 16) for i in (0, 2, 4))
+                return (b, g, r)
+            except ValueError:
+                return None
+        return None
+    parts = [p for p in s.replace(";", ",").split(",") if p.strip()]
+    if len(parts) == 3:
+        try:
+            r, g, b = (max(0, min(255, int(float(p)))) for p in parts)
+            return (b, g, r)
+        except ValueError:
+            return None
+    return None
+
+
 def apply(img: np.ndarray, H_total: np.ndarray, out_w: int, out_h: int, settings):
     """Render the plan.
 
     ``pad`` decides what fills the corners a rotation opens up, and only matters
     when the plan kept the whole frame rather than cropping into it:
 
-    ``edge``   extend the border colour outwards (the default).  It reads as a
-               soft vignette rather than a defect, and it is what makes an
-               un-cropped result usable straight out of the batch.
-    ``black``  honest and obvious.  Better when the output is going into a
-               layout that will crop it anyway, or when a smeared edge would be
-               mistaken for real content.
+    ``edge``    extend the border colour outwards (the default).  It reads as a
+                soft vignette rather than a defect, which is what makes an
+                un-cropped result usable straight out of the batch.
+    a colour    ``black``, ``white``, ``#rrggbb`` or ``r,g,b``.  Honest and
+                obvious, and the right choice when the result is going into a
+                layout that will crop it anyway, when a smeared edge would be
+                mistaken for real content, or when the fill is going to be
+                replaced -- by a manual crop, or by inpainting.
     """
     flags = _INTERP.get(settings.interpolation, cv2.INTER_LANCZOS4)
-    if getattr(settings, "pad", "edge") == "black":
+    colour = pad_colour(getattr(settings, "pad", "edge"))
+    if colour is not None:
         return cv2.warpPerspective(img, H_total, (out_w, out_h), flags=flags,
                                    borderMode=cv2.BORDER_CONSTANT,
-                                   borderValue=(0, 0, 0))
+                                   borderValue=colour)
     return cv2.warpPerspective(img, H_total, (out_w, out_h), flags=flags,
                                borderMode=cv2.BORDER_REPLICATE)
+
+
+def filled_region(H_total: np.ndarray, src_w: int, src_h: int,
+                  out_w: int, out_h: int, grow: int = 3) -> np.ndarray:
+    """True where the output has no source pixel behind it.
+
+    Warping a white frame the same way is the only reliable way to know: the
+    quad corners give the outline but not the sub-pixel fringe the resampler
+    leaves, and that fringe is what shows as a dark rim after inpainting.  Grown
+    by a few pixels for the same reason.
+    """
+    ones = np.full((src_h, src_w), 255, np.uint8)
+    valid = cv2.warpPerspective(ones, H_total, (out_w, out_h), flags=cv2.INTER_NEAREST,
+                                borderMode=cv2.BORDER_CONSTANT, borderValue=0)
+    hole = (valid < 128).astype(np.uint8)
+    if grow > 0:
+        hole = cv2.dilate(hole, np.ones((2 * grow + 1,) * 2, np.uint8))
+    return hole.astype(bool)
