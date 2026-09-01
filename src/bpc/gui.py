@@ -21,7 +21,7 @@ import threading
 import traceback
 
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+from tkinter import colorchooser, filedialog, messagebox, ttk
 
 # Drag and drop is not in the standard library.  tkinterdnd2 provides it and is
 # a small pure-Tcl extension, but the window has to work without it, so the drop
@@ -172,6 +172,152 @@ def _to_photo(bgr, box):
     return ImageTk.PhotoImage(Image.fromarray(rgb)), s
 
 
+# --------------------------------------------------------------------------
+# Beholder pyramid -- the all-seeing eye in a triangle, this project's mark.
+# Drawn twice from one set of normalized points so they agree: as Tk canvas
+# geometry for the window headers, and via PIL for the OS taskbar icon.
+# --------------------------------------------------------------------------
+def _beholder_points(w, h):
+    """Map the pyramid / eye / pupil into a ``w`` x ``h`` box."""
+    tri = ((0.50 * w, 0.08 * h), (0.10 * w, 0.92 * h), (0.90 * w, 0.92 * h))
+    eye_box = (0.30 * w, 0.50 * h, 0.70 * w, 0.72 * h)
+    pcx, pcy, pr = 0.50 * w, 0.60 * h, 0.05 * w
+    pupil_box = (pcx - pr, pcy - pr, pcx + pr, pcy + pr)
+    return tri, eye_box, pupil_box
+
+
+def _emblem_size(root):
+    """DPI-flexible emblem size: ~28px base, scales with the display, clamped."""
+    try:
+        scale = max(0.75, min(root.winfo_fpixels("1i") / 96.0, 2.0))
+    except Exception:
+        scale = 1.0
+    return max(20, min(40, int(round(28 * scale))))
+
+
+def _draw_eye_pyramid(canvas):
+    """Draw the mark on a Tk canvas sized to its own width/height."""
+    w = max(int(canvas.winfo_width()), 1)
+    h = max(int(canvas.winfo_height()), 1)
+    tri, eye_box, pupil_box = _beholder_points(w, h)
+    col = "#ffffff"
+    canvas.create_polygon(*tri, outline=col, width=2, fill="")
+    canvas.create_oval(eye_box, outline=col, width=2, fill="")
+    canvas.create_oval(pupil_box, outline=col, fill=col, width=1)
+
+
+LOGO_FILE = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                          "..", "..", "Logo_BPC.png"))
+
+
+def _logo_image(size, colour):
+    """The shipped mark at ``size``, recoloured to ``colour``, or ``None``.
+
+    ``Logo_BPC.png`` is a black silhouette on transparency, and this window's
+    ground is dark, so drawing it as it comes gives a black shape on a black
+    panel.  What is used is its **alpha channel**; the colour comes from the
+    palette, which also means the mark follows the theme instead of fighting it.
+
+    ``None`` when the file is absent: the logo is an asset, not a dependency,
+    and a window that refuses to open because a PNG is missing would be a far
+    worse bug than a missing logo.
+    """
+    try:
+        src = Image.open(LOGO_FILE).convert("RGBA")
+    except Exception:
+        return None
+    src = src.resize((size, size), Image.LANCZOS)
+    tint = Image.new("RGBA", (size, size), colour)
+    tint.putalpha(src.getchannel("A"))
+    return tint
+
+
+def _beholder_pil(size=64):
+    """The mark as a black-background RGBA PIL image, for ``iconphoto``.
+
+    Backed on black rather than left transparent: a taskbar's own colour is not
+    knowable, and a white-on-nothing glyph disappears on half of them.
+    """
+    from PIL import ImageDraw
+    img = Image.new("RGBA", (size, size), (0, 0, 0, 255))
+    mark = _logo_image(size, "#ffffff")
+    if mark is not None:
+        img.alpha_composite(mark)
+        return img
+    d = ImageDraw.Draw(img)
+    col = (255, 255, 255, 255)
+    tri, eye_box, pupil_box = _beholder_points(size, size)
+    lw = max(1, int(round(size / 32)))
+    d.line([tri[0], tri[1], tri[2], tri[0]], fill=col, width=lw, joint="curve")
+    d.ellipse(eye_box, outline=col, width=lw)
+    d.ellipse(pupil_box, fill=col)
+    return img
+
+
+def _set_window_icon(win):
+    """Set the OS taskbar icon; returns the PhotoImage ref (store it to avoid GC)."""
+    try:
+        photo = ImageTk.PhotoImage(_beholder_pil(64))
+        win.iconphoto(True, photo)
+        return photo
+    except Exception:
+        return None
+
+
+def _attach_tooltip(widget, text):
+    """A plain hover tooltip; no dependency beyond Tk itself."""
+    tip = {"t": None}
+
+    def show(_e=None):
+        if tip["t"] is not None:
+            return
+        t = tk.Toplevel(widget)
+        t.wm_overrideredirect(True)
+        x = widget.winfo_rootx() + 12
+        y = widget.winfo_rooty() + widget.winfo_height() + 4
+        t.wm_geometry(f"+{x}+{y}")
+        lbl = tk.Label(t, text=text, background="#0b1017", foreground=INK["text"],
+                       font=("TkDefaultFont", 9), padx=8, pady=4, relief="solid",
+                       borderwidth=1, wraplength=320, justify="left")
+        lbl.pack()
+        tip["t"] = t
+
+    def hide(_e=None):
+        if tip["t"] is not None:
+            tip["t"].destroy()
+            tip["t"] = None
+
+    widget.bind("<Enter>", show)
+    widget.bind("<Leave>", hide)
+
+
+def _brand_header(parent):
+    """Emblem + wordmark, packed at the top of a window."""
+    bar = ttk.Frame(parent)
+    bar.pack(fill="x", side="top")
+    size = _emblem_size(parent)
+    mark = _logo_image(size, INK["text"])
+    if mark is not None:
+        photo = ImageTk.PhotoImage(mark)
+        lbl = ttk.Label(bar, image=photo)
+        lbl.image = photo               # a Label keeps no reference of its own
+        lbl.pack(side="left", padx=(2, 8), pady=4)
+    else:
+        # Drawn only when the PNG is missing.  On `<Configure>` rather than
+        # after `update_idletasks`, because a canvas that has not been mapped
+        # yet reports a width of 1 -- which drew the whole mark into a single
+        # pixel and looked like a stray white dot beside the title.
+        cv = tk.Canvas(bar, width=size, height=size, bg=INK["bg"],
+                       highlightthickness=0)
+        cv.pack(side="left", padx=(2, 8), pady=4)
+        cv.bind("<Configure>",
+                lambda e, c=cv: (c.delete("all"), _draw_eye_pyramid(c)))
+    title = ttk.Label(bar, text="Batch Perspective Correction", style="Title.TLabel")
+    title.pack(side="left", anchor="w")
+    _attach_tooltip(title, "Batch perspective correction for architectural photographs")
+    return bar
+
+
 # ==========================================================================
 # review window
 # ==========================================================================
@@ -183,6 +329,7 @@ class ReviewWindow(tk.Toplevel):
         self.minsize(900, 600)
         apply_theme(self)
         self.configure(background=INK["bg"])
+        self._icon = _set_window_icon(self)
         self.settings = settings
         self.dest_path = dest_path
         self.on_saved = on_saved
@@ -202,6 +349,7 @@ class ReviewWindow(tk.Toplevel):
 
     # -- layout ----------------------------------------------------------
     def _build(self):
+        _brand_header(self)
         top = ttk.Frame(self, padding=6)
         top.pack(fill="both", expand=True)
 
@@ -220,7 +368,12 @@ class ReviewWindow(tk.Toplevel):
         self.c_after = tk.Canvas(panes, bg=INK["field"], highlightthickness=0)
         self.c_after.grid(row=1, column=1, sticky="nsew", padx=(3, 0))
         self._pending_mark = None
+        self._after_off = (0, 0)
+        self._crop_drag_start = None
         self.c_before.bind("<Button-1>", self._on_click_before)
+        self.c_after.bind("<ButtonPress-1>", self._on_crop_press)
+        self.c_after.bind("<B1-Motion>", self._on_crop_drag)
+        self.c_after.bind("<ButtonRelease-1>", self._on_crop_release)
         for c in (self.c_before, self.c_after):
             c.bind("<Configure>", lambda e: self._schedule_redraw())
 
@@ -229,7 +382,7 @@ class ReviewWindow(tk.Toplevel):
                               background=INK["field"], foreground=INK["dim"],
                               font=("TkFixedFont",))
         self.status.pack(fill="x", pady=(6, 4))
-        self.status.configure(state="disabled")
+        self.status.bind("<Key>", lambda e: "break")
 
         ctl = ttk.Frame(top, padding=(0, 8, 0, 0))
         ctl.pack(fill="x")
@@ -278,6 +431,23 @@ class ReviewWindow(tk.Toplevel):
                                                             sticky="ew", padx=6)
         msk.columnconfigure(3, weight=1)
 
+        fill_row = ttk.Frame(top, padding=(0, 8, 0, 0))
+        fill_row.pack(fill="x")
+        self.v_fill = tk.StringVar(value=self.session.settings.fill or "none")
+        ttk.Label(fill_row, text="fill band", width=18).grid(row=0, column=0, sticky="w")
+        fbox = ttk.Combobox(fill_row, textvariable=self.v_fill, width=11,
+                            state="readonly", values=["none", "telea", "lama", "comfyui"])
+        fbox.grid(row=0, column=1, sticky="w", padx=(6, 6))
+        fbox.bind("<<ComboboxSelected>>", lambda e: self._apply_fill())
+        ttk.Button(fill_row, text="pad colour...",
+                   command=self._pick_pad_colour).grid(row=0, column=2, sticky="w")
+        self.lbl_pad_colour = tk.Label(fill_row, fg=INK["text"], width=4,
+                                       relief="flat", font=("TkDefaultFont", 8))
+        self.lbl_pad_colour.grid(row=0, column=3, sticky="w", padx=(6, 0))
+        ttk.Button(fill_row, text="edge",
+                   command=self._pad_edge).grid(row=0, column=4, sticky="w", padx=(6, 0))
+        self._sync_pad_swatch()
+
         btns = ttk.Frame(top, padding=(0, 8))
         btns.pack(fill="x")
         ttk.Button(btns, text="Auto", command=self._use_auto).pack(side="left")
@@ -290,10 +460,14 @@ class ReviewWindow(tk.Toplevel):
                    command=self._clear_marks).pack(side="left", padx=6)
         ttk.Button(btns, text="Strike slanted",
                    command=self._strike_slanted).pack(side="left", padx=(6, 12))
+        ttk.Button(btns, text="Auto crop",
+                    command=self._auto_crop).pack(side="left", padx=(0, 6))
+        ttk.Button(btns, text="Reset crop",
+                    command=self._clear_crop).pack(side="left", padx=(0, 6))
         ttk.Checkbutton(btns, text="Lines", command=self._schedule_redraw,
-                        variable=self._mk_show()).pack(side="left")
+                         variable=self._mk_show()).pack(side="left")
         ttk.Checkbutton(btns, text="Mask", command=self._toggle_mask,
-                        variable=self._mk_mask()).pack(side="left", padx=6)
+                         variable=self._mk_mask()).pack(side="left", padx=6)
         ttk.Button(btns, text="Save", command=self._save,
                    style="Accent.TButton").pack(side="right")
         ttk.Button(btns, text="Keep original",
@@ -388,6 +562,42 @@ class ReviewWindow(tk.Toplevel):
         self.session.mask_alpha = float(self.v_alpha.get())
         self._schedule_redraw()
 
+    def _apply_fill(self):
+        """The session owns the settings the save reads; the window only shows
+        them.  Writing ``self.settings`` here made the whole control a no-op."""
+        self.session.settings = self.session.settings.replace(fill=self.v_fill.get())
+        self._schedule_redraw()
+
+    def _pick_pad_colour(self):
+        """What fills the corners *before* any generation, and all that fills
+        them when the fill is off.  One setting, ``--pad``, not a second one."""
+        current = self.session.settings.pad
+        col = colorchooser.askcolor(
+            initial=current if current.startswith("#") else "#000000",
+            title="pad colour", parent=self)
+        hexval = col[1] if col[1] else None
+        if not hexval:
+            return
+        self.session.settings = self.session.settings.replace(pad=hexval)
+        self._sync_pad_swatch()
+        self._schedule_redraw()
+
+    def _pad_edge(self):
+        """Back to extending the border colour, which is the default and has no
+        swatch to show."""
+        self.session.settings = self.session.settings.replace(pad="edge")
+        self._sync_pad_swatch()
+        self._schedule_redraw()
+
+    def _sync_pad_swatch(self):
+        """The swatch must report what ``pad`` actually is.  It defaults to
+        ``edge``, which is not a colour, so a black square would be a lie."""
+        pad = self.session.settings.pad
+        if pad.startswith("#"):
+            self.lbl_pad_colour.configure(bg=pad, text="")
+        else:
+            self.lbl_pad_colour.configure(bg=INK["field"], text=pad[:4])
+
     def _mk_mask(self):
         self.v_show_mask = tk.BooleanVar(value=True)
         return self.v_show_mask
@@ -466,6 +676,130 @@ class ReviewWindow(tk.Toplevel):
         if self.session.clear_control_lines():
             self._sync_from_session()
 
+    def _clear_crop(self):
+        if self.session.clear_crop_rect():
+            self._refresh_crop()
+
+    def _auto_crop(self):
+        """Cut the padded band away instead of inventing something to put in it."""
+        if self.session.auto_crop():
+            self._refresh_crop()
+            self._set_status_extra("cropped to the largest rectangle with no "
+                                   "invented pixels in it")
+        else:
+            self._set_status_extra("nothing to trim -- the correction opened no "
+                                   "band, or the plan had already cropped it")
+
+    def _refresh_crop(self):
+        """Redraw the overlay for a changed crop, without re-rendering the image.
+
+        The picture behind it cannot have changed -- the crop is applied on
+        save, not in the preview -- so a full redraw would re-warp and, with a
+        live fill, re-inpaint an image identical to the one already on screen.
+        That pause is itself a kind of jump.
+        """
+        if getattr(self, "_ph_a", None) is None:
+            self._schedule_redraw()      # nothing on screen to draw over yet
+            return
+        self._draw_crop_persistent()
+        self._set_status(self.session.status_text())
+
+    def _on_crop_press(self, event):
+        if getattr(self, "_ph_a", None) is None:
+            return
+        x = event.x - self._after_off[0]
+        y = event.y - self._after_off[1]
+        iw, ih = self._ph_a.width(), self._ph_a.height()
+        x = max(0, min(iw, x))
+        y = max(0, min(ih, y))
+        self._crop_drag_start = self._grab_corner(x, y, iw, ih) or (x, y)
+
+    def _grab_corner(self, x, y, iw, ih, radius=14):
+        """Answer a press near a corner of the existing crop with the *opposite*
+        corner, or ``None`` when the press is not on a handle.
+
+        That opposite corner then plays exactly the role the first click plays
+        when a rectangle is drawn from nothing, so adjusting an existing crop
+        and drawing a new one are one drag implementation rather than two.
+        Without handles a crop can only be redrawn, and nudging one edge means
+        re-placing all four.
+        """
+        # The same full-frame default `_draw_crop_persistent` draws, so the
+        # handles it shows on an uncropped photograph are the handles this
+        # grabs.  Drawing a handle nobody can pick up is worse than drawing none.
+        x0, y0, x1, y1 = self.session.crop_rect or (0.0, 0.0, 1.0, 1.0)
+        cx0, cy0, cx1, cy1 = x0 * iw, y0 * ih, x1 * iw, y1 * ih
+        for (hx, hy), opposite in (((cx0, cy0), (cx1, cy1)),
+                                   ((cx1, cy0), (cx0, cy1)),
+                                   ((cx0, cy1), (cx1, cy0)),
+                                   ((cx1, cy1), (cx0, cy0))):
+            if abs(x - hx) <= radius and abs(y - hy) <= radius:
+                return opposite
+        return None
+
+    def _on_crop_drag(self, event):
+        if self._crop_drag_start is None or getattr(self, "_ph_a", None) is None:
+            return
+        self.c_after.delete("crop_overlay")
+        x0 = self._crop_drag_start[0]
+        y0 = self._crop_drag_start[1]
+        x1 = event.x - self._after_off[0]
+        y1 = event.y - self._after_off[1]
+        iw, ih = self._ph_a.width(), self._ph_a.height()
+        x1 = max(0, min(iw, x1))
+        y1 = max(0, min(ih, y1))
+        ox, oy = self._after_off
+        self._draw_crop_overlay(ox + x0, oy + y0, ox + x1, oy + y1,
+                                ox, oy, iw, ih)
+
+    def _on_crop_release(self, event):
+        if self._crop_drag_start is None or getattr(self, "_ph_a", None) is None:
+            return
+        x0 = self._crop_drag_start[0]
+        y0 = self._crop_drag_start[1]
+        x1 = event.x - self._after_off[0]
+        y1 = event.y - self._after_off[1]
+        iw, ih = self._ph_a.width(), self._ph_a.height()
+        x1 = max(0, min(iw, x1))
+        y1 = max(0, min(ih, y1))
+        self._crop_drag_start = None
+        # A click that never moved is a click, not a failed crop.  Now that the
+        # rectangle is always live, saying "too small" on every stray press in
+        # the after pane would be noise, and noise is how a real warning gets
+        # ignored.
+        if abs(x1 - x0) < 3 and abs(y1 - y0) < 3:
+            self._refresh_crop()
+            return
+        ok = self.session.set_crop_rect(x0, y0, x1, y1, iw, ih)
+        self._refresh_crop()
+        self._set_status_extra("crop set" if ok else "crop too small, ignored")
+
+    def _draw_crop_overlay(self, rx0, ry0, rx1, ry1, ox, oy, iw, ih):
+        """Shade everything outside the crop rectangle on the after canvas.
+
+        Stippled rather than alpha-blended: a Tk canvas item has no alpha
+        channel, and an eight-digit colour is not a colour spec but a TclError.
+        ``gray50`` is the dither that reads as a dimmed area at any zoom.
+        """
+        tag = "crop_overlay"
+        x0, x1 = sorted((rx0, rx1))
+        y0, y1 = sorted((ry0, ry1))
+        shade = dict(fill="#000000", stipple="gray50", outline="", tags=tag)
+        for sx0, sy0, sx1, sy1 in ((ox, oy, ox + iw, y0),
+                                   (ox, y1, ox + iw, oy + ih),
+                                   (ox, y0, x0, y1),
+                                   (x1, y0, ox + iw, y1)):
+            if sx1 > sx0 and sy1 > sy0:      # nothing outside an uncropped frame
+                self.c_after.create_rectangle(sx0, sy0, sx1, sy1, **shade)
+        self.c_after.create_rectangle(x0, y0, x1, y1, outline="#4da3ff",
+                                      width=2, tags=tag)
+        # Corner handles.  Drawn because a grab region nobody can see is a
+        # feature nobody finds; sized to the radius `_grab_corner` accepts.
+        for hx, hy in ((x0, y0), (x1, y0), (x0, y1), (x1, y1)):
+            self.c_after.create_rectangle(hx - 5, hy - 5, hx + 5, hy + 5,
+                                          fill="#4da3ff", outline="#0b1017",
+                                          width=1, tags=tag)
+
     def _on_click_before(self, event):
         x = event.x - self._before_off[0]
         y = event.y - self._before_off[1]
@@ -528,7 +862,10 @@ class ReviewWindow(tk.Toplevel):
                 return
             before = self.session.render_before(max_edge=max(box_b), 
                                                 show_lines=self.v_show_lines.get())
-            after = self.session.render_after(max_edge=max(box_a))
+            # Un-cropped on purpose: `_draw_crop_persistent` shades what the
+            # crop discards, so the picture keeps one size and one scale for
+            # the whole session instead of leaping every time a corner moves.
+            after = self.session.render_after(max_edge=max(box_a), apply_crop=False)
             ph_b, s_b = _to_photo(before, box_b)
             ph_a, _ = _to_photo(after, box_a)
             # scale from the *original* image to what is on screen
@@ -540,11 +877,13 @@ class ReviewWindow(tk.Toplevel):
                                        anchor="nw", image=ph_b)
             self._ph_b = ph_b
             self._draw_marks()
+            aox = (box_a[0] - ph_a.width()) // 2
+            aoy = (box_a[1] - ph_a.height()) // 2
+            self._after_off = (aox, aoy)
             self.c_after.delete("all")
-            self.c_after.create_image((box_a[0] - ph_a.width()) // 2,
-                                      (box_a[1] - ph_a.height()) // 2,
-                                      anchor="nw", image=ph_a)
+            self.c_after.create_image(aox, aoy, anchor="nw", image=ph_a)
             self._ph_a = ph_a
+            self._draw_crop_persistent()
             self._set_status(self.session.status_text())
             self._update_slider_labels()
         except Exception:
@@ -568,18 +907,33 @@ class ReviewWindow(tk.Toplevel):
         if pend is not None:
             px, py = ox + pend[0], oy + pend[1]
             self.c_before.create_oval(px - 6, py - 6, px + 6, py + 6,
-                                      outline="#00e5ff", width=2)
+                                       outline="#00e5ff", width=2)
+
+    def _draw_crop_persistent(self):
+        """Redraw the crop overlay from the session's stored fractions.
+
+        An uncropped photograph draws the frame itself, so the four handles are
+        always there to grab.  A crop tool that has to be switched on first is a
+        crop tool people drag at and nothing happens -- and the drag is then lost
+        silently, which is the one thing this project does not do.  Nothing is
+        cropped until a handle actually moves: the full-frame rectangle trims
+        every edge by zero.
+        """
+        self.c_after.delete("crop_overlay")
+        rect = self.session.crop_rect or (0.0, 0.0, 1.0, 1.0)
+        ox, oy = self._after_off
+        iw, ih = self._ph_a.width(), self._ph_a.height()
+        x0, y0, x1, y1 = rect
+        self._draw_crop_overlay(ox + x0 * iw, oy + y0 * ih,
+                                ox + x1 * iw, oy + y1 * ih,
+                                ox, oy, iw, ih)
 
     def _set_status(self, text):
-        self.status.configure(state="normal")
         self.status.delete("1.0", "end")
         self.status.insert("1.0", text)
-        self.status.configure(state="disabled")
 
     def _set_status_extra(self, text):
-        self.status.configure(state="normal")
         self.status.insert("end", "\n" + text)
-        self.status.configure(state="disabled")
 
     # -- output ----------------------------------------------------------
     def _save(self):
@@ -609,10 +963,11 @@ class ReviewWindow(tk.Toplevel):
 class App(_ROOT_CLASS):
     def __init__(self, initial=None):
         super().__init__()
-        self.title("Perspective")
+        self.title("Batch Perspective Correction")
         self.geometry("1120x760")
         self.minsize(880, 560)
         apply_theme(self)
+        self._icon = _set_window_icon(self)
         self.queue = queue.Queue()
         self.worker = None
         self.stop_flag = threading.Event()
@@ -629,6 +984,7 @@ class App(_ROOT_CLASS):
 
     def _build(self):
         pad = dict(padx=6, pady=4)
+        _brand_header(self)
         top = ttk.Frame(self, padding=8)
         top.pack(fill="x")
 
@@ -716,7 +1072,7 @@ class App(_ROOT_CLASS):
         ttk.Label(opt, text="fill gaps").grid(row=2, column=6, sticky="e", padx=4)
         self.v_fill = tk.StringVar(value=Settings.fill)
         fbox = ttk.Combobox(opt, textvariable=self.v_fill,
-                            values=["none", "lama", "comfyui"],
+                            values=["none", "telea", "lama", "comfyui"],
                             width=11, state="readonly")
         fbox.grid(row=2, column=7, sticky="w")
         fbox.bind("<<ComboboxSelected>>", lambda e: self._check_fill())

@@ -68,11 +68,17 @@ class ReviewSession:
         # Hugin-style vertical control lines, in analysis-image coordinates.
         # (N, 4) of x0, y0, x1, y1.
         self.control_lines = np.zeros((0, 4))
-        # Manual crop, as fractions of the corrected canvas rather than pixels.
+        # Manual crop, as per-edge trims in fractions of the corrected canvas.
         # The preview is rendered at a few hundred pixels and the file is saved
         # at full size, so a rectangle in pixels would mean two different things;
-        # fractions mean the same thing at every scale.
-        self.crop_rect = None            # (x0, y0, x1, y1) in 0..1
+        # fractions mean the same thing at every scale.  Each edge is
+        # (enabled: bool, frac: float) where frac is 0..0.5.
+        self._crop_edges = {
+            "top":    (False, 0.0),
+            "bottom": (False, 0.0),
+            "left":   (False, 0.0),
+            "right":  (False, 0.0),
+        }
         self.model = None
         self.refit()
 
@@ -203,8 +209,137 @@ class ReviewSession:
         self.mode = AUTO
         self.enabled[:] = True
         self.control_lines = np.zeros((0, 4))
-        self.crop_rect = None
+        self._crop_edges = {k: (False, 0.0) for k in self._crop_edges}
         self.refit()
+
+    @property
+    def crop_rect(self):
+        """Derived (x0, y0, x1, y1) in 0..1, or None if no edge is trimmed."""
+        top_en, top_f = self._crop_edges["top"]
+        bot_en, bot_f = self._crop_edges["bottom"]
+        lft_en, lft_f = self._crop_edges["left"]
+        rgt_en, rgt_f = self._crop_edges["right"]
+        x0 = lft_f if lft_en else 0.0
+        y0 = top_f if top_en else 0.0
+        x1 = 1.0 - rgt_f if rgt_en else 1.0
+        y1 = 1.0 - bot_f if bot_en else 1.0
+        if x0 == 0.0 and y0 == 0.0 and x1 == 1.0 and y1 == 1.0:
+            return None
+        return (x0, y0, x1, y1)
+
+    def set_crop_edge(self, edge: str, enabled: bool, frac: float = 0.0):
+        """Enable or disable trimming of one edge by a fraction of the frame.
+
+        Four independent edges rather than one rectangle, because the padded
+        band is rarely symmetric: a pitch correction opens it at the top and
+        leaves the bottom alone, and a photographer who wants only that band
+        gone should not have to re-draw the other three sides to say so.
+        Clamped to half the frame, so no edge can cross the opposite one.
+        """
+        if edge not in self._crop_edges:
+            return False
+        frac = max(0.0, min(0.5, float(frac)))
+        self._crop_edges[edge] = (bool(enabled), frac)
+        return True
+
+    def set_crop_rect(self, x0, y0, x1, y1, shown_w, shown_h):
+        """Set all four edges at once from a dragged rectangle, in displayed pixels.
+
+        Deliberately applied *after* the correction rather than instead of it.
+        The automatic crop has to guess how much of the frame is worth trading
+        for straight verticals; once the whole frame is kept and padded, that
+        trade becomes a thing you can see, and dragging a rectangle over it is a
+        better answer than any threshold.  It is also the only way to keep an
+        asymmetric composition -- the automatic rectangle is anchored on the
+        image centre, and a photographer who framed the building off-centre
+        wants to keep it there.
+
+        A drag is just the four-edge case of ``set_crop_edge``; nothing here
+        stores a rectangle of its own.
+        """
+        if shown_w <= 0 or shown_h <= 0:
+            return False
+        x0, x1 = sorted((float(x0) / shown_w, float(x1) / shown_w))
+        y0, y1 = sorted((float(y0) / shown_h, float(y1) / shown_h))
+        x0, y0 = max(0.0, x0), max(0.0, y0)
+        x1, y1 = min(1.0, x1), min(1.0, y1)
+        if (x1 - x0) < 0.05 or (y1 - y0) < 0.05:
+            return False
+        self._crop_edges["left"]   = (True, x0)
+        self._crop_edges["top"]    = (True, y0)
+        self._crop_edges["right"]  = (True, 1.0 - x1)
+        self._crop_edges["bottom"] = (True, 1.0 - y1)
+        return True
+
+    def auto_crop(self):
+        """Trim to the largest rectangle that contains no invented pixel.
+
+        The same rectangle ``warp.plan`` computes for ``crop="auto"``, minus
+        the ``max_crop_loss`` gate: the gate exists to stop a batch quietly
+        throwing a quarter of every picture away, and a button pressed by hand
+        is not quiet.  It keeps the original aspect ratio and stays anchored on
+        the mapped centre, so the composition survives the trim.
+
+        This is the answer to the padded band that does not involve inventing
+        anything.  Filling the band -- telea, lama, comfyui -- makes up pixels
+        the camera never saw; cutting to here makes up none, at the cost of the
+        frame it cuts.  For most corrections that cost is a few per cent, which
+        is why this is worth a button rather than a model.
+
+        Returns ``False``, having changed nothing, when there is no band to cut
+        -- an uncorrected photograph, or one the plan already cropped.
+        """
+        roll, pitch, f, _ = self.current_angles()
+        if abs(roll) < 1e-9 and abs(pitch) < 1e-9:
+            return False
+        H = W.build(self.w, self.h, f, roll, pitch)
+        planned = W.plan(self.w, self.h, H, self.settings)
+        if planned is None:
+            return False
+        H_total, ow, oh, _, _ = planned
+        quad = W.warped_quad(H_total, self.w, self.h)
+        centre = G.apply_h(H_total, np.array([[self.w / 2.0, self.h / 2.0]]))[0]
+        x0, y0, x1, y1 = W.inscribed_rect(quad, self.w / float(self.h), centre)
+        # The plan may have cropped already, in which case the quad runs past
+        # the canvas and the inscribed rectangle with it.  Clamping then gives
+        # the whole frame back, and `set_crop_rect` is left to decide that a
+        # rectangle trimming nothing is not worth storing.
+        x0, x1 = max(0.0, min(float(x0), ow)), max(0.0, min(float(x1), ow))
+        y0, y1 = max(0.0, min(float(y0), oh)), max(0.0, min(float(y1), oh))
+        if (x1 - x0) < 8 or (y1 - y0) < 8:
+            return False
+        if (x1 - x0) >= ow - 1 and (y1 - y0) >= oh - 1:
+            return False        # nothing was padded; nothing to trim
+        # Inset by the same margin `warp.filled_region` grows the hole by, and
+        # only once the guards above have decided there is a band at all -- the
+        # "nothing to trim" test compares against the full canvas, and three
+        # pixels of inset would slip under it and store a rectangle that trims
+        # only the inset.
+        #
+        # The inscribed rectangle is exact against the *quad*, but the resampler
+        # leaves a sub-pixel fringe along that diagonal edge, which is why the
+        # fill path dilates before inpainting.  Measured on a 9 deg pitch: zero
+        # invented pixels inside the rectangle at grow=0, and 88 at grow=3, all
+        # in the outermost three rows of one corner.  The inset costs 0.9
+        # percentage points of frame there (35.7% -> 36.6%) and makes "contains
+        # no invented pixel" true against the definition the rest of the module
+        # uses, not merely against the quad.
+        inset = float(W.FRINGE)
+        x0, y0 = min(x0 + inset, x1), min(y0 + inset, y1)
+        x1, y1 = max(x1 - inset, x0), max(y1 - inset, y0)
+        return self.set_crop_rect(x0, y0, x1, y1, ow, oh)
+
+    def crop_loss(self):
+        """Fraction of the corrected frame the current crop discards."""
+        if self.crop_rect is None:
+            return 0.0
+        x0, y0, x1, y1 = self.crop_rect
+        return 1.0 - max(0.0, x1 - x0) * max(0.0, y1 - y0)
+
+    def clear_crop_rect(self):
+        had = any(en for en, _ in self._crop_edges.values())
+        self._crop_edges = {k: (False, 0.0) for k in self._crop_edges}
+        return had
 
     @property
     def control_active(self):
@@ -260,34 +395,6 @@ class ReviewSession:
         if len(self.control_lines) == 0:
             return np.zeros((0, 4))
         return self.control_lines * (display_scale / max(self.scale, 1e-9))
-
-    def set_crop_rect(self, x0, y0, x1, y1, shown_w, shown_h):
-        """Crop the corrected image by hand, in displayed-pixel coordinates.
-
-        Deliberately applied *after* the correction rather than instead of it.
-        The automatic crop has to guess how much of the frame is worth trading
-        for straight verticals; once the whole frame is kept and padded, that
-        trade becomes a thing you can see, and dragging a rectangle over it is a
-        better answer than any threshold.  It is also the only way to keep an
-        asymmetric composition -- the automatic rectangle is anchored on the
-        image centre, and a photographer who framed the building off-centre
-        wants to keep it there.
-        """
-        if shown_w <= 0 or shown_h <= 0:
-            return False
-        x0, x1 = sorted((float(x0) / shown_w, float(x1) / shown_w))
-        y0, y1 = sorted((float(y0) / shown_h, float(y1) / shown_h))
-        x0, y0 = max(0.0, x0), max(0.0, y0)
-        x1, y1 = min(1.0, x1), min(1.0, y1)
-        if (x1 - x0) < 0.05 or (y1 - y0) < 0.05:
-            return False                 # a stray click, not a crop
-        self.crop_rect = (x0, y0, x1, y1)
-        return True
-
-    def clear_crop_rect(self):
-        had = self.crop_rect is not None
-        self.crop_rect = None
-        return had
 
     def _apply_crop(self, img):
         """Cut the manual rectangle out of a rendered result, at any size."""
@@ -416,10 +523,23 @@ class ReviewSession:
             PV._draw_infinite_line(canvas, G.horizon_line(m.up, K), PV.MAGENTA, 2)
         return _fit(canvas, max_edge)
 
-    def render_after(self, max_edge=900):
+    def render_after(self, max_edge=900, apply_crop=True):
+        """The corrected frame, at preview size.
+
+        ``apply_crop=False`` returns the *whole* corrected frame with the
+        hand-drawn rectangle left un-cut.  That is what a crop tool needs and
+        what the review window asks for: a preview that cuts as you drag comes
+        back a different size, gets re-fitted into the pane at a different
+        scale, and the picture leaps under the cursor mid-gesture.  Worse than
+        the leap, the next drag is then measured against a frame that is
+        already smaller than the one the fractions are stored against, so the
+        second rectangle lands somewhere nobody dragged.  Shading the discarded
+        part instead keeps one coordinate system for the whole session.
+        """
         roll, pitch, f, _ = self.current_angles()
+        crop = self._apply_crop if apply_crop else (lambda img: img)
         if abs(roll) < 1e-9 and abs(pitch) < 1e-9:
-            return _fit(self._apply_crop(self.bgr), max_edge)
+            return _fit(crop(self.bgr), max_edge)
         # render the preview from a reduced copy: a 24 MP warp per slider tick
         # is unusable, and the geometry is scale invariant apart from f
         s = min(1.0, float(max_edge) / max(self.w, self.h))
@@ -434,8 +554,34 @@ class ReviewSession:
         # fit again: with crop="auto" the plan may keep the whole frame and pad
         # it, which is *larger* than the input, and a preview that ignores the
         # size it was asked for overflows the pane it was drawn for
-        out = self._apply_crop(W.apply(small, H_total, ow, oh, self.settings))
-        return _fit(out, max_edge)
+        out = W.apply(small, H_total, ow, oh, self.settings)
+        out = self._fill_preview(out, H_total, sw, sh, ow, oh)
+        return _fit(crop(out), max_edge)
+
+    def _fill_preview(self, out, H_total, sw, sh, ow, oh):
+        """Fill the band in the preview, for a backend cheap enough to redraw.
+
+        The save path fills unconditionally; this one does not, and the split is
+        about cost rather than correctness.  ``telea`` needs no model and costs
+        milliseconds at preview size, so a user who picks it sees what they are
+        choosing.  ``lama`` and ``comfyui`` load a model and take seconds -- per
+        slider tick that is unusable, so the preview keeps the pad and
+        ``status_text`` says the fill happens on save.
+
+        Order matters and matches ``save()``: warp, then fill, then crop.  A
+        refusal above ``--fill-max-share`` comes back as the un-filled band
+        rather than an exception, because a preview is not the place to fail.
+        """
+        from . import inpaint as FILL
+        if getattr(self.settings, "fill", "none") not in FILL.LIVE_MODES:
+            return out
+        try:
+            hole = W.filled_region(H_total, sw, sh, ow, oh)
+            preview = self.settings.replace(fill_max_edge=FILL.PREVIEW_MAX_EDGE)
+            filled, _note = FILL.fill(out, hole, preview)
+            return filled
+        except FILL.FillUnavailable:
+            return out
 
     def render_pair(self, max_edge=900):
         return self.render_before(max_edge), self.render_after(max_edge)
@@ -473,6 +619,22 @@ class ReviewSession:
         elif len(self.control_lines) == 1:
             parts.append("1 vertical control line -- one more is needed before "
                          "they take over, since two determine a vanishing point")
+        fill_mode = getattr(self.settings, "fill", "none")
+        if fill_mode not in ("", "none"):
+            from . import inpaint as FILL
+            parts.append(f"fill: {fill_mode}" if fill_mode in FILL.LIVE_MODES
+                         else f"fill: {fill_mode} -- too slow to preview, "
+                              f"runs on save")
+        # The preview no longer cuts the crop out -- it shades it -- so the
+        # crop has to be stated.  A rectangle that only exists as a dimmed area
+        # on screen is exactly the kind of thing that gets forgotten before the
+        # save, and the save is where it becomes permanent.
+        if self.crop_rect is not None:
+            parts.append(f"crop: the shaded area is cut on save "
+                         f"-- {self.crop_loss() * 100:.0f}% of the frame")
+            if fill_mode not in ("", "none"):
+                parts.append("fill and crop are two answers to the same band; "
+                             "the crop discards what the fill invents")
         if clamped:
             parts.append("correction hit the configured limit")
         if skip:
@@ -498,8 +660,13 @@ class ReviewSession:
             IO.copy_through(self.path, dst_path)
             return dst_path
         H_total, ow, oh, _, _ = planned
-        out = self._apply_crop(W.apply(self.bgr, H_total, ow, oh, self.settings))
-        os.makedirs(os.path.dirname(os.path.abspath(dst_path)) or ".", exist_ok=True)
+        out = W.apply(self.bgr, H_total, ow, oh, self.settings)
+        if getattr(self.settings, "fill", "none") not in ("", "none"):
+            from . import inpaint as FILL
+            hole = W.filled_region(H_total, self.w, self.h, ow, oh)
+            out, _note = FILL.fill(out, hole, self.settings)
+        out = self._apply_crop(out)
+        os.makedirs(os.path.dirname(dst_path) or ".", exist_ok=True)
         IO.save(dst_path, out, self.src, self.settings)
         return dst_path
 

@@ -322,6 +322,67 @@ def test_a_hand_drawn_crop_is_kept_in_fractions_not_pixels():
     assert abs(a - b) < 0.05, f"the crop changed shape with the preview size: {a} vs {b}"
 
 
+def test_the_preview_keeps_its_size_while_the_crop_is_drawn():
+    """The complaint was "the image should not jump".
+
+    It jumped because the after preview cut the crop out and was then re-fitted
+    into the pane at a new scale, mid-gesture.  Worse than the jump: the next
+    drag was measured against a frame smaller than the one the fractions are
+    stored against, so a second rectangle landed somewhere nobody dragged.  The
+    review window asks for the whole frame and shades the rest, so a crop -- and
+    a second crop after it -- must not change what comes back."""
+    s, _ = _session(seed=43)
+    before = s.render_after(400, apply_crop=False).shape[:2]
+    assert s.set_crop_rect(40, 30, 260, 170, shown_w=300, shown_h=200)
+    assert s.render_after(400, apply_crop=False).shape[:2] == before
+    assert s.set_crop_rect(60, 50, 240, 150, shown_w=300, shown_h=200)
+    assert s.render_after(400, apply_crop=False).shape[:2] == before
+    # and the second rectangle is the one that was drawn, not one measured
+    # against the leftovers of the first
+    assert s.crop_rect == (60 / 300, 50 / 200, 240 / 300, 150 / 200)
+    # the saved file still gets the cut; only the preview keeps the frame
+    assert s.render_after(400).shape[:2] != before
+
+
+def test_auto_crop_removes_the_padded_band_without_inventing_anything():
+    """The band a rotation opens up has two honest answers: fill it with pixels
+    the camera never saw, or cut it away.  This is the second one, and it is the
+    one that needs no model."""
+    s, _ = _session(seed=44)
+    s.settings = Settings(crop="none")      # keep the whole frame, pad the corners
+    s.refit()
+    assert s.crop_rect is None
+    assert s.auto_crop(), "a pitch correction opens a band there is something to trim"
+    x0, y0, x1, y1 = s.crop_rect
+    assert 0.0 <= x0 < x1 <= 1.0 and 0.0 <= y0 < y1 <= 1.0
+    assert (x1 - x0) < 1.0 or (y1 - y0) < 1.0, "an auto crop that trims nothing is a no-op"
+    assert 0.0 < s.crop_loss() < 0.5, f"trimmed {s.crop_loss():.0%} of the frame"
+    assert "crop:" in s.status_text(), "a crop only the preview shades has to be said"
+
+
+def test_auto_crop_says_so_rather_than_doing_nothing_quietly():
+    """With ``crop="inside"`` the plan has already cut the band, so there is
+    nothing left to trim.  A button that appears to do nothing is worse than one
+    that says why, so this reports rather than storing a rectangle that trims
+    nothing."""
+    s, _ = _session(seed=45)
+    s.settings = Settings(crop="inside")
+    s.refit()
+    assert s.auto_crop() is False
+    assert s.crop_rect is None
+
+
+def test_auto_crop_does_by_hand_what_the_batch_gate_refuses_to_do_alone():
+    """``max_crop_loss`` stops a batch quietly throwing a third of every picture
+    away, so a correction this strong comes back padded instead of cropped.  The
+    gate is about doing it unasked; asked, the trim is exactly what is wanted."""
+    s, _ = _session(seed=45)
+    assert s.settings.crop == "auto"
+    assert s.crop_rect is None, "the plan padded rather than cropped"
+    assert s.auto_crop()
+    assert s.crop_loss() > s.settings.max_crop_loss
+
+
 def test_a_crop_drawn_backwards_or_by_accident_is_handled():
     """Dragging right-to-left is the same rectangle, and a stray click is not a
     crop -- a rectangle a few pixels across would otherwise delete the picture."""
@@ -384,3 +445,164 @@ def test_auto_returns_the_found_angles_without_undoing_the_rest():
     assert s.crop_rect is not None, "the crop must survive"
     s.reset_to_auto()
     assert s.enabled.all() and s.crop_rect is None, "reset is the big hammer"
+
+
+# --------------------------------------------------------------------------
+# single-image save runs the same fill the batch does
+# --------------------------------------------------------------------------
+def test_single_image_save_runs_the_fill_when_a_mode_is_set():
+    """The manual save path must hand the band the rotation opens to the same
+    ``inpaint.fill`` the batch uses, so a photograph corrected by hand gets the
+    generated corners rather than an un-filled frame.  The backend is stubbed:
+    what is pinned here is the *seam* (that fill is called with the warp's hole),
+    not the quality of the pixels nobody photographed."""
+    import os
+    import tempfile
+
+    import cv2
+    from bpc import inpaint as FILL
+    from bpc import warp as W
+
+    s, _ = _session(seed=51)
+    s.settings = s.settings.replace(fill="lama")
+    s.set_manual(roll_deg=-3.0, pitch_deg=9.0, focal_35mm=24.0)   # a real correction
+
+    calls = {}
+    def fake_fill(img, hole, settings):
+        calls["hole"] = hole
+        return img.copy(), "stub"
+    orig = FILL.fill
+    FILL.fill = fake_fill
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "out.jpg")
+            s.save(path)
+            assert cv2.imread(path) is not None
+    finally:
+        FILL.fill = orig
+
+    assert "hole" in calls, "save() must call inpaint.fill when a fill mode is set"
+    # the hole it passes is exactly the band the warp reports, on the full frame.
+    # Rebuild from the same angles save() used so this cannot drift out of step.
+    roll, pitch, f, _ = s.current_angles()
+    H = W.build(s.w, s.h, f, roll, pitch)
+    planned = W.plan(s.w, s.h, H, s.settings)
+    assert planned is not None
+    H_total, ow, oh, _, _ = planned
+    expected = W.filled_region(H_total, s.w, s.h, ow, oh)
+    assert calls["hole"].shape == (oh, ow)
+    assert bool(np.any(expected)), "a real correction must open a band to fill"
+    assert np.array_equal(calls["hole"], expected), "the fill must get the warp's own hole"
+
+
+def test_single_image_save_does_not_load_a_backend_when_fill_is_off():
+    """The default is ``none`` and stays ``none``: a save with no fill mode must
+    not even touch ``inpaint``, so an ordinary correction never pays for a model
+    it will not use."""
+    import os
+    import tempfile
+
+    from bpc import inpaint as FILL
+
+    s, _ = _session(seed=52)
+    s.set_manual(roll_deg=-3.0, pitch_deg=9.0, focal_35mm=24.0)
+    assert s.settings.fill == "none"
+
+    called = {}
+    def fake_fill(img, hole, settings):
+        called["yes"] = True
+        return img.copy(), "stub"
+    orig = FILL.fill
+    FILL.fill = fake_fill
+    try:
+        with tempfile.TemporaryDirectory() as d:
+            s.save(os.path.join(d, "out.jpg"))
+    finally:
+        FILL.fill = orig
+
+    assert "yes" not in called, "fill must not run when no mode is set"
+
+
+def test_save_with_real_lama_produces_a_filled_frame():
+    """End-to-end: save() with fill='lama' runs the real backend and the
+    photographed pixels come through unchanged.  Skips when the package is
+    absent, like every other optional-backend test in this suite."""
+    import cv2
+
+    from bpc.inpaint import available as _fill_available
+    if not _fill_available("lama"):
+        raise SkipTest("simple-lama-inpainting is not installed")
+
+    s, _ = _session(seed=60)
+    s.settings = s.settings.replace(fill="lama", fill_max_edge=0)
+    s.set_manual(roll_deg=-3.0, pitch_deg=9.0, focal_35mm=24.0)
+
+    with tempfile.TemporaryDirectory() as d:
+        path = os.path.join(d, "out.jpg")
+        s.save(path)
+        out = cv2.imread(path)
+        assert out is not None, "save() must write a file"
+        assert out.shape[2] == 3
+
+    # The output must be the planned output size (larger than input due to padding).
+    from bpc import warp as W
+    roll, pitch, f, _ = s.current_angles()
+    H = W.build(s.w, s.h, f, roll, pitch)
+    planned = W.plan(s.w, s.h, H, s.settings)
+    assert planned is not None
+    _, ow, oh, _, _ = planned
+    assert out.shape[:2] == (oh, ow), "output must be the padded frame size"
+
+
+def test_each_crop_edge_can_be_trimmed_on_its_own():
+    """The crop is stored as four independent edges, not one rectangle, so a
+    photographer who wants only the top band gone gets exactly that and keeps an
+    off-centre composition.  ``crop_rect`` is the derived view of those edges."""
+    s, _ = _session(seed=71)
+    assert s.crop_rect is None, "a fresh session crops nothing"
+    assert s.set_crop_edge("top", True, 0.1)
+    assert s.crop_rect == (0.0, 0.1, 1.0, 1.0), "only the top may move"
+    assert s.set_crop_edge("right", True, 0.2)
+    assert s.crop_rect == (0.0, 0.1, 0.8, 1.0)
+    assert s.set_crop_edge("top", False)
+    assert s.crop_rect == (0.0, 0.0, 0.8, 1.0), "disabling an edge restores it"
+    assert not s.set_crop_edge("sideways", True, 0.1), "an unknown edge is refused"
+    assert s.set_crop_edge("left", True, 9.0)
+    assert s.crop_rect[0] == 0.5, "a trim is clamped to half the frame"
+    assert s.clear_crop_rect()
+    assert s.crop_rect is None
+
+
+def test_the_auto_crop_contains_no_invented_pixel():
+    """"Largest rectangle containing no invented pixel" has to be true against
+    the definition the *fill* path uses, not just against the warped quad.
+
+    `warp.filled_region` grows the hole by `warp.FRINGE` because the resampler
+    leaves a sub-pixel fringe along the diagonal edge, and an inscribed
+    rectangle that is exact against the quad still ends on those contaminated
+    rows -- measured at 88 pixels in one corner before `auto_crop` inset by the
+    same margin.  Asserted at every definition so the two cannot drift apart.
+    """
+    import math
+    from bpc import warp as W
+
+    s, _ = _session(seed=31)
+    s.settings = s.settings.replace(crop="none")
+    s.set_manual(roll_deg=-3.0, pitch_deg=9.0, focal_35mm=24.0)
+    assert s.auto_crop(), "a real correction opens a band there is something to trim"
+
+    roll, pitch, f, _ = s.current_angles()
+    H = W.build(s.w, s.h, f, roll, pitch)
+    planned = W.plan(s.w, s.h, H, s.settings)
+    assert planned is not None
+    H_total, ow, oh = planned[0], planned[1], planned[2]
+
+    x0, y0, x1, y1 = s.crop_rect
+    top, bot = math.ceil(y0 * oh), math.floor(y1 * oh)
+    lft, rgt = math.ceil(x0 * ow), math.floor(x1 * ow)
+    for grow in (0, 1, W.FRINGE):
+        hole = W.filled_region(H_total, s.w, s.h, ow, oh, grow=grow)
+        inside = int(hole[top:bot, lft:rgt].sum())
+        assert inside == 0, f"{inside} invented pixel(s) inside the crop at grow={grow}"
+
+    assert s.crop_loss() < 0.5, "trimming half the frame is a crop nobody wanted"
