@@ -409,6 +409,47 @@ the kind of guard this project prefers: cheap, and wrong in the safe direction.
 segmenter looking for a salient object finds almost nothing in a ceiling texture
 (95 % of the frame masked). A semantic check in front of a geometric one.
 
+## Windows has two Pythons and neither is wrong
+
+This costs more time than any algorithm here, so it is worth stating plainly:
+
+| | torch (BiRefNet) | tkinter (the GUI) |
+|---|---|---|
+| ComfyUI `python_embeded` | yes, with CUDA | **no** -- the embeddable Python omits tcl/tk |
+| system Python | usually not | yes |
+
+Both failures print "no backend". `--mask-info` reports both halves plus the
+interpreter, and the error message reads which side it is on: in the GUI Python
+it offers `--mask-export` *before* suggesting an install, because putting a
+multi-gigabyte CUDA torch into a second interpreter on a machine that already
+has one is the wrong first answer.
+
+`--mask-export DIR` runs the segmenter once from whichever Python can load it and
+writes one mask PNG per photograph; everything afterwards consumes the folder
+through `--mask file`. That bridge exists so nobody has to choose between the
+segmenter and the review window.
+
+**Anything fiddly belongs in Python, not in a `.bat`.** `run_and_log.bat` once
+searched for the checkpoint itself, grew a `^` continuation inside a
+parenthesised block -- which cmd splits and runs as a command -- and the mask
+prompt silently never appeared. That search is now `--birefnet-model auto`, where
+it is tested, and it prefers what *works* over what is largest.
+
+## A run has to be judgeable by someone who did not make it
+
+`--diagnostics` writes the interpreter, library versions, importable backends and
+the settings actually in force as a log header; `--json-report` stores the same
+block beside the results. "SKIPPED, low confidence" is nearly useless without
+them. `run_and_log.bat` collects a whole run — corrected images, overlays, log,
+report — into one folder, and writes the environment *before* the run so a failed
+run still leaves something diagnosable.
+
+`--remember` stores **paths only** (checkpoint, mask folder, output, focal
+length). Correction parameters are deliberately not remembered: a setting that
+silently persists between runs is one nobody can reason about, and a batch must
+stay reproducible from its command line. Unknown keys are dropped on load so the
+file cannot become a second, hidden place where behaviour is configured.
+
 ## Known weakness, stated plainly
 
 **A flat-on facade with no EXIF.** One horizontal direction fixes one *point* on
