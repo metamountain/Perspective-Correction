@@ -206,7 +206,8 @@ def build_parser():
                    help="generate the padded band instead of leaving it padded. "
                         "'lama' needs simple-lama-inpainting, 'comfyui' a running "
                         "ComfyUI. Off by default: these pixels were never "
-                        "photographed, and only the padded band is ever touched")
+                        "photographed, and only the padded band is ever touched. "
+                        "Each -j worker loads its own copy of the model")
     g.add_argument("--fill-max-edge", type=int, default=Settings.fill_max_edge,
                    help="generate at this long edge and paste back at full "
                         "resolution; 0 generates at full size")

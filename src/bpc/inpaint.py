@@ -32,6 +32,12 @@ Two backends, because they answer different questions:
               band is wide, or when the result is going somewhere that wants a
               plausible sky rather than a stretched one.
 
+**One model per worker process.**  The batch runs on a `ProcessPoolExecutor`, so
+`-j 8 --fill lama` holds eight copies of a 196 MB network.  Measured at `-j 4`
+over twelve photographs it costs nothing noticeable in time (2 s per image,
+model load included), but on a long batch on a small machine `-j` is the knob
+to turn down, not `--fill-max-edge`.
+
 **`simple-lama-inpainting` pins `pillow<10` and `numpy<2` and pip will happily
 downgrade both when installing it.**  That breaks OpenCV in the same
 interpreter.  Install it with `pip install --no-deps simple-lama-inpainting`;
