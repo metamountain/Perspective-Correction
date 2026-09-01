@@ -57,6 +57,10 @@ Log lines are one per file:
 | `--no-pitch` / `--no-roll` | level only, or straighten verticals only |
 | `--crop aspect\|inside\|none` | keep the original aspect ratio, fit inside, or don't crop |
 | `--detector hybrid` | combine LSD's precision with M-LSD's judgement. Needs `pip install ai-edge-litert` ([measurements](docs/detectors.md)) |
+| `--detector deep-hybrid` | the same idea with DeepLSD as the guide, and the only one measured to beat plain LSD here. Needs torch, a DeepLSD checkout and its weights ([measurements](docs/detectors.md)) |
+| `--detector-info` | which detectors this Python can actually run |
+| `--fill lama` | generate the band the rotation opens up instead of padding it. Off by default -- those pixels were never photographed |
+| `--fill comfyui --comfy-workflow x.json` | the same through a running ComfyUI ([workflows/README.md](workflows/README.md)) |
 | `--remember` | store `--birefnet-model`, `--mask-file`, `-o` and `--focal-35mm` as defaults; `--forget` clears them |
 | `--birefnet-model auto` | find usable weights in the usual ComfyUI folders |
 | `--mask-info` | what this Python can import, and whether the weights load |
@@ -104,6 +108,8 @@ row -- especially a SKIPPED one -- to open manual review:
   entirely. Hugin's `t2` control point; two of them determine the answer. The
   case for it is the corner view where every detected line is real and belongs
   to the wrong wall — nothing to delete, only something to state.
+* a **line detector** dropdown, so the question "would another front end have
+  found the facade?" is answered while looking at the lines it found;
 * a **region mask** panel: switch between `off`, `birefnet` and a folder
   of masks from any other tool, with an **opacity slider**, and see
   the excluded area and the lines it removed straight away. A mask you cannot
@@ -128,7 +134,7 @@ folder shot with one lens turns the second row into the first.
 
 ## Tests
 
-    python tests/run_tests.py           # 125 tests, no pytest needed
+    python tests/run_tests.py           # 137 tests, no pytest needed
     python tests/run_tests.py -v
 
 Drop real photographs into `tests/assets` and six further tests start running

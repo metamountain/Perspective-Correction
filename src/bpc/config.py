@@ -12,11 +12,17 @@ from dataclasses import dataclass, asdict, fields
 @dataclass
 class Settings:
     # ---- detection ----
-    detector: str = "auto"              # auto | lsd | fld | hough | mlsd | hybrid | union
+    # auto | lsd | fld | hough | mlsd | hybrid | union | deeplsd | deep-hybrid
+    # | deep-union.  The deep-* pair is the mlsd hybrid/union with DeepLSD as
+    # the guide instead of M-LSD; see lines.detect_segments.
+    detector: str = "auto"
     hybrid_dist_tol: float = 8.0
     mlsd_model: str = ""                # path, or a name in models/
     mlsd_score_thr: float = 0.10
     mlsd_dist_thr: float = 20.0
+    deeplsd_model: str = ""             # path, or a name in models/
+    deeplsd_device: str = ""            # "" = cuda when available
+    deeplsd_grad_nfa: bool = True       # off for night/fog/blur, per the paper
     detect_max_edge: int = 1600         # analysis resolution (long edge, px)
     min_line_length_frac: float = 0.035  # of the short edge
     vertical_window_deg: float = 32.0
@@ -79,6 +85,18 @@ class Settings:
     crop: str = "auto"                  # auto | aspect | inside | none
     max_crop_loss: float = 0.05         # auto pads rather than crop past this
     pad: str = "edge"                   # edge | black | white | #rrggbb | r,g,b
+    # What to do with the band the rotation opens up, once padding has put
+    # something there.  "none" keeps the pad.  The others generate pixels the
+    # camera never saw, which is why the default is and stays "none".
+    fill: str = "none"                  # none | lama | comfyui
+    fill_max_edge: int = 2048           # generate at this size, paste back full res
+    fill_max_share: float = 0.35        # refuse to invent more of the frame than this
+    fill_device: str = ""               # torch device for lama; "" = its default
+    comfy_url: str = "http://127.0.0.1:8188"
+    comfy_workflow: str = ""            # "" = workflows/flux-klein-outpaint.json
+    comfy_prompt: str = ""              # fills the node titled BPC_PROMPT
+    comfy_seed: int = 0                 # 0 = leave the workflow's own seeds alone
+    comfy_timeout: float = 300.0
     keep_size: bool = False
     interpolation: str = "lanczos"      # lanczos | cubic | linear
     jpeg_quality: int = 95

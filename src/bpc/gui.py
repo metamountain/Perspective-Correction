@@ -47,6 +47,14 @@ from .review import AUTO, MANUAL, ReviewSession
 
 STATUS_COLOUR = {OK: "#5ac37f", SKIPPED: "#e0b24c", ERROR: "#ef6b6b"}
 
+# Both windows offer the same list, and it has to match cli.py's --detector
+# choices; a name only one of the two knows about is a bug report waiting to
+# happen.  mlsd/hybrid/union need a TFLite runtime and the deep-* three need
+# torch and a DeepLSD checkout, so several of these can fail to load -- which
+# is why both windows report the failure rather than falling back.
+DETECTORS = ("auto", "lsd", "fld", "hough", "mlsd", "hybrid", "union",
+             "deeplsd", "deep-hybrid", "deep-union")
+
 # --------------------------------------------------------------------------
 # theme
 # --------------------------------------------------------------------------
@@ -232,6 +240,19 @@ class ReviewWindow(tk.Toplevel):
         self._slider(ctl, 1, "pitch (verticals)", self.v_pitch, -30, 30, "deg")
         self._slider(ctl, 2, "focal length", self.v_focal, 8, 200, "mm eq")
 
+        # The detector belongs beside the mask, not in the batch panel only:
+        # both change what the estimator is looking at rather than what it does
+        # with it, and both can only be judged against the lines on screen.
+        det = ttk.Frame(top, padding=(0, 8, 0, 0))
+        det.pack(fill="x")
+        self.v_detector = tk.StringVar(value=self.settings.detector)
+        ttk.Label(det, text="line detector", width=18).grid(row=0, column=0, sticky="w")
+        dbox = ttk.Combobox(det, textvariable=self.v_detector, width=11,
+                            state="readonly", values=list(DETECTORS))
+        dbox.grid(row=0, column=1, sticky="w", padx=(6, 6))
+        dbox.bind("<<ComboboxSelected>>", lambda e: self._apply_detector())
+        det.columnconfigure(2, weight=1)
+
         msk = ttk.Frame(top, padding=(0, 8, 0, 0))
         msk.pack(fill="x")
         self.v_maskmode = tk.StringVar(value=self.settings.mask_mode)
@@ -281,6 +302,26 @@ class ReviewWindow(tk.Toplevel):
     def _mk_show(self):
         self.v_show_lines = tk.BooleanVar(value=True)
         return self.v_show_lines
+
+    def _apply_detector(self):
+        """Switch detector and say what it found.
+
+        Three of the choices are optional dependencies that may not be
+        installed, so the failure has to be visible *and* the widget has to
+        stop claiming a detector that is not in force -- the session rolls the
+        setting back, and the combobox follows it rather than the click."""
+        err = self.session.set_detector(self.v_detector.get())
+        if err:
+            self.v_detector.set(self.session.settings.detector)
+            self.lbl_mask.configure(text=err)
+        else:
+            self.lbl_mask.configure(
+                text=f"{self.session.detector}: {len(self.session.vert)} vertical "
+                     f"candidate(s), {len(self.session.horiz)} horizontal")
+        if self.session.mode == AUTO:
+            self._sync_from_session()
+        else:
+            self._redraw()
 
     def _apply_mask(self):
         mode = self.v_maskmode.get()
@@ -665,6 +706,23 @@ class App(_ROOT_CLASS):
         ttk.Combobox(opt, textvariable=self.v_crop,
                      values=["auto", "aspect", "inside", "none"],
                      width=8, state="readonly").grid(row=1, column=4, sticky="w")
+        ttk.Label(opt, text="detector").grid(row=1, column=6, sticky="e", padx=4)
+        self.v_detector = tk.StringVar(value=Settings.detector)
+        ttk.Combobox(opt, textvariable=self.v_detector, values=list(DETECTORS),
+                     width=11, state="readonly").grid(row=1, column=7, sticky="w")
+        # Generating the band a rotation opens up is off by default and says so
+        # when it cannot run: a batch that quietly writes padded frames because
+        # the backend was missing is the silent failure this tool avoids.
+        ttk.Label(opt, text="fill gaps").grid(row=2, column=6, sticky="e", padx=4)
+        self.v_fill = tk.StringVar(value=Settings.fill)
+        fbox = ttk.Combobox(opt, textvariable=self.v_fill,
+                            values=["none", "lama", "comfyui"],
+                            width=11, state="readonly")
+        fbox.grid(row=2, column=7, sticky="w")
+        fbox.bind("<<ComboboxSelected>>", lambda e: self._check_fill())
+        self.lbl_fill = ttk.Label(opt, text="", style="Dim.TLabel", wraplength=900,
+                                  justify="left")
+        self.lbl_fill.grid(row=3, column=0, columnspan=9, sticky="w", pady=(4, 0))
         ttk.Checkbutton(opt, text="subfolders", variable=self.v_recursive).grid(row=2, column=0, sticky="w")
         ttk.Checkbutton(opt, text="overwrite originals", variable=self.v_overwrite).grid(row=2, column=1, sticky="w")
         ttk.Checkbutton(opt, text="offer manual review for unclear images",
@@ -704,6 +762,8 @@ class App(_ROOT_CLASS):
         s.min_confidence = float(self.v_conf.get())
         s.max_pitch_deg = float(self.v_maxpitch.get())
         s.crop = self.v_crop.get()
+        s.detector = self.v_detector.get()
+        s.fill = self.v_fill.get()
         s.mask_mode = self.v_mask.get()
         path = self.v_maskpath.get() or self._remembered.get(
             "birefnet_model" if self.v_mask.get() == "birefnet" else "mask_file", "")
@@ -712,6 +772,23 @@ class App(_ROOT_CLASS):
         elif s.mask_mode == "birefnet":
             s.birefnet_model = path
         return s
+
+    def _check_fill(self):
+        """Report the fill backend now, not once per photograph.
+
+        Imported here rather than at module level so the window still opens on
+        an interpreter without torch -- which, on Windows, is the interpreter
+        that has Tkinter."""
+        mode = self.v_fill.get()
+        if mode == "none":
+            self.lbl_fill.configure(text="")
+            return
+        from . import inpaint as FILL
+        s = self._settings()
+        text = FILL.describe(mode, s)
+        if not FILL.available(mode, s):
+            text = "fill will FAIL on every image -- " + text
+        self.lbl_fill.configure(text=text)
 
     def _pick_mask_source(self):
         """One button for both, because the batch panel had a mask selector with

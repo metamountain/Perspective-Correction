@@ -77,6 +77,16 @@ def _mlsd(bgr, settings):
     return np.asarray(seg, dtype=float).reshape(-1, 4), "mlsd"
 
 
+def _deeplsd(gray, settings):
+    from . import deeplsd as D
+    seg = D.detect(gray, getattr(settings, "deeplsd_model", ""),
+                   getattr(settings, "deeplsd_device", ""),
+                   getattr(settings, "deeplsd_grad_nfa", True))
+    if seg is None or len(seg) == 0:
+        return None
+    return np.asarray(seg, dtype=float).reshape(-1, 4), "deeplsd"
+
+
 def gate_by(seg: np.ndarray, guide: np.ndarray, angle_tol_deg: float = 6.0,
             dist_tol: float = 8.0, extent_margin: float = 0.15) -> np.ndarray:
     """Keep only segments that lie along one of the ``guide`` segments.
@@ -115,23 +125,29 @@ def gate_by(seg: np.ndarray, guide: np.ndarray, angle_tol_deg: float = 6.0,
 def detect_segments(gray: np.ndarray, min_len: float, detector: str = "auto",
                     bgr=None, settings=None):
     """Return ``(segments, detector_name)``; segments may be empty."""
-    if detector in ("hybrid", "union"):
+    if detector in ("hybrid", "union", "deep-hybrid", "deep-union"):
         if bgr is None:
             bgr = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
-        guide = _mlsd(bgr, settings)
+        deep = detector.startswith("deep-")
+        guide = _deeplsd(gray, settings) if deep else _mlsd(bgr, settings)
         base = _lsd(gray)
         if base is None:
-            return (guide[0], "mlsd") if guide else (np.zeros((0, 4)), "none")
+            return guide if guide else (np.zeros((0, 4)), "none")
         if guide is None:
             return base[0], "lsd"
-        if detector == "union":
-            return np.vstack([base[0], guide[0]]), "union"
+        if detector in ("union", "deep-union"):
+            return np.vstack([base[0], guide[0]]), detector
         gated = gate_by(base[0], guide[0],
                         dist_tol=getattr(settings, "hybrid_dist_tol", 8.0))
         # never gate the evidence away entirely
         if len(gated) < max(8, getattr(settings, "min_vertical_lines", 4) * 2):
-            return base[0], "lsd(hybrid fallback)"
-        return gated, "hybrid"
+            return base[0], f"lsd({detector} fallback)"
+        return gated, detector
+    if detector == "deeplsd":
+        got = _deeplsd(gray, settings)
+        if got is not None:
+            return got
+        return np.zeros((0, 4)), "deeplsd"
     if detector == "mlsd":
         if bgr is None:
             bgr = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)

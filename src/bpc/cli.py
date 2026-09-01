@@ -114,12 +114,25 @@ def build_parser():
 
     g = p.add_argument_group("detection")
     g.add_argument("--detector",
-                   choices=["auto", "lsd", "fld", "hough", "mlsd", "hybrid", "union"],
+                   choices=["auto", "lsd", "fld", "hough", "mlsd", "hybrid", "union",
+                            "deeplsd", "deep-hybrid", "deep-union"],
                    default="auto",
-                   help="line detector; mlsd/hybrid/union need a TFLite runtime "
+                   help="line detector; mlsd/hybrid/union need a TFLite runtime, "
+                        "deeplsd/deep-* need torch and a DeepLSD checkout "
                         "(see docs/detectors.md for the measurements)")
     g.add_argument("--mlsd-model", default="",
                    help="M-LSD tflite model path, or a filename inside models/")
+    g.add_argument("--deeplsd-model", default="",
+                   help="DeepLSD weights (.tar), or a filename inside models/. "
+                        "Not bundled: curl -L -o models/deeplsd_md.tar "
+                        "https://cvg-data.inf.ethz.ch/DeepLSD/deeplsd_md.tar")
+    g.add_argument("--deeplsd-device", default="",
+                   help="torch device for DeepLSD; empty picks cuda when available")
+    g.add_argument("--no-grad-nfa", action="store_true",
+                   help="DeepLSD: skip the image-gradient NFA filter. The paper "
+                        "recommends it off for night, fog and blur")
+    g.add_argument("--detector-info", action="store_true",
+                   help="what this Python can run as a line detector, and exit")
     g.add_argument("--mask", choices=["off", "file", "birefnet"],
                    default=Settings.mask_mode,
                    help="'file' a painted PNG or a folder of them, 'birefnet' segment "
@@ -189,6 +202,30 @@ def build_parser():
                    help="what fills the corners a rotation opens up when the frame "
                         "is kept: 'edge' extends the border colour, or give a colour "
                         "as a name (black, white, grey), #rrggbb, or r,g,b")
+    g.add_argument("--fill", choices=["none", "lama", "comfyui"], default=Settings.fill,
+                   help="generate the padded band instead of leaving it padded. "
+                        "'lama' needs simple-lama-inpainting, 'comfyui' a running "
+                        "ComfyUI. Off by default: these pixels were never "
+                        "photographed, and only the padded band is ever touched")
+    g.add_argument("--fill-max-edge", type=int, default=Settings.fill_max_edge,
+                   help="generate at this long edge and paste back at full "
+                        "resolution; 0 generates at full size")
+    g.add_argument("--fill-max-share", type=float, default=Settings.fill_max_share,
+                   help="refuse to invent more than this fraction of the frame")
+    g.add_argument("--fill-device", default="",
+                   help="torch device for the local fill; empty picks its default")
+    g.add_argument("--comfy-url", default=Settings.comfy_url)
+    g.add_argument("--comfy-workflow", default="", metavar="FILE.json",
+                   help="ComfyUI API-format workflow; empty uses the bundled "
+                        "workflows/flux-klein-outpaint.json. Nodes titled "
+                        "BPC_IMAGE, BPC_MASK and (optionally) BPC_PROMPT are "
+                        "where the photograph, the hole and the prompt go")
+    g.add_argument("--comfy-prompt", default="",
+                   help="text for the node titled BPC_PROMPT")
+    g.add_argument("--comfy-seed", type=int, default=0,
+                   help="force every sampler seed in the workflow; 0 leaves them")
+    g.add_argument("--fill-info", action="store_true",
+                   help="whether the chosen fill backend is usable, and exit")
     g.add_argument("--keep-size", action="store_true",
                    help="rescale the crop back to the original pixel dimensions")
     g.add_argument("--jpeg-quality", type=int, default=Settings.jpeg_quality)
@@ -213,6 +250,9 @@ def settings_from(args) -> Settings:
     s = Settings()
     s.detector = args.detector
     s.mlsd_model = args.mlsd_model
+    s.deeplsd_model = args.deeplsd_model
+    s.deeplsd_device = args.deeplsd_device
+    s.deeplsd_grad_nfa = not args.no_grad_nfa
     s.mask_mode = args.mask
     s.mask_file = args.mask_file
     s.mask_invert = args.mask_invert
@@ -246,6 +286,14 @@ def settings_from(args) -> Settings:
     s.crop = args.crop
     s.max_crop_loss = args.max_crop_loss
     s.pad = args.pad
+    s.fill = args.fill
+    s.fill_max_edge = args.fill_max_edge
+    s.fill_max_share = args.fill_max_share
+    s.fill_device = args.fill_device
+    s.comfy_url = args.comfy_url
+    s.comfy_workflow = args.comfy_workflow
+    s.comfy_prompt = args.comfy_prompt
+    s.comfy_seed = args.comfy_seed
     s.keep_size = args.keep_size
     s.jpeg_quality = args.jpeg_quality
     s.keep_exif = not args.no_exif
@@ -302,7 +350,7 @@ def diagnostics_text(args, settings) -> str:
         f"{k}={'yes' if v else 'no'}" for k, v in BN.backends().items()))
     if settings.mask_mode == "birefnet" and settings.birefnet_model:
         out.append(f"# birefnet: {BN.describe(settings.birefnet_model)}")
-    interesting = ("detector", "mask_mode", "mask_file", "birefnet_model",
+    interesting = ("detector", "deeplsd_model", "mask_mode", "mask_file", "birefnet_model",
                    "birefnet_threshold", "focal_35mm", "default_focal_35mm",
                    "focal_estimate", "min_confidence", "max_pitch_deg",
                    "max_roll_deg", "pitch_strength", "roll_strength", "crop",
@@ -338,6 +386,29 @@ def mask_info(args) -> int:
             print(f"  loads: NO\n{exc}")
     else:
         print("\n(pass --birefnet-model to check specific weights)")
+    return 0
+
+
+def detector_info(args) -> int:
+    """The detector half of --mask-info, and for the same reason.
+
+    Three of the detectors are optional dependencies with three different
+    failure modes -- a missing TFLite runtime, a missing checkout, missing
+    weights -- and a run that simply falls back to LSD says none of that out
+    loud.  It is a batch tool: the silent fallback is the dangerous one.
+    """
+    import sys as _sys
+
+    import cv2
+
+    from . import deeplsd as DL
+    from . import mlsd as ML
+    print(f"interpreter: {_sys.executable}")
+    print(f"  lsd/fld/hough  opencv {cv2.__version__}")
+    print(f"  {'yes' if ML.available(args.mlsd_model) else 'no '}  mlsd, hybrid, union")
+    print(f"  {'yes' if DL.available(args.deeplsd_model) else 'no '}  "
+          f"deeplsd, deep-hybrid, deep-union")
+    print(f"       {DL.describe(args.deeplsd_model, args.deeplsd_device)}")
     return 0
 
 
@@ -385,6 +456,16 @@ def main(argv=None) -> int:
                         output=args.output,
                         focal_35mm=args.focal_35mm if args.focal_35mm else None)
         print(f"# remembered in {prefs.path()}" if ok else "# nothing to remember")
+    if args.fill_info:
+        from . import inpaint as FILL
+        st = Settings().replace(fill=args.fill, comfy_url=args.comfy_url,
+                                comfy_workflow=args.comfy_workflow)
+        print(FILL.describe(args.fill, st))
+        if args.fill == "none":
+            print("(pass --fill lama or --fill comfyui to check a backend)")
+        return 0
+    if args.detector_info:
+        return detector_info(args)
     if args.mask_info:
         return mask_info(args)
     if args.mask_export:

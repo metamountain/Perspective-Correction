@@ -175,6 +175,43 @@ M-LSD could not be measured here at all -- it needs a TFLite runtime
 through `kornia.feature.sold2` with no extra install, and DeepLSD needs the
 `cvg/DeepLSD` repository plus weights from `cvg-data.inf.ethz.ch`.
 
+## DeepLSD: the learned front end that finally beat LSD, narrowly
+
+The detector section above ends with "if a user has real data, run the benchmark
+tool and let it decide". This is that run. DeepLSD (Pautrat et al., CVPR 2023,
+MIT) is not another wireframe network -- it regresses a distance field and an
+angle field and hands *those* to LSD in place of the image gradient, so the
+endpoints still come from LSD's sub-pixel fit. That matters, because the reason
+M-LSD lost was endpoint quantisation, not judgement.
+
+Twelve photographs x six rotations, round trip with the border guard, `f` fixed
+at 24 mm, mask off:
+
+| | mean | p90 | worst | seconds |
+|---|---|---|---|---|
+| **deep-hybrid** (LSD gated by DeepLSD) | **0.71°** | **1.65°** | 3.78° | 68.8 |
+| deep-union (LSD + DeepLSD) | 0.76° | 2.16° | **3.74°** | 55.4 |
+| lsd | 0.77° | 2.04° | 4.71° | **18.2** |
+| deeplsd alone | 0.86° | 2.41° | 7.10° | 48.4 |
+
+**The shape is the same as the M-LSD result and it is the interesting part.**
+The learned detector *alone* is the worst of the four -- worse than plain LSD on
+all three statistics, and its 7.10° worst case is a photograph ruined. Used as a
+*gate* over LSD it is the best of the four. Neither model is a better line
+detector; one of them knows which lines are structure and the other knows where
+they are, and the hybrid is the only arrangement that gets both.
+
+**LSD stays the default anyway**, for reasons that are not about the numbers:
+deep-hybrid costs torch, a 98 MB checkpoint, a research checkout that is not on
+PyPI, and `pytlsd`, which has no wheels and builds from source. That is a large
+bill for 0.06° of mean and it buys nothing on the machine of anyone who cannot
+pay it. It is a genuine option now, not a default, which is exactly what the
+M-LSD section argued for and could not deliver because no TFLite runtime was
+ever installed here.
+
+Twelve photographs is still thin. The honest claim is "deep-hybrid did not lose
+on any of the three statistics", not "deep-hybrid is better".
+
 ## Masking: BiRefNet, and the two knobs that are not knobs
 
 `--mask birefnet` (a segmenter) and `--mask file` (a folder of PNGs) go through
@@ -373,6 +410,44 @@ are worth remembering as a shape:
 **A benchmark that is wrong in the incumbent's disfavour is the dangerous kind**,
 because it reads as a discovery rather than a bug.
 
+## Generating the band the rotation opens up
+
+`--fill lama` and `--fill comfyui` (`src/bpc/inpaint.py`) replace the padded
+corners with generated pixels. Read that against the first section of this file:
+those pixels were never photographed, so the feature is the most dangerous thing
+in the tool by construction, and the containment is where the design lives.
+
+* **The default is `none` and stays `none`.**
+* **Only the hole is touched.** `warp.filled_region` warps a white frame and
+  marks where no source pixel landed; the composite ramps its alpha *inside*
+  that mask and multiplies by it again, so a photographed pixel comes through
+  bit for bit. Asserted, with exact equality, by
+  `test_the_fill_touches_nothing_that_was_photographed`.
+* **A missing backend is an error for that image, never a silent pass-through.**
+  A batch that quietly writes un-filled frames when the user asked for a fill is
+  the failure mode this whole project is built against.
+* **`--fill-max-share` (0.35) refuses to invent most of a picture.** The band a
+  plausible correction opens is a few per cent; a 60 % hole means the answer was
+  a crop, not a fill.
+* Generation runs at `--fill-max-edge` (2048) and only the hole is scaled back
+  up. What is being invented is sky, wall and road at the frame edge -- low
+  frequency -- and every photographed pixel stays at full resolution.
+
+LaMa is the right default backend: no prompt, ~3 s, and it *continues* structure
+rather than inventing objects. ComfyUI is there for the wide band and for anyone
+who would rather their own Flux graph did it; the workflow is a file
+(`workflows/flux-klein-outpaint.json`), the contract is three node titles
+(`BPC_IMAGE`, `BPC_MASK`, `BPC_PROMPT`), and the most likely user error -- posting
+an editor export instead of an API export to `/prompt` -- is caught with the fix
+in the message.
+
+**`pip install simple-lama-inpainting` downgrades Pillow to 9.5 and numpy to
+1.26 and breaks OpenCV in the same interpreter.** Install it with `--no-deps`.
+This is the third time an optional dependency has moved a required one (see
+`ultralytics` replacing `cv2.imread`), and it is worth treating as a rule:
+install optional backends with `--no-deps` and let the failure be an ImportError
+rather than a silently changed numpy.
+
 ## Beyond the limit means refuse, not trim
 
 `--max-pitch` and `--max-roll` used to be caps: an estimate past them was
@@ -522,7 +597,7 @@ synthetic scene's exact pose by
 
 ## Testing
 
-`python tests/run_tests.py` — 125 tests, standalone, no pytest.
+`python tests/run_tests.py` — 137 tests, standalone, no pytest.
 
 Synthetic scenes (`tests/synth.py`) carry an **exactly known camera pose**. The
 high-frequency-mask notes warn that synthetic fixtures misled that project; the
