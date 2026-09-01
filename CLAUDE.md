@@ -212,6 +212,32 @@ pay it. It is a genuine option now, not a default, which is exactly what the
 M-LSD section argued for and could not deliver because no TFLite runtime was
 ever installed here.
 
+**And the reason is no longer only the dependency bill: the win does not
+survive a change of the fixed focal length.** The table above fixes `f` at
+24 mm, which is close to what these twelve photographs were actually shot at
+(16-33 mm). Repeating the identical run at 35 mm -- a *wrong* focal for all of
+them, which is the case the "known weakness" section says web JPEGs land in --
+inverts the order:
+
+| f fixed at 35 mm | mean | p90 | worst |
+|---|---|---|---|
+| **deep-union** | **1.05** | **2.02** | **9.55** |
+| lsd | 1.22 | 3.00 | 19.50 |
+| deep-hybrid | 2.37 | 5.71 | 22.91 |
+
+deep-hybrid goes from best to worst, and its worst case from 3.78° to **22.91°**.
+A gate that decides which lines are structure is apparently tuned to agree with
+the geometry only when the geometry is roughly right; when `f` is wrong it gates
+away evidence the fit needed -- the same failure the M-LSD hybrid showed as a
+7.9° worst-case roll on synthetic scenes. **A detector whose ranking depends on
+getting another parameter right is not a safer default, it is a second thing
+that can be wrong.**
+
+deep-union is the one that does not collapse: it beats LSD's worst case in both
+conditions (3.74 vs 4.71, and 9.55 vs 19.50). That is the arrangement to
+re-measure if the dependency bill ever becomes payable by default -- not the
+hybrid, despite the hybrid winning the headline table.
+
 Twelve photographs is still thin. The honest claim is "deep-hybrid did not lose
 on any of the three statistics", not "deep-hybrid is better".
 
@@ -454,10 +480,28 @@ segmenter looking for a salient object finds almost nothing in a ceiling texture
 
 ## Generating the band the rotation opens up
 
-`--fill lama` and `--fill comfyui` (`src/bpc/inpaint.py`) replace the padded
-corners with generated pixels. Read that against the first section of this file:
-those pixels were never photographed, so the feature is the most dangerous thing
-in the tool by construction, and the containment is where the design lives.
+`--fill telea`, `--fill lama` and `--fill comfyui` (`src/bpc/inpaint.py`) replace
+the padded corners with generated pixels. Read that against the first section of
+this file: those pixels were never photographed, so the feature is the most
+dangerous thing in the tool by construction, and the containment is where the
+design lives.
+
+**The three are on one scale, not two.** It is tempting to file `telea` under
+"harmless" because it loads no model and downloads nothing — `cv2.inpaint`
+marches colour and gradient inwards from the boundary and that is all it does.
+But a pixel nobody photographed is invented whether a network or a fast-marching
+solver put it there, so it lives under the same containment as the other two:
+same hole, same `--fill-max-share`, same default of `none`. What it buys is that
+it is **deterministic and dependency-free**, which makes it the honest choice for
+a thin band of sky or road and the wrong one for anything a viewer would read as
+content. It sits *below* lama and comfyui on the invention scale, not outside it.
+
+**There is no `--fill color`, and that is deliberate.** A flat colour in the band
+is what `--pad` has always meant, and a second flag saying the same thing would
+be a second place to configure one fact — the failure this file keeps warning
+about. The review window's colour picker therefore writes `settings.pad`, and
+its swatch reads `pad` back rather than showing black over a setting that says
+`edge`.
 
 * **The default is `none` and stays `none`.**
 * **Only the hole is touched.** `warp.filled_region` warps a white frame and
@@ -474,6 +518,15 @@ in the tool by construction, and the containment is where the design lives.
 * Generation runs at `--fill-max-edge` (2048) and only the hole is scaled back
   up. What is being invented is sky, wall and road at the frame edge -- low
   frequency -- and every photographed pixel stays at full resolution.
+* **The manual save runs the same seam.** `review.py` `save()` calls the identical
+  `warp.filled_region` + `inpaint.fill`, behind the same `fill not in ("", "none")`
+  guard, so a photograph corrected by hand gets generated corners rather than an
+  un-filled frame. The live preview (`render_after`) deliberately does *not* fill --
+  a model load and inference per slider tick is too expensive; only the saved file
+  does, which is exactly what the batch does. Pinned by
+  `test_single_image_save_runs_the_fill_when_a_mode_is_set` (it hands the warp's own
+  hole to `inpaint.fill`) and
+  `test_single_image_save_does_not_load_a_backend_when_fill_is_off`.
 
 LaMa is the right default backend: no prompt, ~3 s, and it *continues* structure
 rather than inventing objects. ComfyUI is there for the wide band and for anyone
@@ -521,6 +574,96 @@ detector produced it and wrong when a person did. Pinned by
 `test_marking_verticals_does_not_get_the_photo_skipped`; validated against a
 synthetic scene's exact pose by
 `test_a_control_line_that_is_really_vertical_recovers_the_true_pose`.
+
+## The manual crop is always live, and that is the whole design
+
+The corrected pane carries a crop rectangle at all times. On an uncropped
+photograph it *is* the frame, so the four corner handles sit in the frame
+corners and there is nothing to switch on. Dragging a handle crops; dragging
+anywhere else draws a new rectangle; "Reset crop" puts it back.
+
+**It used to be behind a checkbox and that was the bug.** With the mode off,
+`_on_crop_press` returned immediately, so a drag did nothing, produced no
+message, and the file saved uncropped — a user action swallowed in silence,
+which is the one failure this project does not permit anywhere else. The crop
+itself was never broken: `save()` applies it, and did before.
+
+Two things follow from the always-live rectangle and both are load-bearing:
+
+* **A corner grab answers with the *opposite* corner.** That corner then plays
+  exactly the role the first click plays when a rectangle is drawn from
+  nothing, so adjusting an existing crop and drawing a new one are one drag
+  implementation rather than two. `_grab_corner` and `_draw_crop_persistent`
+  share the same `crop_rect or (0, 0, 1, 1)` default, because a handle that is
+  drawn but cannot be picked up is worse than no handle.
+* **A click that never moved is a click.** With the rectangle always live, a
+  stray press in the pane would otherwise report "crop too small, ignored" on
+  every mis-click, and noise is how a real warning gets ignored.
+
+The rectangle is applied to the *rendered result*, after the correction and
+after any fill, in fractions rather than pixels — the preview is a few hundred
+pixels and the file is full size, so a pixel rectangle would mean two different
+things. Stored as four independent edges: a pitch correction opens the band at
+the top and leaves the bottom alone, and trimming only that band should not
+require re-placing the other three sides.
+
+**The preview shades the crop, it does not cut it, and that is not cosmetic.**
+`render_after(apply_crop=False)` is what the review window asks for. Cutting it
+made the after image come back a different size, which `_to_photo` then fitted
+into the pane at a different scale — the picture leapt under the cursor the
+instant a corner was released. The leap was the visible half. The other half:
+the *next* drag was measured against a frame already smaller than the one the
+fractions are stored against, and `set_crop_rect` filed it as fractions of the
+full canvas, so a second rectangle landed somewhere nobody had dragged, in
+silence. Shading keeps one coordinate system for the whole session. Pinned by
+`test_the_preview_keeps_its_size_while_the_crop_is_drawn`, which asserts the
+returned dimensions after two successive crops.
+
+Two consequences. `_refresh_crop` redraws the overlay *only* — never
+`_schedule_redraw` — because the image behind it cannot have changed, and a
+re-warp plus a live `telea` fill of a pixel-identical frame is its own kind of
+jump. And `status_text` now has to state the crop and what fraction it costs: a
+rectangle that exists only as a dimmed area is exactly the thing that gets
+forgotten before the save, and the save is where it becomes permanent.
+
+## "Auto crop" is the answer to the band that invents nothing
+
+The band a rotation opens up has two honest answers. Fill it — `telea`, `lama`,
+`comfyui` — and pixels the camera never saw end up in the file. Or cut to the
+largest rectangle that contains none of it, and pay in frame instead. `Auto
+crop` is the second, and it needs no model, no checkpoint and no ComfyUI.
+
+`ReviewSession.auto_crop` is `warp.plan`'s own `crop="auto"` arithmetic —
+`inscribed_rect` on the warped quad, original aspect ratio, anchored on the
+mapped centre so the composition survives — **minus the `max_crop_loss` gate**.
+That gate exists to stop a batch quietly throwing a third of every picture away;
+a button pressed by hand is not quiet, and refusing there would be refusing the
+thing that was asked for. On the 33 %-loss synthetic scene the plan pads and the
+button trims, which is
+`test_auto_crop_does_by_hand_what_the_batch_gate_refuses_to_do_alone`.
+
+When the plan already cropped (`crop="inside"`/`"aspect"`, or `"auto"` inside
+the gate) the quad runs past the canvas, the clamp yields the whole frame, and
+`auto_crop` returns `False` and says so rather than storing a rectangle that
+trims nothing. A button that appears to do nothing is worse than one that says
+why — same rule as the swallowed drag above.
+
+**"No invented pixel" has to be true against the definition the *fill* path
+uses, and it was not.** The inscribed rectangle is exact against the warped
+quad, but `warp.filled_region` deliberately dilates the hole by three pixels,
+because the resampler leaves a sub-pixel fringe along that diagonal edge and an
+inpaint that stops at the geometric boundary leaves a dark rim. Measured on a
+9° pitch: **0** invented pixels inside the rectangle at `grow=0` and **88** at
+`grow=3`, all of them in the outermost three rows of one corner. So `auto_crop`
+now insets by `warp.FRINGE`, the one constant both users read — 0.9 percentage
+points of frame on that scene, 35.7 % → 36.6 %.
+
+The inset goes **after** the two guards, not before. The "nothing was padded"
+test compares the rectangle against the full canvas, and three pixels of inset
+slipped under it: a photograph the plan had already cropped came back with a
+stored rectangle that trimmed only the inset. Pinned at all three definitions
+of the hole by `test_the_auto_crop_contains_no_invented_pixel`, so the constant
+and its two users cannot drift apart.
 
 ## Known weakness, stated plainly
 
@@ -577,7 +720,7 @@ file cannot become a second, hidden place where behaviour is configured.
 
 ## Testing
 
-`python tests/run_tests.py` -- 137 tests, standalone, no pytest. The modules are
+`python tests/run_tests.py` -- 147 tests, standalone, no pytest. The modules are
 listed explicitly in `run_tests.py`, so a new test file that is not in `MODULES`
 runs nowhere and is worse than no test at all.
 

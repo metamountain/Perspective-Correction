@@ -1,0 +1,68 @@
+# Credits and acknowledgements
+
+This project is MIT-licensed, authored by Sven Hinrichs (see LICENSE). It
+contains no code from any of the tools below; they are listed because the work
+would not have taken this shape without them. The distinction that matters for
+a license audit: **prior art** was read to understand algorithms and nothing was
+copied; **bundled models** ship in `models/` under their own licences;
+**dependencies** are installed separately by the user.
+
+## Prior art (studied, no code taken)
+
+* **chsasank/Image-Rectification** (MIT) — the starting point of this work.
+  Implements Chaudhury et al. (ICIP 2014); run and measured before being
+  rewritten. See `docs/reference-review.md`.
+* **darktable's `ashift` module** (GPL-3.0) — studied for algorithm design only.
+  The 28 mm default, the "reject a vanishing point inside the frame" rule, the
+  ~4x warp-area refusal and the scale-free RANSAC residual all trace back to it.
+  No GPL code is included or derived from. See `docs/prior-art.md`.
+* **ShiftN** (Marcus Hebel, LGPL) — the ancestor of the photographic line:
+  correct the verticals, damp the correction, let the user override. Its Burns
+  detector is the ancestor of LSD. Nothing copied.
+* **Lee et al., "Automatic Upright Adjustment of Photographs" (TPAMI 2014)** —
+  the model here follows this shape: one joint estimate of (world-up, focal
+  length), not two independent detections.
+
+## Bundled models (`models/`)
+
+These files are redistributed with the project and keep their own licences.
+
+* **`M-LSD_512_large_fp32.tflite`** — Apache-2.0, full text in
+  `models/LICENSE.mlsd`. Gu et al., "M-LSD: A Wireframe Model for Line Segment
+  Detection" (AAAI 2022). Used by `--detector mlsd`, `hybrid` and `union`; needs
+  a TFLite runtime (`ai-edge-litert`).
+* **`deeplsd_md.tar`** — MIT. Pautrat et al., "DeepLSD: Deep Learning Based Line
+  Segment Detector" (CVPR 2023), the MegaDepth model from `cvg/DeepLSD`. Used by
+  `--detector deeplsd`, `deep-hybrid` and `deep-union`; needs torch and a checkout.
+
+## Dependencies (`requirements.txt`)
+
+Installed separately; none are vendored.
+
+* **numpy** — BSD-3-Clause.
+* **OpenCV** (`opencv-python` / `opencv-python-headless`) — Apache-2.0 (v4).
+  Provides the LSD line detector (Morel & Devy, "LSD: Line Segment Detector",
+  ICCV 2009), restored in OpenCV 4.8 after being dropped in 4.1–4.7.
+* **Pillow** — HPND.
+* **piexif** — MIT. Reads EXIF orientation and focal length.
+
+## Optional backends (user-installed, not bundled)
+
+Each is imported lazily and says what is missing instead of failing at import.
+
+* **BiRefNet** — a third-party salient-object segmentation model (torch). Weights
+  are supplied separately (`--birefnet-model`); `--mask-export` bridges the
+  interpreter split.
+* **LaMa** (`simple-lama-inpainting`, MIT) — inpainting for `--fill lama`.
+  Install with `--no-deps`: a plain install downgrades Pillow and numpy and
+  breaks OpenCV in the same interpreter.
+* **ComfyUI** — outpaint backend for `--fill comfyui`; the workflow is a file in
+  `workflows/`.
+
+## Algorithms implemented classically, after their papers
+
+The geometry is standard camera calibration; no learned prior is used on the
+default path. Where a method was read rather than reimplemented, it is cited in
+`docs/prior-art.md`: Rother (2002), Tardif / J-Linkage (2009), Bazin &
+Pollefeys (2012), Chaudhury et al. (2014), Lezama et al. (2014), Zhai et al.
+(2016), NeurVPS (2019), VaPiD (2021) and GeoCalib (2024).
