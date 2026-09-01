@@ -18,6 +18,7 @@ sys.path.insert(0, HERE)
 
 MODULES = ["test_geometry", "test_lines", "test_warp", "test_estimation",
            "test_pipeline", "test_review", "test_masks", "test_birefnet", "test_prefs",
+           "test_inpaint",
            "test_detectors",
            "test_reference",
            "test_assets"]

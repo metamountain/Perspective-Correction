@@ -1,7 +1,8 @@
 """The alternative line detectors and the hybrid gate.
 
-The M-LSD tests skip cleanly when no TFLite runtime is installed, because it is
-an optional dependency and the default path must not require it.
+The M-LSD and DeepLSD tests skip cleanly when their optional dependencies are
+missing -- a TFLite runtime for one, torch plus a checkout plus 98 MB of
+weights for the other -- because the default path must not require either.
 """
 import math
 
@@ -18,6 +19,13 @@ def _mlsd_or_skip():
     if not mlsd.available():
         raise SkipTest("no TFLite runtime or model")     # noqa: F821
     return mlsd
+
+
+def _deeplsd_or_skip():
+    from bpc import deeplsd
+    if not deeplsd.available():
+        raise SkipTest("no DeepLSD checkout, torch or weights")   # noqa: F821
+    return deeplsd
 
 
 def test_gate_keeps_segments_that_lie_along_a_guide():
@@ -66,11 +74,32 @@ def test_hybrid_never_gates_the_evidence_away_entirely():
     assert len(vert) >= st.min_vertical_lines
 
 
+def test_deeplsd_returns_segments():
+    _deeplsd_or_skip()
+    sc = synth.Scene(w=1200, h=800, pitch_deg=8, seed=41)
+    st = Settings().replace(detector="deeplsd")
+    _, vert, horiz, name, _ = L.prepare(*_grids(sc, st))
+    assert name == "deeplsd"
+    assert len(vert) + len(horiz) > 0
+
+
+def test_the_deep_hybrid_never_gates_the_evidence_away_entirely():
+    """Same guarantee as the M-LSD hybrid, and for the same reason: a gate that
+    can starve the fit is a gate nobody can switch on safely."""
+    _deeplsd_or_skip()
+    sc = synth.Scene(w=1200, h=800, pitch_deg=8, seed=42)
+    st = Settings().replace(detector="deep-hybrid")
+    _, vert, horiz, name, _ = L.prepare(*_grids(sc, st))
+    assert name in ("deep-hybrid", "lsd(deep-hybrid fallback)")
+    assert len(vert) >= st.min_vertical_lines
+
+
 def test_every_detector_produces_a_usable_estimate():
-    from bpc import mlsd
+    from bpc import deeplsd, mlsd
     sc = synth.Scene(w=1200, h=800, focal_35mm=28, pitch_deg=9, roll_deg=-2, seed=43)
     tr, tp = sc.true_roll_pitch()
     names = ["lsd", "hough"] + (["mlsd", "hybrid", "union"] if mlsd.available() else [])
+    names += (["deeplsd", "deep-hybrid", "deep-union"] if deeplsd.available() else [])
     for name in names:
         st = Settings().replace(detector=name, focal_35mm=28)
         m, _, _, _, _ = analyse(sc.img, st)

@@ -106,6 +106,26 @@ class ReviewSession:
         self.refit()
         return self.detect_error
 
+    def set_detector(self, name):
+        """Switch the line detector and re-detect, for the same reason as
+        ``set_mask``: which detector was right for a photograph is a question
+        about that photograph, and the only place to answer it is in front of
+        the lines it found.  Errors -- a missing checkout, missing weights --
+        come back as a string rather than an exception, because a detector that
+        will not load must not take the review window down mid-batch.
+        """
+        before = self.settings.detector
+        self.settings = self.settings.replace(detector=name)
+        try:
+            self._detect()
+        except Exception as exc:
+            self.settings = self.settings.replace(detector=before)
+            self._detect()
+            self.refit()
+            return str(exc)
+        self.refit()
+        return self.detect_error
+
     @property
     def mask_active(self):
         info = getattr(self, "detect_info", None) or {}

@@ -20,7 +20,7 @@ class Result:
     __slots__ = ("status", "reason", "src", "dst", "roll_deg", "pitch_deg",
                  "confidence", "focal_35mm", "focal_source", "coverage",
                  "n_lines", "n_inliers", "seconds", "detector", "clamped",
-                 "out_size", "diagnostics")
+                 "out_size", "diagnostics", "fill")
 
     def __init__(self, **kw):
         for k in self.__slots__:
@@ -42,7 +42,8 @@ class Result:
         return (f"OK      {name}  roll={self.roll_deg:+.2f}deg pitch={self.pitch_deg:+.2f}deg "
                 f"conf={self.confidence:.2f} f={self.focal_35mm:.0f}mm({self.focal_source}) "
                 f"keep={self.coverage * 100:.0f}%{mask} {self.out_size[0]}x{self.out_size[1]} "
-                f"{self.seconds:.2f}s" + ("  [clamped]" if self.clamped else ""))
+                f"{self.seconds:.2f}s" + (f"  [{self.fill}]" if self.fill else "")
+                + ("  [clamped]" if self.clamped else ""))
 
     def as_dict(self):
         return {k: getattr(self, k) for k in self.__slots__ if k != "diagnostics"}
@@ -174,6 +175,12 @@ def process(src_path, dst_path, settings, debug_dir=None, dry_run=False):
 
     try:
         out = W.apply(bgr, H_total, ow, oh, settings)
+        if getattr(settings, "fill", "none") not in ("", "none"):
+            from . import inpaint as FILL
+            hole = W.filled_region(H_total, w, h, ow, oh)
+            out, note = FILL.fill(out, hole, settings)
+            if note:
+                base["fill"] = note
         os.makedirs(os.path.dirname(os.path.abspath(dst_path)) or ".", exist_ok=True)
         io.save(dst_path, out, src, settings)
     except Exception as exc:

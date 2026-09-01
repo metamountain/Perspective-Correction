@@ -64,7 +64,8 @@ from bpc.pipeline import analyse                                 # noqa: E402
 # roll-only, pitch-only and combined cases are all represented.
 DELTAS = [(2.0, 0.0), (-3.0, 0.0), (0.0, 4.0), (0.0, -5.0), (2.5, 3.5), (-1.5, -2.5)]
 
-ALL_DETECTORS = ("lsd", "fld", "hough", "mlsd", "hybrid", "union")
+ALL_DETECTORS = ("lsd", "fld", "hough", "mlsd", "hybrid", "union",
+                 "deeplsd", "deep-hybrid", "deep-union")
 
 
 BORDER_GUARD = 0.08
@@ -135,6 +136,8 @@ def main(argv=None) -> int:
                     help="'file' is deliberately not offered: a cached mask is "
                          "stale on a warped copy")
     ap.add_argument("--birefnet-model", default="auto")
+    ap.add_argument("--deeplsd-model", default="",
+                    help="DeepLSD weights; empty takes models/deeplsd_md.tar")
     ap.add_argument("--edge", type=int, default=1600)
     ap.add_argument("--per-image", action="store_true",
                     help="also print each photograph, not only the summary")
@@ -146,7 +149,8 @@ def main(argv=None) -> int:
         return 1
 
     base = Settings().replace(focal_35mm=args.focal, detect_max_edge=args.edge,
-                              mask_mode=args.mask)
+                              mask_mode=args.mask,
+                              deeplsd_model=args.deeplsd_model)
     if args.mask == "birefnet":
         from bpc import birefnet as BN
         w = args.birefnet_model
@@ -183,7 +187,7 @@ def main(argv=None) -> int:
             per_image.append((os.path.basename(f), float(np.mean(e))))
         dt = time.time() - t0
         if not errs:
-            print("{:8s}  no measurements (detector unavailable?)".format(det))
+            print("{:12s}  no measurements (detector unavailable?)".format(det))
             continue
         rows.append((det, float(np.mean(errs)), float(np.percentile(errs, 90)),
                      float(np.max(errs)), failed, dt, per_image))
@@ -191,10 +195,10 @@ def main(argv=None) -> int:
     if not rows:
         return 3
     print()
-    print("{:10s}{:>9s}{:>9s}{:>9s}{:>8s}{:>9s}".format(
+    print("{:12s}{:>9s}{:>9s}{:>9s}{:>8s}{:>9s}".format(
         "detector", "mean", "p90", "worst", "no fit", "seconds"))
     for det, mean, p90, worst, failed, dt, _ in sorted(rows, key=lambda r: r[1]):
-        print("{:10s}{:9.2f}{:9.2f}{:9.2f}{:8d}{:9.1f}".format(
+        print("{:12s}{:9.2f}{:9.2f}{:9.2f}{:8d}{:9.1f}".format(
             det, mean, p90, worst, failed, dt))
     if args.per_image:
         for det, _, _, _, _, _, per_image in rows:

@@ -99,14 +99,48 @@ If the hybrid or union wins on your material by a clear margin, make it the
 default with `--detector`, and please open an issue with the table -- that is
 the evidence needed to change the shipped default.
 
+## DeepLSD, measured
+
+The bullet below predicted DeepLSD would be "the interesting one, because it
+refines network output with a classical optimiser at full resolution, which
+attacks the actual problem". It was measured, and that prediction held -- but
+only in the hybrid, not on its own.
+
+Twelve photographs x six rotations, round trip with the border guard, `f` fixed
+at 24 mm, mask off:
+
+| detector | mean | p90 | worst | seconds |
+|---|---|---|---|---|
+| **deep-hybrid** | **0.71°** | **1.65°** | 3.78° | 68.8 |
+| deep-union | 0.76° | 2.16° | **3.74°** | 55.4 |
+| lsd | 0.77° | 2.04° | 4.71° | **18.2** |
+| deeplsd | 0.86° | 2.41° | 7.10° | 48.4 |
+
+DeepLSD alone is the worst of the four and its worst case is a ruined
+photograph. As a gate over LSD it is the best of the four. The M-LSD result has
+the same shape, which is now two independent observations of the same thing:
+**a learned detector contributes judgement, not geometry, and the arrangement
+that uses only its judgement is the one that wins.**
+
+It is not the default. It costs torch, 98 MB of weights, a checkout that is not
+on PyPI and a `pytlsd` that builds from source -- and it buys 0.06° of mean.
+
+    git clone https://github.com/cvg/DeepLSD tools/DeepLSD
+    pip install omegaconf scikit-image pytlsd        # pytlsd wants cmake + a C++ compiler
+    curl -L -o models/deeplsd_md.tar https://cvg-data.inf.ethz.ch/DeepLSD/deeplsd_md.tar
+    python rectify.py --detector-info
+
+`deeplsd_md` is the MegaDepth model and the right one outdoors;
+`deeplsd_wireframe` is the indoor one. `--no-grad-nfa` turns off the image
+gradient NFA filter, which the paper recommends for night, fog and blur.
+
 ## Not tried, and why
 
 * **A bigger network.** 6.1 MB is the largest M-LSD there is, and capacity is
   not the limit here -- endpoint resolution is. A heavier wireframe model
-  (LETR, HAWP, DeepLSD) would bring a torch dependency of hundreds of megabytes
-  to address the wrong bottleneck. DeepLSD is the interesting one, because it
-  refines network output with a classical optimiser at full resolution, which
-  attacks the actual problem.
+  (LETR, HAWP) would bring a torch dependency of hundreds of megabytes to
+  address the wrong bottleneck. DeepLSD was the interesting one for the
+  opposite reason and has now been measured -- see above.
 * **Tiling M-LSD** to raise its effective resolution. Plausible, unmeasured,
   and it multiplies the runtime.
 * **ELSED**, faster than LSD with slightly better precision/recall, would be a
