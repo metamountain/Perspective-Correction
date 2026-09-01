@@ -594,6 +594,15 @@ real texture, JPEG blocking, foliage and lens distortion. That needs
 present. `*_upright.*` is asserted to be left unchanged, `*_skip.*` to be
 refused.
 
+**Two of those six are currently dormant, and the mask cache is what gives it
+away.** There are sixteen masks and twelve photographs: `painted-hall`,
+`prague-main-railway-station-ceiling`, `tiled-skyscraper-facade` and
+`warsaw-d3200-27mm_upright` have a cached mask and no image. So
+`test_files_marked_upright_are_left_alone` and `test_files_marked_skip_are_refused`
+both skip for want of assets -- including the Prague ceiling, which is the
+photograph the whole "beyond the limit means refuse" section is built on.
+`tools/fetch_commons_asset.py` is how the others arrived.
+
 Optional backends are tested by *skipping* cleanly -- M-LSD without a TFLite
 runtime, DeepLSD without its checkout or weights, LaMa without its package. A
 suite that fails because an optional dependency is absent trains people to
