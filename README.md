@@ -57,7 +57,6 @@ Log lines are one per file:
 | `--no-pitch` / `--no-roll` | level only, or straighten verticals only |
 | `--crop aspect\|inside\|none` | keep the original aspect ratio, fit inside, or don't crop |
 | `--detector hybrid` | combine LSD's precision with M-LSD's judgement. Needs `pip install ai-edge-litert` ([measurements](docs/detectors.md)) |
-| `--mask auto` | ignore lines in vegetation and sky. **Pair it with `--focal-35mm`** ([why](docs/masking.md)) |
 | `--remember` | store `--birefnet-model`, `--mask-file`, `-o` and `--focal-35mm` as defaults; `--forget` clears them |
 | `--birefnet-model auto` | find usable weights in the usual ComfyUI folders |
 | `--mask-info` | what this Python can import, and whether the weights load |
@@ -105,7 +104,7 @@ row -- especially a SKIPPED one -- to open manual review:
   entirely. Hugin's `t2` control point; two of them determine the answer. The
   case for it is the corner view where every detected line is real and belongs
   to the wrong wall — nothing to delete, only something to state.
-* a **region mask** panel: switch between `off`, `auto`, `birefnet` and a folder
+* a **region mask** panel: switch between `off`, `birefnet` and a folder
   of masks from any other tool, with an **opacity slider**, and see
   the excluded area and the lines it removed straight away. A mask you cannot
   see is a mask you cannot trust.
@@ -129,7 +128,7 @@ folder shot with one lens turns the second row into the first.
 
 ## Tests
 
-    python tests/run_tests.py           # 59 tests, no pytest needed
+    python tests/run_tests.py           # 125 tests, no pytest needed
     python tests/run_tests.py -v
 
 Drop real photographs into `tests/assets` and six further tests start running

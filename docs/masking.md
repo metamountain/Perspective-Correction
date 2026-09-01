@@ -36,8 +36,13 @@ Two things it taught, both kept:
 * **Drawing the mask is what found it.** The numbers showed only a slightly
   lower confidence; the screen showed speckles all over the timber frame.
 
-`--mask auto` is still accepted on the command line and does nothing, so an old
-script or a remembered setting does not abort a batch.
+`--mask auto` is **not** a command-line choice any more: `--mask` takes
+`off`, `file` or `birefnet`, and an old script naming `auto` stops with
+argparse listing the three. That is deliberate -- a batch that quietly runs
+unmasked because the mask it asked for no longer exists is the silent kind of
+wrong this project avoids. The seam itself (`masks.build`) still accepts the
+word and returns no mask, so a programmatic caller holding an old settings
+object does not crash.
 
 ## Look at the mask before you trust it
 

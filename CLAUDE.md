@@ -177,24 +177,24 @@ through `kornia.feature.sold2` with no extra install, and DeepLSD needs the
 
 ## Masking: BiRefNet, and the two knobs that are not knobs
 
-`--mask auto` (cheap vegetation/sky), `--mask birefnet` (Segment-anything's
-replacement) and `--mask file` (a folder of PNGs) all go through one seam,
-`masks.build`. The producers are **not interchangeable**, and using one table
-for both was the mistake that hid a broken feature for a release.
+`--mask birefnet` (a segmenter) and `--mask file` (a folder of PNGs) go through
+one seam, `masks.build`. The producers are **not interchangeable**, and using
+one table for both was the mistake that hid a broken feature for a release.
 
-`--mask auto` is a texture statistic and its measurement is unchanged — it is
-why the default is off:
+A third, `--mask auto`, was a cheap texture statistic and is **gone** -- the CLI
+no longer offers it and `masks.build` accepts the word only to keep an old
+preferences file from failing. Its measurement is why:
 
 | | pitch max |
 |---|---|
 | f known, mask off | 2.84° |
-| f known, mask on | **0.93°** |
+| f known, auto mask on | **0.93°** |
 | f unknown, mask off | **5.58°** |
-| f unknown, mask on | 10.05° |
+| f unknown, auto mask on | 10.05° |
 
-**Never recommend `--mask auto` without `--focal-35mm` or EXIF.** It removes
-green, chaotic and sky-like *pixels*, and on a stripped JPEG that takes the
-horizontals the focal estimate needed.
+It removed green, chaotic and sky-like *pixels* where the question is about
+*objects*, and on a stripped JPEG that took the horizontals the focal estimate
+needed. Never restore it without `--focal-35mm` or EXIF in front of it.
 
 `--mask birefnet` removes whole non-building *objects* and does not share that
 failure. Round-trip on the seven assets, with the border guard:
@@ -522,7 +522,7 @@ synthetic scene's exact pose by
 
 ## Testing
 
-`python tests/run_tests.py` — 59 tests, standalone, no pytest.
+`python tests/run_tests.py` — 125 tests, standalone, no pytest.
 
 Synthetic scenes (`tests/synth.py`) carry an **exactly known camera pose**. The
 high-frequency-mask notes warn that synthetic fixtures misled that project; the
