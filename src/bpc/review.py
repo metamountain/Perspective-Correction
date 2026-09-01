@@ -68,6 +68,11 @@ class ReviewSession:
         # Hugin-style vertical control lines, in analysis-image coordinates.
         # (N, 4) of x0, y0, x1, y1.
         self.control_lines = np.zeros((0, 4))
+        # Manual crop, as fractions of the corrected canvas rather than pixels.
+        # The preview is rendered at a few hundred pixels and the file is saved
+        # at full size, so a rectangle in pixels would mean two different things;
+        # fractions mean the same thing at every scale.
+        self.crop_rect = None            # (x0, y0, x1, y1) in 0..1
         self.model = None
         self.refit()
 
@@ -162,6 +167,7 @@ class ReviewSession:
         self.mode = AUTO
         self.enabled[:] = True
         self.control_lines = np.zeros((0, 4))
+        self.crop_rect = None
         self.refit()
 
     @property
@@ -218,6 +224,46 @@ class ReviewSession:
         if len(self.control_lines) == 0:
             return np.zeros((0, 4))
         return self.control_lines * (display_scale / max(self.scale, 1e-9))
+
+    def set_crop_rect(self, x0, y0, x1, y1, shown_w, shown_h):
+        """Crop the corrected image by hand, in displayed-pixel coordinates.
+
+        Deliberately applied *after* the correction rather than instead of it.
+        The automatic crop has to guess how much of the frame is worth trading
+        for straight verticals; once the whole frame is kept and padded, that
+        trade becomes a thing you can see, and dragging a rectangle over it is a
+        better answer than any threshold.  It is also the only way to keep an
+        asymmetric composition -- the automatic rectangle is anchored on the
+        image centre, and a photographer who framed the building off-centre
+        wants to keep it there.
+        """
+        if shown_w <= 0 or shown_h <= 0:
+            return False
+        x0, x1 = sorted((float(x0) / shown_w, float(x1) / shown_w))
+        y0, y1 = sorted((float(y0) / shown_h, float(y1) / shown_h))
+        x0, y0 = max(0.0, x0), max(0.0, y0)
+        x1, y1 = min(1.0, x1), min(1.0, y1)
+        if (x1 - x0) < 0.05 or (y1 - y0) < 0.05:
+            return False                 # a stray click, not a crop
+        self.crop_rect = (x0, y0, x1, y1)
+        return True
+
+    def clear_crop_rect(self):
+        had = self.crop_rect is not None
+        self.crop_rect = None
+        return had
+
+    def _apply_crop(self, img):
+        """Cut the manual rectangle out of a rendered result, at any size."""
+        if self.crop_rect is None:
+            return img
+        h, w = img.shape[:2]
+        x0, y0, x1, y1 = self.crop_rect
+        a, b = int(round(x0 * w)), int(round(x1 * w))
+        c, d = int(round(y0 * h)), int(round(y1 * h))
+        if b - a < 8 or d - c < 8:
+            return img
+        return img[c:d, a:b]
 
     def toggle_line(self, index: int):
         if 0 <= index < len(self.enabled):
@@ -337,7 +383,7 @@ class ReviewSession:
     def render_after(self, max_edge=900):
         roll, pitch, f, _ = self.current_angles()
         if abs(roll) < 1e-9 and abs(pitch) < 1e-9:
-            return _fit(self.bgr, max_edge)
+            return _fit(self._apply_crop(self.bgr), max_edge)
         # render the preview from a reduced copy: a 24 MP warp per slider tick
         # is unusable, and the geometry is scale invariant apart from f
         s = min(1.0, float(max_edge) / max(self.w, self.h))
@@ -352,7 +398,8 @@ class ReviewSession:
         # fit again: with crop="auto" the plan may keep the whole frame and pad
         # it, which is *larger* than the input, and a preview that ignores the
         # size it was asked for overflows the pane it was drawn for
-        return _fit(W.apply(small, H_total, ow, oh, self.settings), max_edge)
+        out = self._apply_crop(W.apply(small, H_total, ow, oh, self.settings))
+        return _fit(out, max_edge)
 
     def render_pair(self, max_edge=900):
         return self.render_before(max_edge), self.render_after(max_edge)
@@ -400,8 +447,14 @@ class ReviewSession:
     def save(self, dst_path: str):
         """Write the corrected image using whatever is currently in force."""
         roll, pitch, f, _ = self.current_angles()
-        if abs(roll) < 1e-12 and abs(pitch) < 1e-12:
+        if abs(roll) < 1e-12 and abs(pitch) < 1e-12 and self.crop_rect is None:
             IO.copy_through(self.path, dst_path)
+            return dst_path
+        if abs(roll) < 1e-12 and abs(pitch) < 1e-12:
+            # nothing to straighten, but the user cropped by hand
+            out = self._apply_crop(self.bgr)
+            os.makedirs(os.path.dirname(os.path.abspath(dst_path)) or ".", exist_ok=True)
+            IO.save(dst_path, out, self.src, self.settings)
             return dst_path
         H = W.build(self.w, self.h, f, roll, pitch)
         planned = W.plan(self.w, self.h, H, self.settings)
@@ -409,7 +462,7 @@ class ReviewSession:
             IO.copy_through(self.path, dst_path)
             return dst_path
         H_total, ow, oh, _, _ = planned
-        out = W.apply(self.bgr, H_total, ow, oh, self.settings)
+        out = self._apply_crop(W.apply(self.bgr, H_total, ow, oh, self.settings))
         os.makedirs(os.path.dirname(os.path.abspath(dst_path)) or ".", exist_ok=True)
         IO.save(dst_path, out, self.src, self.settings)
         return dst_path

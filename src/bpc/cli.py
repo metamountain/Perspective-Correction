@@ -185,9 +185,10 @@ def build_parser():
     g.add_argument("--max-crop-loss", type=float, default=Settings.max_crop_loss,
                    help="with --crop auto, the share of the frame a crop may cost "
                         "before the whole frame is kept and padded instead")
-    g.add_argument("--pad", choices=["edge", "black"], default=Settings.pad,
+    g.add_argument("--pad", default=Settings.pad, metavar="EDGE|COLOUR",
                    help="what fills the corners a rotation opens up when the frame "
-                        "is kept: extend the border colour, or black")
+                        "is kept: 'edge' extends the border colour, or give a colour "
+                        "as a name (black, white, grey), #rrggbb, or r,g,b")
     g.add_argument("--keep-size", action="store_true",
                    help="rescale the crop back to the original pixel dimensions")
     g.add_argument("--jpeg-quality", type=int, default=Settings.jpeg_quality)
