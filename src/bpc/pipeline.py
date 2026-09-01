@@ -128,6 +128,29 @@ def process(src_path, dst_path, settings, debug_dir=None, dry_run=False):
     guessed = m.f_source in ("default", "prior", "none", "refined")
     roll, pitch, clamped = W.limit(m.roll, m.pitch, settings, guessed)
     base["clamped"] = clamped
+    if clamped and settings.refuse_beyond_limit:
+        # A correction that runs past the configured limit is not a correction
+        # to be trimmed to fit -- it is a sign the estimate is about something
+        # other than a facade, and applying the largest allowed warp to it is
+        # the worst available answer.  Found on a photograph of a railway
+        # station ceiling: a coffered ceiling has a clean bundle of parallel
+        # lines and a perfectly good vanishing point, so every confidence factor
+        # scored well (0.57) while the model quietly assumed the ceiling grid
+        # was the world vertical.  The result was pitch pinned to the -20 deg
+        # clamp and 41 % of the frame thrown away.
+        #
+        # Clamping is the wrong instinct here in exactly the way this project
+        # keeps documenting: it turns "I do not believe this" into "I will do as
+        # much of it as I am allowed to".
+        # report the values that actually breached -- after strength and the
+        # uncertain-focal damping -- not the raw estimate, or the numbers will
+        # not explain the decision they caused
+        want_r, want_p = W.limit(m.roll, m.pitch, settings.replace(
+            max_roll_deg=1e6, max_pitch_deg=1e6), guessed)[:2]
+        return finish_skip(
+            f"correction beyond the limit (roll {math.degrees(want_r):+.1f}deg, "
+            f"pitch {math.degrees(want_p):+.1f}deg; caps are "
+            f"{settings.max_roll_deg:.0f}/{settings.max_pitch_deg:.0f}deg)")
     total_deg = math.degrees(math.hypot(roll, pitch))
     base.update(roll_deg=math.degrees(roll), pitch_deg=math.degrees(pitch))
     if total_deg < settings.min_correction_deg:

@@ -64,6 +64,8 @@ class Settings:
     pitch_strength: float = 1.0
     roll_strength: float = 1.0
     max_pitch_deg: float = 20.0
+    refuse_beyond_limit: bool = True   # a capped correction is refused,
+                                     # not trimmed to fit
     max_roll_deg: float = 12.0
     min_correction_deg: float = 0.15    # below this: nothing worth doing
     correct_roll: bool = True

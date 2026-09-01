@@ -33,6 +33,14 @@ import sys
 import urllib.parse
 import urllib.request
 
+# Commons titles carry any script at all, and a Windows console defaults to
+# cp1252, which cannot print a Polish l-with-stroke.  Without this the tool dies
+# on the *print*, after having done the work.
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
 HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ASSETS = os.path.join(HERE, "tests", "assets")
 UA = {"User-Agent": "batch-perspective-correction/0.1 (test asset collector)"}

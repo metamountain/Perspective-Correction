@@ -239,3 +239,34 @@ def test_diagnostics_go_into_the_log_file_too():
         assert "# python" in text and "# settings:" in text
     finally:
         shutil.rmtree(d, ignore_errors=True)
+
+
+def test_a_correction_past_the_limit_is_refused_not_trimmed():
+    """A cap used to clamp: an estimate past --max-pitch was trimmed to the cap
+    and applied, turning "I do not believe this" into "I will do as much of it
+    as I am allowed to".
+
+    Found on a photograph of a railway station ceiling. A coffered ceiling has a
+    clean bundle of parallel lines and a perfectly good vanishing point, so the
+    fit was confident (0.57) while the model quietly took the ceiling grid for
+    the world vertical -- and the answer was the maximum allowed warp, throwing
+    away 41 % of the frame.
+    """
+    from bpc.config import Settings
+    d = _tmp()
+    try:
+        src = os.path.join(d, "a.jpg")
+        cv2.imwrite(src, synth.Scene(pitch_deg=9, seed=71).img)
+        # a cap far below what the scene needs stands in for the ceiling
+        tight = Settings().replace(max_pitch_deg=1.0)
+        r = process(src, os.path.join(d, "out.jpg"), tight, dry_run=True)
+        assert r.status == SKIPPED, r.line()
+        assert "beyond the limit" in r.reason
+        assert "caps are" in r.reason, "the reason has to say what it was measured against"
+        # and the old behaviour is still reachable
+        loose = tight.replace(refuse_beyond_limit=False)
+        r2 = process(src, os.path.join(d, "out2.jpg"), loose, dry_run=True)
+        assert r2.status == OK and r2.clamped
+        assert abs(r2.pitch_deg) <= 1.0001, "clamping must still clamp"
+    finally:
+        shutil.rmtree(d, ignore_errors=True)

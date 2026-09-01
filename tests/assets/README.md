@@ -29,6 +29,7 @@ Present:
 | `heilsbronn-d7000-27mm.jpg` | Nikon D7000 | **27 mm** | `FocalLengthIn35mmFilm` in EXIF |
 | `marienrode-alte-scheune-nikond3200-27mm.jpg` | Nikon D3200 | **27 mm** | `FocalLengthIn35mmFilm` in EXIF |
 | `haseldorf-inspektorat-scheune-nikond50-33mm.jpg` | Nikon D50 | **33 mm** | `FocalLengthIn35mmFilm` in EXIF |
+| `ulica-ma-cahcowskiego-w-sosnowcu-ilce7m4-16mm.jpg` | Sony A7 IV | **16 mm** | `FocalLengthIn35mmFilm` in EXIF |
 | `hospital-nikon-d60_f27.jpg` | Nikon D60 (APS-C, x1.5) | **27 mm** | the `_f27` suffix; EXIF has only `FocalLength` |
 
 Add more with `python tools/fetch_commons_asset.py <commons url>`. It refuses any
@@ -65,9 +66,35 @@ there is a choice.
 | `heilsbronn-d7000-27mm.jpg` | [Commons](https://commons.wikimedia.org/wiki/File:Heilsbronn,_Alte_Poststra%C3%9Fe,_Scheune_zum_Viehhof-001.jpg) | Tilman2007 | CC BY-SA 3.0 |
 | `marienrode-alte-scheune-nikond3200-27mm.jpg` | [Commons](https://commons.wikimedia.org/wiki/File:Landschaftsschutzgebiet_Klosterlandschaft_Marienrode_-_Westlicher_Teil_-_Alte_Scheune_(2).JPG) | Ragnar1904 | CC BY-SA 4.0 |
 | `haseldorf-inspektorat-scheune-nikond50-33mm.jpg` | [Commons](https://commons.wikimedia.org/wiki/File:Haseldorf_Inspektorat_Scheune.JPG) | Huhu Uet | **CC BY 3.0** |
+| `ulica-ma-cahcowskiego-w-sosnowcu-ilce7m4-16mm.jpg` | [Commons](https://commons.wikimedia.org/wiki/File:Ulica_Ma%C5%82cahcowskiego_w_Sosnowcu.jpg) | Krzysztof Poplawski | **CC BY 4.0** |
 
 Both were downscaled to a long edge of 1800 px with EXIF preserved; nothing else
 was altered. Verify with `piexif.load(path)["Exif"][41989]` (FocalLengthIn35mmFilm).
+
+### What the newest assets cover
+
+| asset | the case | what it does |
+|---|---|---|
+| Sosnowiec street | **wide-angle street, 16 mm** | small, sensible correction |
+
+Three others were fetched at the same time and **deliberately not kept**, which
+is worth recording because each earned its place on the reject pile:
+
+* **two interior ceilings.** A coffered ceiling has a clean bundle of parallel
+  lines and a perfectly good vanishing point, so both were confidently corrected
+  -- one at confidence 0.57 with the pitch pinned to the clamp, throwing away
+  41 % of the frame. That was worth finding and is fixed at the source: a
+  correction past `--max-pitch` is now refused rather than trimmed to fit. See
+  CLAUDE.md, "Beyond the limit means refuse, not trim". Keeping the photographs
+  as well would only test an interior case the tool does not claim.
+* **a skyscraper shot straight up its facade**, which measures a **31.6 deg**
+  round-trip error at confidence 0.00. The tool refuses it correctly, so it
+  demonstrates nothing the gate does not already say, while dragging the mean
+  round-trip error over the whole set from 0.70 to 3.36 deg.
+
+The rule both cases point at: an asset whose distortion is so extreme that the
+tool refuses it is not a test of the estimator, it is a test of the refusal --
+and one such asset is enough.
 
 Useful cases to collect: a flat-on facade, a corner view, a strong upward tilt,
 a crooked horizon with no verticals, an interior, a photo with heavy foliage in
