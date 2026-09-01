@@ -85,6 +85,14 @@ than a few hundred px, because its positional uncertainty is `R·σ_θ`.
 **Lesson:** the elegant estimator lost to the dumb prior. Measure before
 believing, and keep the losing branch documented rather than deleted.
 
+## One idea measurement accepted
+
+**Damping pitch by 0.85 when the focal length is a guess.** The error is
+symmetric; its consequences are not. Verticals left slightly converging read as
+an ordinary photograph; verticals splayed outwards at the top read as a mistake.
+Over-corrections 15/40 → 9/40 at no cost in mean accuracy. Pitch only, and only
+when `f` was not supplied.
+
 ## Fachwerk: it is the *shallow* brace that is dangerous
 
 Half-timbered facades are the adversarial case, and the intuition about why is
@@ -103,15 +111,13 @@ Roll survives all of it (worst 0.47°). And on Fachwerk *without* a known focal
 length the confidence diagnostics report `weakest: focal` in every single case —
 the diagonals are not what limits accuracy there, the focal prior is.
 
-## One idea measurement accepted
+## The front end: LSD stays, and it has now been beaten twice, narrowly
 
-**Damping pitch by 0.85 when the focal length is a guess.** The error is
-symmetric; its consequences are not. Verticals left slightly converging read as
-an ordinary photograph; verticals splayed outwards at the top read as a mistake.
-Over-corrections 15/40 → 9/40 at no cost in mean accuracy. Pitch only, and only
-when `f` was not supplied.
+Four alternatives have now been measured against LSD -- M-LSD, DeepLSD, FLD and
+Hough. None of them is the default, and the reasons differ enough to keep the
+two learned ones apart.
 
-## The detector: LSD stays, and it was a close call
+### M-LSD: long and coarse loses to short and sharp
 
 The front end was the obvious suspect for the accuracy ceiling, and the
 diagnosis was right: on a real barn LSD returned 4823 raw segments with a
@@ -146,9 +152,7 @@ away evidence it needed. Promoting on 24 measurements against a benchmark it
 loses would be exactly the mistake the rest of these notes documents.
 
 **If a user has real data, run the benchmark tool and let it decide.** That is
-the missing evidence, not more argument. `tools/benchmark_detectors.py` now
-actually exists -- this section claimed it shipped while the repository held a
-zero-byte `tools_placeholder`.
+the missing evidence, not more argument.
 
 **FLD had never been measured; it does not beat LSD.** It was in the chain only
 as a fallback for OpenCV builds without LSD, so it was worth measuring. On the
@@ -170,14 +174,13 @@ keeping it a last resort.
 An earlier run of this table said FLD won unmasked. That was the border
 artifact; see the section on it below.
 
-M-LSD could not be measured here at all -- it needs a TFLite runtime
-(`pip install ai-edge-litert`) that this interpreter lacks. SOLD2 is available
-through `kornia.feature.sold2` with no extra install, and DeepLSD needs the
-`cvg/DeepLSD` repository plus weights from `cvg-data.inf.ethz.ch`.
+The M-LSD rows above come from an interpreter that had a TFLite runtime; this
+one does not, so they cannot be re-run here. SOLD2 is reachable through
+`kornia.feature.sold2` with no extra install and is still unmeasured.
 
-## DeepLSD: the learned front end that finally beat LSD, narrowly
+### DeepLSD: judgement, not geometry
 
-The detector section above ends with "if a user has real data, run the benchmark
+The section above ends with "if a user has real data, run the benchmark
 tool and let it decide". This is that run. DeepLSD (Pautrat et al., CVPR 2023,
 MIT) is not another wireframe network -- it regresses a distance field and an
 angle field and hands *those* to LSD in place of the image gradient, so the
@@ -301,12 +304,12 @@ load-bearing: without `masks.protect_structure` the same set measures
 
 **`--mask-export` writes the masks once.** It bridges the interpreter split
 (torch without tkinter, tkinter without torch) *and* turns a repeated run into a
-file read. `tests/assets/masks` is that cache, 42 KB for six photographs, white
-meaning ignore. It must never be used for the round-trip test — the warped copy
+file read. `tests/assets/masks` is that cache, 160 KB for sixteen photographs (four of
+them not yet in the asset folder), white meaning ignore. It must never be used for the round-trip test — the warped copy
 has moved and the cached mask has not (IoU 1.000 unwarped, 0.802 warped), which
 reports 0.69°/2.35° for an estimator that achieves 0.56°/1.40°.
 
-## Segment Anything was here, and what its failure teaches
+### Segment Anything was here, and what its failure teaches
 
 SAM is deleted. It needed an invented criterion to say which of its forty
 regions was the building, and a region survived on **either** line density (which
@@ -327,10 +330,13 @@ Three things to carry forward:
    photographs. Six assets is too thin to justify two models, a checkpoint hunt
    and an AGPL-3.0 dependency — but it is the first thing to re-measure if more
    ground truth appears.
-3. **An optional dependency can change a required one at import.**
-   `ultralytics` replaces `cv2.imread`, returning `(h, w, 1)` for a greyscale
-   read, which broke `--mask file` for anyone who merely had it installed.
-   `masks.load` now insists on two dimensions.
+3. **An optional dependency can change a required one.** `ultralytics` replaces
+   `cv2.imread`, returning `(h, w, 1)` for a greyscale read, which broke
+   `--mask file` for anyone who merely had it installed; `masks.load` now
+   insists on two dimensions. `simple-lama-inpainting` does it the other way
+   round, at install time -- its stale pins downgrade Pillow and numpy and
+   break OpenCV in the same interpreter. **Install optional backends with
+   `--no-deps`**; see the Environment section.
 
 ## The confidence score: a gate, not a ranking
 
@@ -410,6 +416,42 @@ are worth remembering as a shape:
 **A benchmark that is wrong in the incumbent's disfavour is the dangerous kind**,
 because it reads as a discovery rather than a bug.
 
+## Beyond the limit means refuse, not trim
+
+`--max-pitch` and `--max-roll` used to be caps: an estimate past them was
+clamped to the cap and applied. That turns "I do not believe this" into "I will
+do as much of it as I am allowed to", which is the opposite of every other
+decision in this tool.
+
+What exposed it was a photograph of a railway station ceiling, added while
+filling in the asset wishlist. A coffered ceiling has a strong, clean bundle of
+parallel lines and a perfectly good vanishing point, so the estimator found it
+correctly and every confidence factor scored well — **0.57**, better than most
+of the barns. Nothing in the model can tell that the bundle it locked onto is
+the ceiling grid rather than the world vertical. The result was pitch pinned to
+the `-20 deg` clamp and 41 % of the frame thrown away, at high confidence.
+
+**Confidence cannot catch this and is not built to.** Every factor it scores —
+share, count, spread, horizon support, focal, stability — measures *how well the
+lines agree*, never *whether they are the right lines*. On a ceiling they agree
+beautifully.
+
+The magnitude of the correction can, and does. Two ceilings wanted 24 and 26
+degrees of pitch; the most extreme genuine facade in the asset set, a modern
+hospital shot from below, wants 16.6 and is untouched by the rule. So
+`refuse_beyond_limit` is on by default and `--clamp-beyond-limit` restores the
+old behaviour for anyone who wants it.
+
+It is a magnitude test, not a semantic one, so it does not *understand* the
+difference between a ceiling and a wall — it only notices that one of them asks
+for something no photographer plausibly wanted. That is enough here and it is
+the kind of guard this project prefers: cheap, and wrong in the safe direction.
+
+**Masking catches the same case independently**, which is worth knowing: with
+`--mask birefnet` the Prague ceiling falls to confidence 0.09, because a
+segmenter looking for a salient object finds almost nothing in a ceiling texture
+(95 % of the frame masked). A semantic check in front of a geometric one.
+
 ## Generating the band the rotation opens up
 
 `--fill lama` and `--fill comfyui` (`src/bpc/inpaint.py`) replace the padded
@@ -448,82 +490,37 @@ This is the third time an optional dependency has moved a required one (see
 install optional backends with `--no-deps` and let the failure be an ImportError
 rather than a silently changed numpy.
 
-## Beyond the limit means refuse, not trim
+## Vertical control lines, taken from Hugin
 
-`--max-pitch` and `--max-roll` used to be caps: an estimate past them was
-clamped to the cap and applied. That turns "I do not believe this" into "I will
-do as much of it as I am allowed to", which is the opposite of every other
-decision in this tool.
+The manual mode has three ways in, and this is the third: the user clicks two
+points on something they *know* is vertical in the world — a door jamb, a
+downpipe, a building corner. It is Hugin's `t2` control point, and Hugin's own
+advice carries over: place the two points as far apart as the structure allows,
+because the direction of a short segment is badly conditioned. A segment under
+8 % of the short edge is refused rather than quietly accepted, since a mis-click
+would otherwise steer the whole fit.
 
-What exposed it was a photograph of a railway station ceiling, added while
-filling in the asset wishlist. A coffered ceiling has a strong, clean bundle of
-parallel lines and a perfectly good vanishing point, so the estimator found it
-correctly and every confidence factor scored well — **0.57**, better than most
-of the barns. Nothing in the model can tell that the bundle it locked onto is
-the ceiling grid rather than the world vertical. The result was pitch pinned to
-the `-20 deg` clamp and 41 % of the frame thrown away, at high confidence.
+**They replace the detected pool rather than joining it.** A user who marks two
+door jambs is not adding two votes to three hundred, they are saying the three
+hundred were beside the point. Adding them with a large weight instead would
+mean choosing how large, and the answer would be "large enough to win", which is
+the same thing with a fudge factor in it. Two is the threshold because two lines
+determine a vanishing point — Hugin needs two as well — so `min_vertical_lines`
+drops from 4 to 2 while they are in force.
 
-**Confidence cannot catch this and is not built to.** Every factor it scores —
-share, count, spread, horizon support, focal, stability — measures *how well the
-lines agree*, never *whether they are the right lines*. On a ceiling they agree
-beautifully.
+This is the case that striking lines out cannot fix: on a corner view every line
+the detector found may be real and still belong to the wrong plane. There is
+then nothing to delete, only something to state.
 
-The magnitude of the correction can, and does. Two ceilings wanted 24 and 26
-degrees of pitch; the most extreme genuine facade in the asset set, a modern
-hospital shot from below, wants 16.6 and is untouched by the rule. So
-`refuse_beyond_limit` is on by default and `--clamp-beyond-limit` restores the
-old behaviour for anyone who wants it.
-
-It is a magnitude test, not a semantic one, so it does not *understand* the
-difference between a ceiling and a wall — it only notices that one of them asks
-for something no photographer plausibly wanted. That is enough here and it is
-the kind of guard this project prefers: cheap, and wrong in the safe direction.
-
-**Masking catches the same case independently**, which is worth knowing: with
-`--mask birefnet` the Prague ceiling falls to confidence 0.09, because a
-segmenter looking for a salient object finds almost nothing in a ceiling texture
-(95 % of the frame masked). A semantic check in front of a geometric one.
-
-## Windows has two Pythons and neither is wrong
-
-This costs more time than any algorithm here, so it is worth stating plainly:
-
-| | torch (BiRefNet) | tkinter (the GUI) |
-|---|---|---|
-| ComfyUI `python_embeded` | yes, with CUDA | **no** -- the embeddable Python omits tcl/tk |
-| system Python | usually not | yes |
-
-Both failures print "no backend". `--mask-info` reports both halves plus the
-interpreter, and the error message reads which side it is on: in the GUI Python
-it offers `--mask-export` *before* suggesting an install, because putting a
-multi-gigabyte CUDA torch into a second interpreter on a machine that already
-has one is the wrong first answer.
-
-`--mask-export DIR` runs the segmenter once from whichever Python can load it and
-writes one mask PNG per photograph; everything afterwards consumes the folder
-through `--mask file`. That bridge exists so nobody has to choose between the
-segmenter and the review window.
-
-**Anything fiddly belongs in Python, not in a `.bat`.** `run_and_log.bat` once
-searched for the checkpoint itself, grew a `^` continuation inside a
-parenthesised block -- which cmd splits and runs as a command -- and the mask
-prompt silently never appeared. That search is now `--birefnet-model auto`, where
-it is tested, and it prefers what *works* over what is largest.
-
-## A run has to be judgeable by someone who did not make it
-
-`--diagnostics` writes the interpreter, library versions, importable backends and
-the settings actually in force as a log header; `--json-report` stores the same
-block beside the results. "SKIPPED, low confidence" is nearly useless without
-them. `run_and_log.bat` collects a whole run — corrected images, overlays, log,
-report — into one folder, and writes the environment *before* the run so a failed
-run still leaves something diagnosable.
-
-`--remember` stores **paths only** (checkpoint, mask folder, output, focal
-length). Correction parameters are deliberately not remembered: a setting that
-silently persists between runs is one nobody can reason about, and a batch must
-stay reproducible from its command line. Unknown keys are dropped on load so the
-file cannot become a second, hidden place where behaviour is configured.
+**The trap it walks into, and the fix.** Confidence is largely a count of
+supporting lines, so two of them scored **0.04** and the photograph came back
+`SKIP, weakest: count` — the feature refusing its own input. Control lines now
+count as a decision, exactly like moving a slider, and `would_skip` returns
+`None` while they are active. Refusing evidence for being scarce is right when a
+detector produced it and wrong when a person did. Pinned by
+`test_marking_verticals_does_not_get_the_photo_skipped`; validated against a
+synthetic scene's exact pose by
+`test_a_control_line_that_is_really_vertical_recovers_the_true_pose`.
 
 ## Known weakness, stated plainly
 
@@ -563,47 +560,32 @@ results look under-corrected.
   was forced by the dev container having no Tkinter and turned out to be the
   right split anyway.
 
-## Vertical control lines, taken from Hugin
+## A run has to be judgeable by someone who did not make it
 
-The manual mode has three ways in, and this is the third: the user clicks two
-points on something they *know* is vertical in the world — a door jamb, a
-downpipe, a building corner. It is Hugin's `t2` control point, and Hugin's own
-advice carries over: place the two points as far apart as the structure allows,
-because the direction of a short segment is badly conditioned. A segment under
-8 % of the short edge is refused rather than quietly accepted, since a mis-click
-would otherwise steer the whole fit.
+`--diagnostics` writes the interpreter, library versions, importable backends and
+the settings actually in force as a log header; `--json-report` stores the same
+block beside the results. "SKIPPED, low confidence" is nearly useless without
+them. `run_and_log.bat` collects a whole run — corrected images, overlays, log,
+report — into one folder, and writes the environment *before* the run so a failed
+run still leaves something diagnosable.
 
-**They replace the detected pool rather than joining it.** A user who marks two
-door jambs is not adding two votes to three hundred, they are saying the three
-hundred were beside the point. Adding them with a large weight instead would
-mean choosing how large, and the answer would be "large enough to win", which is
-the same thing with a fudge factor in it. Two is the threshold because two lines
-determine a vanishing point — Hugin needs two as well — so `min_vertical_lines`
-drops from 4 to 2 while they are in force.
-
-This is the case that striking lines out cannot fix: on a corner view every line
-the detector found may be real and still belong to the wrong plane. There is
-then nothing to delete, only something to state.
-
-**The trap it walks into, and the fix.** Confidence is largely a count of
-supporting lines, so two of them scored **0.04** and the photograph came back
-`SKIP, weakest: count` — the feature refusing its own input. Control lines now
-count as a decision, exactly like moving a slider, and `would_skip` returns
-`None` while they are active. Refusing evidence for being scarce is right when a
-detector produced it and wrong when a person did. Pinned by
-`test_marking_verticals_does_not_get_the_photo_skipped`; validated against a
-synthetic scene's exact pose by
-`test_a_control_line_that_is_really_vertical_recovers_the_true_pose`.
+`--remember` stores **paths only** (checkpoint, mask folder, output, focal
+length). Correction parameters are deliberately not remembered: a setting that
+silently persists between runs is one nobody can reason about, and a batch must
+stay reproducible from its command line. Unknown keys are dropped on load so the
+file cannot become a second, hidden place where behaviour is configured.
 
 ## Testing
 
-`python tests/run_tests.py` — 137 tests, standalone, no pytest.
+`python tests/run_tests.py` -- 137 tests, standalone, no pytest. The modules are
+listed explicitly in `run_tests.py`, so a new test file that is not in `MODULES`
+runs nowhere and is worse than no test at all.
 
 Synthetic scenes (`tests/synth.py`) carry an **exactly known camera pose**. The
 high-frequency-mask notes warn that synthetic fixtures misled that project; the
 difference is that it was asking a *statistical* question about real texture,
 while this asks a *geometric* one where a rendered scene with ground truth is
-strictly the better instrument — on a real photograph nobody knows the true
+strictly the better instrument -- on a real photograph nobody knows the true
 pitch to compare against.
 
 What synthetic data cannot test is the front end: does LSD find the facade under
@@ -612,6 +594,78 @@ real texture, JPEG blocking, foliage and lens distortion. That needs
 present. `*_upright.*` is asserted to be left unchanged, `*_skip.*` to be
 refused.
 
+Optional backends are tested by *skipping* cleanly -- M-LSD without a TFLite
+runtime, DeepLSD without its checkout or weights, LaMa without its package. A
+suite that fails because an optional dependency is absent trains people to
+ignore it.
+
+**`test_inpaint.py` deliberately asserts nothing about image quality.** There is
+no ground truth for a pixel nobody photographed, so what it pins is
+*containment*: exact equality outside the hole, refusal above `--fill-max-share`,
+an unknown backend raising rather than passing through, and the shipped ComfyUI
+workflow still carrying the node titles the code writes into. Do not add a test
+that scores the generated band -- it would be scoring a guess.
+
+## Windows has two Pythons and neither is wrong
+
+This costs more time than any algorithm here, so it is worth stating plainly:
+
+| | torch (BiRefNet) | tkinter (the GUI) |
+|---|---|---|
+| ComfyUI `python_embeded` | yes, with CUDA | **no** -- the embeddable Python omits tcl/tk |
+| system Python | usually not | yes |
+
+A system Python that has *both* is the happy case and is worth checking for
+before assuming the split: the DeepLSD and LaMa measurements in these notes were
+only possible because this machine's python.org 3.12 carries torch with CUDA and
+tkinter at once. When that is true, none of the bridging below is needed.
+
+Both failures print "no backend". `--mask-info` reports both halves plus the
+interpreter, and the error message reads which side it is on: in the GUI Python
+it offers `--mask-export` *before* suggesting an install, because putting a
+multi-gigabyte CUDA torch into a second interpreter on a machine that already
+has one is the wrong first answer.
+
+`--mask-export DIR` runs the segmenter once from whichever Python can load it and
+writes one mask PNG per photograph; everything afterwards consumes the folder
+through `--mask file`. That bridge exists so nobody has to choose between the
+segmenter and the review window.
+
+**Anything fiddly belongs in Python, not in a `.bat`.** `run_and_log.bat` once
+searched for the checkpoint itself, grew a `^` continuation inside a
+parenthesised block -- which cmd splits and runs as a command -- and the mask
+prompt silently never appeared. That search is now `--birefnet-model auto`, where
+it is tested, and it prefers what *works* over what is largest.
+
+## Environment
+
+Plain CPython, `pip install -r requirements.txt` -- numpy, OpenCV, Pillow,
+piexif, and nothing else. Tkinter is needed only for the GUI and ships with the
+python.org Windows installer; the CLI runs without it. OpenCV's LSD was dropped
+in 4.1 and restored in 4.8, hence the detector fallback chain in `lines.py`.
+
+Everything below is optional, imported lazily, and says what is missing instead
+of failing at import:
+
+| feature | needs | ask it |
+|---|---|---|
+| `--mask birefnet` | torch + weights (ComfyUI's are found by `--birefnet-model auto`) | `--mask-info` |
+| `--detector mlsd`, `hybrid`, `union` | `pip install ai-edge-litert`; the model is vendored | `--detector-info` |
+| `--detector deeplsd`, `deep-hybrid`, `deep-union` | torch, a `cvg/DeepLSD` checkout in `tools/`, `pip install omegaconf scikit-image pytlsd`, and `models/deeplsd_md.tar` (98 MB) | `--detector-info` |
+| `--fill lama` | `pip install --no-deps simple-lama-inpainting` | `--fill-info --fill lama` |
+| `--fill comfyui` | a running ComfyUI and an API-format workflow | `--fill-info --fill comfyui` |
+| GUI drag-and-drop | `pip install tkinterdnd2` | the window says so |
+
+**The `--no-deps` on that fourth row is not a style preference.** Plain
+`pip install simple-lama-inpainting` downgrades Pillow to 9.5 and numpy to 1.26
+to satisfy pins the package no longer needs, and OpenCV in the same interpreter
+stops importing. An optional backend must never be able to move a required
+dependency; install it without its dependencies and let a real ImportError say
+what is genuinely absent.
+
+`pytlsd` ships no wheels and builds from source, so DeepLSD also wants cmake and
+a C++ compiler. That, and not accuracy, is why it is not the default.
+
 ## Licensing
 
 MIT, and it must stay clean. darktable's `ashift.c` is GPL-3.0 and ShiftN's
@@ -619,10 +673,3 @@ source is LGPL. Both were **read to understand the algorithms** and neither was
 copied. Constants like "assume 28 mm" are facts about the problem, not
 expression. See `docs/prior-art.md` for what was taken conceptually and what was
 deliberately rejected.
-
-## Environment
-
-Plain CPython, `pip install -r requirements.txt`. Tkinter is needed only for the
-GUI and ships with the python.org Windows installer; the CLI runs without it.
-OpenCV's LSD was dropped in 4.1 and restored in 4.8, hence the detector fallback
-chain in `lines.py`.
