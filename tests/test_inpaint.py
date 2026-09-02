@@ -180,3 +180,45 @@ def test_comfyui_gets_a_primed_band_not_a_padded_one():
     assert out[inside].std() < plain[inside].std(), "grey flattens telea's invented structure"
     assert np.array_equal(FILL._prime_for_generation(img, np.zeros_like(mask)), img), \
         "no hole, no work"
+
+
+def test_a_workflow_without_a_mask_node_is_an_edit_model_not_an_error():
+    """A whole family of models takes an image and an instruction and has
+    nowhere to put a mask.  For those the *priming* is the signal -- the band
+    arrives as flat grey-tinted colour and the prompt says to replace it -- so a
+    missing ``BPC_MASK`` is a mode, not a fault.  ``BPC_IMAGE`` stays required,
+    because without it there is nothing to send.
+
+    The containment promise does not rest on the workflow honouring a mask in
+    any case: ``_composite`` puts the result back through the hole and nowhere
+    else, so a model that repaints the whole frame still cannot touch a
+    photographed pixel.  That is asserted by
+    ``test_the_fill_touches_nothing_that_was_photographed``.
+    """
+    import json
+    import os
+    import tempfile
+    from bpc.config import Settings
+    from bpc import inpaint as FILL
+
+    edit = {"1": {"class_type": "LoadImage", "inputs": {"image": "x.png"},
+                  "_meta": {"title": FILL.TITLE_IMAGE}},
+            "2": {"class_type": "FluxEdit",
+                  "inputs": {"text": "remove grey border", "image": ["1", 0]},
+                  "_meta": {"title": FILL.TITLE_PROMPT}},
+            "3": {"class_type": "SaveImage", "inputs": {"images": ["2", 0]},
+                  "_meta": {"title": "out"}}}
+
+    with tempfile.TemporaryDirectory() as d:
+        p = os.path.join(d, "edit.json")
+        with open(p, "w", encoding="utf-8") as fh:
+            json.dump(edit, fh)
+        s = Settings().replace(fill="comfyui", comfy_workflow=p)
+        text = FILL.describe("comfyui", s)
+        assert "edit-model mode" in text, text
+        assert "REQUIRED" not in text, "a missing mask must not read as a fault"
+
+        del edit["1"]
+        with open(p, "w", encoding="utf-8") as fh:
+            json.dump(edit, fh)
+        assert "BPC_IMAGE is REQUIRED" in FILL.describe("comfyui", s)
