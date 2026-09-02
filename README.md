@@ -93,9 +93,8 @@ separately. `--debug-dir` writes one of these per image.
 Drop photos or a folder onto the window -- a **single image** is fine, so is a
 mixed selection -- or click the drop area to browse. Drag and drop needs
 `pip install tkinterdnd2`; without it the same area is a click target and says
-so. Everything dropped appears in a list; **select one and press "review
-selected image..."** (or double-click it) to open the review window without a
-batch run first.
+so. **Double-click an entry in the list** to open it in the review window
+before running the batch at all.
 
 The batch window runs the selection and colour-codes every result. Double-click any
 row -- especially a SKIPPED one -- to open manual review:
@@ -123,6 +122,10 @@ row -- especially a SKIPPED one -- to open manual review:
   the excluded area and the lines it removed straight away. A mask you cannot
   see is a mask you cannot trust.
 
+**"Review each..."** walks the whole selection through this same window, one
+photograph at a time, writing nothing until Save is pressed for that one --
+the unattended batch decides, this asks.
+
 So an image the automatic pass declines is not lost -- it is queued for a
 decision a person makes in a couple of seconds.
 
@@ -139,14 +142,6 @@ Measured on 40 rendered scenes with an exactly known camera pose
 Levelling is accurate regardless, because roll does not depend on the focal
 length. Correcting converging verticals does, so supplying `--focal-35mm` for a
 folder shot with one lens turns the second row into the first.
-
-## Tests
-
-    python tests/run_tests.py           # 137 tests, no pytest needed
-    python tests/run_tests.py -v
-
-Drop real photographs into `tests/assets` and six further tests start running
-against them; see `tests/assets/README.md` for the naming conventions.
 
 ## Licence
 
