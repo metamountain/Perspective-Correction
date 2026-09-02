@@ -284,17 +284,26 @@ def _fill_comfy(bgr: np.ndarray, hole: np.ndarray, settings) -> np.ndarray:
     base = getattr(settings, "comfy_url", "http://127.0.0.1:8188").rstrip("/")
     wf = load_workflow(getattr(settings, "comfy_workflow", ""))
     n_img, n_mask = _find(wf, TITLE_IMAGE), _find(wf, TITLE_MASK)
-    if n_img is None or n_mask is None:
+    if n_img is None:
         raise FillUnavailable(
-            f"the workflow needs a node titled {TITLE_IMAGE} and one titled "
-            f"{TITLE_MASK} (rename them in ComfyUI: right-click > Title)")
+            f"the workflow needs a node titled {TITLE_IMAGE} (rename it in "
+            "ComfyUI: right-click > Title)")
 
     small, m = _prepare(bgr, hole, int(getattr(settings, "fill_max_edge", 2048)))
     small = _prime_for_generation(small, m)
     stamp = uuid.uuid4().hex[:12]
     try:
         wf[n_img]["inputs"]["image"] = _upload(base, f"bpc_{stamp}.png", _png(small))
-        wf[n_mask]["inputs"]["image"] = _upload(base, f"bpc_{stamp}_mask.png", _png(m))
+        # `BPC_MASK` is optional, because a whole family of edit models takes an
+        # image and an instruction and has nowhere to put a mask.  For those the
+        # priming *is* the signal: the band arrives as flat grey-tinted colour
+        # and the prompt says to replace it.  BPC's own guarantee does not rest
+        # on the workflow honouring a mask in any case -- `_composite` puts the
+        # result back through the hole and nowhere else, so a model that repaints
+        # the whole frame still cannot touch a photographed pixel.
+        if n_mask is not None:
+            wf[n_mask]["inputs"]["image"] = _upload(base, f"bpc_{stamp}_mask.png",
+                                                    _png(m))
     except Exception as exc:
         raise FillUnavailable(
             f"ComfyUI at {base} did not accept the upload ({exc}). Is it "
@@ -437,8 +446,14 @@ def describe(mode: str, settings=None) -> str:
         parts.append(f"comfyui at {base}: unreachable ({exc})")
     try:
         wf = load_workflow(getattr(settings, "comfy_workflow", "") if settings else "")
-        have = [t for t in (TITLE_IMAGE, TITLE_MASK) if _find(wf, t)]
-        parts.append(f"workflow: {len(wf)} nodes, sockets {have or 'MISSING'}")
+        have = [t for t in (TITLE_IMAGE, TITLE_MASK, TITLE_PROMPT) if _find(wf, t)]
+        note = f"workflow: {len(wf)} nodes, sockets {have or 'none'}"
+        if TITLE_IMAGE not in have:
+            note += f" -- {TITLE_IMAGE} is REQUIRED and missing"
+        elif TITLE_MASK not in have:
+            note += (f" -- edit-model mode: no {TITLE_MASK}, so the primed band "
+                     f"and the prompt do the work")
+        parts.append(note)
     except FillUnavailable as exc:
         parts.append(str(exc))
     return "; ".join(parts)

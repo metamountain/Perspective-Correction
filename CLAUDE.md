@@ -539,6 +539,23 @@ the *structure* TELEA invents alongside them, so nothing in the band reads as an
 edge worth preserving. It is a starting point, not an answer -- the generator
 replaces it -- and it touches nothing outside the hole.
 
+**Which is why `BPC_MASK` is optional.** A whole family of edit models takes an
+image and an instruction and has nowhere to put a mask; for those the priming
+*is* the signal, and the prompt ("remove the grey border") does the rest. Only
+`BPC_IMAGE` is required. Nothing about BPC's own guarantee rests on the
+workflow honouring a mask in any case: `_composite` puts the returned image back
+through the hole and nowhere else, so a model that repaints the entire frame
+still cannot move a photographed pixel. The mask is uploaded when the graph has
+a node for it and quietly skipped when it does not, and `--fill-info` says which
+of the two modes it is in rather than calling the second one broken.
+
+Note the priming reads differently depending on what the padding left. Over a
+flat grey pad it *adds* variation -- measured on a real corrected frame, the
+band's spread went 7.3 to 11.8 as the sky continued into it. Over `edge`
+padding's streaks it removes structure instead. Both are the point: what
+reaches the sampler is boundary colour with no edges in it, whichever pad
+produced the band.
+
 LaMa is the right default backend: no prompt, ~3 s, and it *continues* structure
 rather than inventing objects. ComfyUI is there for the wide band and for anyone
 who would rather their own Flux graph did it; the workflow is a file
@@ -798,7 +815,7 @@ file cannot become a second, hidden place where behaviour is configured.
 
 ## Testing
 
-`python tests/run_tests.py` -- 149 tests, standalone, no pytest. The modules are
+`python tests/run_tests.py` -- 150 tests, standalone, no pytest. The modules are
 listed explicitly in `run_tests.py`, so a new test file that is not in `MODULES`
 runs nowhere and is worse than no test at all.
 
