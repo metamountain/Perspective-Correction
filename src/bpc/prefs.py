@@ -17,7 +17,8 @@ import json
 import os
 
 APP = "batch-perspective-correction"
-REMEMBERED = ("birefnet_model", "mask_file", "output", "focal_35mm")
+REMEMBERED = ("birefnet_model", "mask_file", "output", "focal_35mm",
+              "comfy_url", "comfy_workflow")
 
 
 def path() -> str:
