@@ -26,9 +26,20 @@ def _photo(h=80, w=120):
     return rng.integers(0, 256, (h, w, 3), dtype=np.uint8)
 
 
-def test_off_is_the_default():
-    """The one setting in this module that is a decision rather than a knob."""
-    assert Settings.fill == "none"
+def test_the_default_fill_is_the_one_that_needs_nothing():
+    """The default is a decision, not a knob, and it changed once: from "none"
+    to "telea".  What makes that defensible is not that telea invents less --
+    a pixel nobody photographed is invented either way -- but that it is the
+    only backend that is deterministic, needs no model, no download and no
+    network, and therefore behaves identically on every machine that runs this.
+
+    The two that pull in a model must stay off by default.  A batch that
+    silently waits on a 196 MB download, or on a server that is not running, is
+    the failure this project is built against."""
+    assert Settings.fill == "telea"
+    assert Settings.fill in F.LIVE_MODES, "the default must be cheap enough to preview"
+    for heavy in ("lama", "comfyui"):
+        assert Settings.fill != heavy, "a default may not require a download"
 
 
 def test_the_fill_touches_nothing_that_was_photographed():
@@ -50,8 +61,10 @@ def test_a_hole_that_is_not_there_is_not_an_error():
 
 
 def test_no_fill_means_no_backend_is_needed():
+    """`--fill none` is still one flag away, and it must be a true no-op: the
+    frame comes back byte for byte, with no note and nothing imported."""
     img = _photo()
-    out, note = F.fill(img, _hole(), Settings())
+    out, note = F.fill(img, _hole(), Settings().replace(fill="none"))
     assert np.array_equal(out, img) and note == ""
 
 
