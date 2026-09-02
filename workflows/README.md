@@ -35,9 +35,22 @@ from what your ComfyUI has installed:
 
 | node | input | change it to |
 |---|---|---|
-| `UNETLoader` | `flux2-klein-9b.safetensors` | whatever your `models/unet` holds |
-| `CLIPLoader` | `mistral_3_small_flux2_fp8_scaled.safetensors` | your FLUX.2 text encoder |
-| `VAELoader` | `flux2_vae.safetensors` | your FLUX.2 VAE |
+| `UNETLoader` | `flux-2-klein-9b-fp8.safetensors` | whatever your `models/unet` holds |
+| `CLIPLoader` | `qwen_3_8b_fp8mixed.safetensors` | the encoder **that model** wants |
+| `VAELoader` | `flux2-vae.safetensors` | your FLUX.2 VAE |
+
+BPC checks these three against the server before it posts, substitutes the
+closest name it finds, and lights the panel amber when it had to guess. **The
+guess is by filename, and a filename does not know what a model is compatible
+with.** The middle row is the example: this workflow used to name
+`mistral_3_small_flux2_fp8_scaled.safetensors`, an install had
+`mistral_3_small_flux2_fp8.safetensors`, and the substitution was a good match
+and the wrong encoder -- Klein 9B wants Qwen3 here, and ComfyUI failed with
+
+    mat1 and mat2 shapes cannot be multiplied (512x15360 and 12288x4096)
+
+which is a text-embedding width, not the VAE it looks like. If the panel is
+amber, pick the three explicitly in the selectors beside it.
 
 The fastest way to fix it is not to edit the JSON: open ComfyUI, build (or fix)
 the graph there until it runs by hand, then **Save (API format)** and point

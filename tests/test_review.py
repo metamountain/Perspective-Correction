@@ -505,6 +505,7 @@ def test_single_image_save_does_not_load_a_backend_when_fill_is_off():
     from bpc import inpaint as FILL
 
     s, _ = _session(seed=52)
+    s.settings = s.settings.replace(fill="none")
     s.set_manual(roll_deg=-3.0, pitch_deg=9.0, focal_35mm=24.0)
     assert s.settings.fill == "none"
 

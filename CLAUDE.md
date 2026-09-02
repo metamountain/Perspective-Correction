@@ -503,7 +503,24 @@ about. The review window's colour picker therefore writes `settings.pad`, and
 its swatch reads `pad` back rather than showing black over a setting that says
 `edge`.
 
-* **The default is `none` and stays `none`.**
+* **The default is `telea`, and it changed.** It was `none`, on the argument
+  that a generated band is content the camera never saw. That argument still
+  holds -- a pixel nobody photographed is invented whether a network or a
+  fast-marching solver put it there -- so what changed is not the principle but
+  which backend can carry a default at all. `telea` needs no model, no
+  download, no network and no GPU; it is deterministic, so two runs of the same
+  batch on two machines agree; and it costs milliseconds. `lama` and `comfyui`
+  stay off, because a batch that silently waits on a 196 MB download or on a
+  server that is not running is exactly the failure this project is built
+  against.
+
+  What makes it tolerable rather than merely convenient is what surrounds it.
+  With `crop="auto"` a correction under about 1.5 degrees is *cropped*, so
+  there is no band and the fill never runs. Above that the band is a few per
+  cent of frame at the very edge, `--fill-max-share` refuses anything over 35 %,
+  and `--fill none` is one flag away. Pinned by
+  `test_the_default_fill_is_the_one_that_needs_nothing`, which asserts both the
+  value and that it is a backend needing no download.
 * **Only the hole is touched.** `warp.filled_region` warps a white frame and
   marks where no source pixel landed; the composite ramps its alpha *inside*
   that mask and multiplies by it again, so a photographed pixel comes through
@@ -587,6 +604,17 @@ against what `/object_info` reports, by shared filename tokens. A match below
 file. Every substitution is *returned*, never merely done -- it is a guess
 about which of forty-six text encoders was meant, and a guess nobody is told
 about is how a batch quietly produces something else.
+
+**A filename match can be the wrong model, and nothing in the matcher can
+know.** The shipped inpainting workflow named
+`mistral_3_small_flux2_fp8_scaled.safetensors`; the server had
+`mistral_3_small_flux2_fp8.safetensors`, which is an excellent name match and
+the wrong text encoder for Klein 9B -- that wants Qwen3. ComfyUI failed with
+`mat1 and mat2 shapes cannot be multiplied (512x15360 and 12288x4096)`, a
+text-embedding width, at `txt_in`. It reads like a VAE problem and is not one.
+Compatibility is not visible in a filename, so the matcher must never be
+trusted silently: that is the whole argument for reporting every substitution
+and for the amber light.
 
 **The guess is not enough on its own, which is why there is a selector.** With
 sixteen UNETs, forty-six text encoders and twenty-seven VAEs installed -- the

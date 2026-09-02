@@ -93,9 +93,12 @@ class Settings:
     auto_crop_max_loss: float = 0.12
     pad: str = "edge"                   # edge | black | white | #rrggbb | r,g,b
     # What to do with the band the rotation opens up, once padding has put
-    # something there.  "none" keeps the pad.  The others generate pixels the
-    # camera never saw, which is why the default is and stays "none".
-    fill: str = "none"                  # none | telea | lama | comfyui
+    # something there.  "none" keeps the pad; the rest put pixels there that
+    # the camera never saw.  The default is "telea" -- the only one of the
+    # three that needs no model, no download and no network, and is the same
+    # every run.  It is still invention: see the fill section of CLAUDE.md for
+    # why that is defensible here and why "none" is one flag away.
+    fill: str = "telea"                 # none | telea | lama | comfyui
     fill_max_edge: int = 2048           # generate at this size, paste back full res
     fill_max_share: float = 0.35        # refuse to invent more of the frame than this
     fill_device: str = ""               # torch device for lama; "" = its default
