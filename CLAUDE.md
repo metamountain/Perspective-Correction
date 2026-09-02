@@ -643,6 +643,47 @@ The window owns no state. Host, port, workflow and the three model choices are
 care whether it is open; every helper that draws into it returns early when it
 is shut.
 
+**Two workflows ship, and the one that ran was whichever nobody chose.**
+`--comfy-workflow` defaulted to `flux-klein-outpaint.json` and the window's
+label read "shipped workflow", singular, while two of them ship for two
+*incompatible* model shapes. So a FLUX.2 [klein] **edit** model -- picked
+explicitly in the model selector, present on the server under exactly that
+name -- was fed through an `InpaintModelConditioning` + `KSampler` graph. The
+band came back wrong and **the light was green**, correctly: every checkpoint
+the workflow named was installed. Nothing was missing. The wrong graph was
+running.
+
+This is the same shape as the text-encoder failure above and one level up from
+it. There the guess was about *which file*; here it was about *which graph*,
+and the four-state light said nothing because none of its four states is about
+the workflow. The fix is not a fifth colour -- the default is a graph that
+runs, so red would be wrong, and `models` is labelled "models missing", which
+would be a correct colour on the wrong problem. **The fix is that every state
+names the file and says whether anybody chose it**, and that the window offers
+the two by shape rather than a "choose..." button onto a folder. Pinned by
+`test_the_indicator_names_the_workflow_and_says_when_nobody_chose_it`.
+
+The general rule, which this project keeps re-learning: *a default that is
+invisible is a decision nobody made.* `--fill telea` is a defensible default
+because it is named, deterministic and cheap. An unnamed choice between two
+mutually exclusive graphs is not a default, it is a coin toss with a green
+light on it.
+
+**And the contract is not optional just because the graph works.** A user's own
+API export ran perfectly by hand and BPC refused it: no `BPC_IMAGE`. That
+refusal is right -- on a graph with two `LoadImage` nodes a guess would be
+silent and wrong half the time -- but the message has to name the file, because
+"the workflow has no node titled BPC_IMAGE" reads as a bug in the shipped one.
+
+**The review window could select `comfyui` and configure nothing.** Every
+control -- address, light, workflow, the three model selectors -- lived on the
+batch window only, so picking the mode in a review window meant the default
+address and the unnamed default workflow, silently. It now opens the same
+dialog (there is one server) and listens for the same verdict rather than
+polling for it, and `_sync_comfy` re-reads the App's settings at save time --
+without that, choosing a workflow while a review is open would move the light
+and not the file, which is worse than not offering the control at all.
+
 **The light has four states, and the last two are the point.** `down` (red):
 nothing will run -- no answer, or a workflow `/prompt` cannot take. `ok`
 (green): every model name resolves as written. `models` (amber): the server
@@ -907,7 +948,7 @@ file cannot become a second, hidden place where behaviour is configured.
 
 ## Testing
 
-`python tests/run_tests.py` -- 155 tests, standalone, no pytest. The modules are
+`python tests/run_tests.py` -- 157 tests, standalone, no pytest. The modules are
 listed explicitly in `run_tests.py`, so a new test file that is not in `MODULES`
 runs nowhere and is worse than no test at all.
 

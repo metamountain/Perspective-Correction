@@ -7,6 +7,19 @@ Two are shipped, for the two shapes a generator comes in:
 | `flux-klein-outpaint.json` | inpainting: image + mask + prompt | yes |
 | `flux2-klein-edit-nomask.json` | **edit model**: image + instruction | no |
 
+**Pick one.** They are not interchangeable and nothing can tell from a
+checkpoint's filename which one it wants -- so `Setup > ComfyUI server...` lists
+both by shape and the indicator names whichever is in force. Leaving it unset
+takes `flux-klein-outpaint.json`, and running an *edit* model through that
+graph's `InpaintModelConditioning` produces a wrong band **at a green light**:
+every checkpoint the workflow named was installed, so nothing was missing. The
+wrong graph was running. That is why the line now reads
+
+    ComfyUI 0.34.0, workflow: flux-klein-outpaint.json, inpainting
+    (shipped default -- nobody chose it), every model present
+
+rather than stopping at "every model present".
+
 An edit model has nowhere to put a mask, so for the second one the *band itself*
 carries the information. BPC primes it before uploading -- TELEA propagates the
 boundary colour inwards and the result is pulled halfway to mid grey -- and the
@@ -27,6 +40,11 @@ a widget promoted to a subgraph boundary appears as a socket **and** keeps its
 slot in `widgets_values`, so dropping the linked names before zipping shifts
 every later value by one. That is how a `UNETLoader` acquires a checkpoint
 filename as its `weight_dtype`.
+
+The two editor exports it was flattened from are kept as
+`docs/comfyui-flux2-klein-edit-template*.json`. They are provenance, **not**
+usable workflows -- `/prompt` cannot take an editor export -- which is why they
+do not live in this folder.
 
 
 `flux-klein-outpaint.json` is a starting point, not a guarantee. It is written
@@ -72,6 +90,12 @@ Both image nodes must be `LoadImage`-shaped -- BPC writes the uploaded filename
 into their `image` input. The mask arrives as an image, so the shipped graph
 converts it with `ImageToMask` on the red channel; keep that, or use whatever
 your inpainting nodes expect.
+
+**A graph that runs perfectly by hand is still refused without these**, and the
+refusal names the file: `workflow: outpaint.json has no node titled BPC_IMAGE`.
+Nothing guesses which `LoadImage` was meant -- on a graph with two of them the
+guess would be silent and wrong half the time -- so it is three right-clicks in
+ComfyUI, then Save (API format) again.
 
 `--comfy-seed` overwrites every `seed` and `noise_seed` in the graph, which is
 what makes a batch reproducible. Left at 0, the workflow's own seeds stand.

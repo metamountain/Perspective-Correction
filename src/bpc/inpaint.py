@@ -81,6 +81,33 @@ ROOT = os.path.normpath(os.path.join(HERE, "..", ".."))
 WORKFLOWS = os.path.join(ROOT, "workflows")
 DEFAULT_WORKFLOW = os.path.join(WORKFLOWS, "flux-klein-outpaint.json")
 
+SHIPPED = (("flux2-klein-edit-nomask.json", "edit model -- image + instruction"),
+           ("flux-klein-outpaint.json", "inpainting -- image + mask"))
+"""The two shipped graphs, for the two shapes a generator comes in.
+
+One table, because the window lists them and `status` has to name whichever one
+is actually in force.  That naming is the point: two workflows ship for two
+*incompatible* model shapes, and an unnamed default is how a FLUX.2 [klein]
+**edit** model gets run through an `InpaintModelConditioning` graph -- which
+produces a plausible-looking wrong band and a **green** light, because every
+checkpoint it named was installed.  Nothing was missing; the wrong graph was
+running.  So `workflow_path` reports whether anybody chose, and every state of
+the indicator says which file it is talking about.
+"""
+
+
+def workflow_path(settings=None) -> tuple:
+    """``(path, chosen)`` -- which graph will run, and whether anyone picked it.
+
+    Split out because "nobody chose this" is a fact the indicator has to carry
+    and an empty string cannot.  It is deliberately *not* a fifth light: the
+    default is a usable workflow, so refusing it would be wrong, and folding it
+    into `models` would put a workflow problem behind a label that reads
+    "models missing".  It is named instead.
+    """
+    p = (getattr(settings, "comfy_workflow", "") or "").strip() if settings else ""
+    return (p, True) if p else (DEFAULT_WORKFLOW, False)
+
 # titles the workflow marks its three sockets with, so a user can rebuild the
 # graph any way they like and only has to keep the labels
 TITLE_IMAGE = "BPC_IMAGE"
@@ -213,6 +240,22 @@ def _find(wf: dict, title: str):
         if node.get("_meta", {}).get("title") == title:
             return nid
     return None
+
+
+def _workflow_note(path: str, chosen: bool, wf: dict = None) -> str:
+    """``workflow: <file>, <shape>`` -- and whether anybody picked it.
+
+    The shape is read off the graph rather than the filename, by the same test
+    `_fill_comfy` uses: no ``BPC_MASK`` node means the band itself is the
+    signal, which is what an edit model wants.  It is the discriminating fact
+    and it belongs in every line, not only the green one.
+    """
+    note = "workflow: " + os.path.basename(path)
+    if wf is not None:
+        note += ", edit-model" if _find(wf, TITLE_MASK) is None else ", inpainting"
+    if not chosen:
+        note += " (shipped default -- nobody chose it)"
+    return note
 
 
 def _http(url: str, data=None, headers=None, timeout=30.0):
@@ -477,34 +520,40 @@ def status(settings) -> tuple:
     something that works.
     """
     base = getattr(settings, "comfy_url", DEFAULT_COMFY_URL)
+    path, chosen = workflow_path(settings)
     try:
         stats = json.loads(_http(base.rstrip("/") + "/system_stats",
                                  timeout=5.0).decode())
     except Exception as exc:
-        return "down", f"no answer from {base} ({exc})"
+        return "down", f"no answer from {base} ({exc}); {_workflow_note(path, chosen)}"
     version = stats.get("system", {}).get("comfyui_version", "?")
     try:
-        wf = load_workflow(getattr(settings, "comfy_workflow", ""))
+        wf = load_workflow(path)
     except FillUnavailable as exc:
         return "down", str(exc)
     if _find(wf, TITLE_IMAGE) is None:
-        return "down", f"the workflow has no node titled {TITLE_IMAGE}"
+        return "down", (f"{_workflow_note(path, chosen)} has no node titled "
+                        f"{TITLE_IMAGE}, so BPC has nowhere to put the "
+                        f"photograph (right-click the LoadImage node in "
+                        f"ComfyUI > Title)")
 
+    # Named in every state below, not just the green one.  A graph running the
+    # wrong shape passes every check this function makes -- see `SHIPPED`.
+    note = _workflow_note(path, chosen, wf)
     apply_model_choices(wf, settings)
     swapped, unresolved = resolve_models(wf, base)
     if unresolved:
-        return "models", (f"ComfyUI {version} is up, but not installed: "
+        return "models", (f"ComfyUI {version} is up, {note}, but not installed: "
                           + "; ".join(unresolved))
     if swapped:
-        return "models", (f"ComfyUI {version} is up; guessing at "
+        return "models", (f"ComfyUI {version} is up, {note}; guessing at "
                           + "; ".join(swapped))
-    mode = "edit-model" if _find(wf, TITLE_MASK) is None else "inpainting"
-    return "ok", f"ComfyUI {version}, {mode} workflow, every model present"
+    return "ok", f"ComfyUI {version}, {note}, every model present"
 
 
 def _fill_comfy(bgr: np.ndarray, hole: np.ndarray, settings) -> np.ndarray:
     base = getattr(settings, "comfy_url", "http://127.0.0.1:8188").rstrip("/")
-    wf = load_workflow(getattr(settings, "comfy_workflow", ""))
+    wf = load_workflow(workflow_path(settings)[0])
     # Chosen names first, then a guess for anything still absent.  Both happen
     # before the uploads, so nothing can rewrite the filename BPC just posted.
     apply_model_choices(wf, settings)
@@ -643,7 +692,7 @@ def available(mode: str, settings=None) -> bool:
         base = getattr(settings, "comfy_url", "http://127.0.0.1:8188").rstrip("/")
         try:
             _http(base + "/system_stats", timeout=3.0)
-            load_workflow(getattr(settings, "comfy_workflow", "") if settings else "")
+            load_workflow(workflow_path(settings)[0])
             return True
         except Exception:
             return False
@@ -670,10 +719,15 @@ def describe(mode: str, settings=None) -> str:
         parts.append(f"comfyui at {base}: up (ComfyUI {sysinfo.get('comfyui_version', '?')})")
     except Exception as exc:
         parts.append(f"comfyui at {base}: unreachable ({exc})")
+    wf_path, chosen = workflow_path(settings)
     try:
-        wf = load_workflow(getattr(settings, "comfy_workflow", "") if settings else "")
+        wf = load_workflow(wf_path)
         have = [t for t in (TITLE_IMAGE, TITLE_MASK, TITLE_PROMPT) if _find(wf, t)]
-        note = f"workflow: {len(wf)} nodes, sockets {have or 'none'}"
+        # The filename first: two graphs ship for two incompatible model shapes,
+        # and a node count answers a question nobody asked while hiding the one
+        # that decides whether the run means anything.
+        note = _workflow_note(wf_path, chosen, wf)
+        note += f", {len(wf)} nodes, sockets {have or 'none'}"
         if TITLE_IMAGE not in have:
             note += f" -- {TITLE_IMAGE} is REQUIRED and missing"
         elif TITLE_MASK not in have:

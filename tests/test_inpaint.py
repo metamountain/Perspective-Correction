@@ -435,3 +435,102 @@ def test_the_server_light_has_three_states_not_two():
         assert state == "down" and "no answer" in line, (state, line)
     finally:
         FILL._http, FILL.load_workflow = orig_http, orig_load
+
+
+def test_the_indicator_names_the_workflow_and_says_when_nobody_chose_it():
+    """Two graphs ship, for two *incompatible* model shapes, and the unset case
+    silently took one of them.
+
+    That is not a hypothetical.  A FLUX.2 [klein] **edit** model, chosen in the
+    window's model selector, was run through `flux-klein-outpaint.json`'s
+    `InpaintModelConditioning` graph because `comfy_workflow` was never set --
+    and the light went **green**, correctly, because every checkpoint the
+    workflow named was installed.  Nothing was missing; the wrong graph was
+    running, and the only word in the line that said so was "inpainting", which
+    means nothing to anyone who does not know two workflows ship.
+
+    So the filename is in every state, and "nobody chose this" is said out
+    loud.  It is deliberately not a fifth light: the default is a workflow that
+    runs, so red would be wrong, and `models` reads "models missing", which
+    would be a correct colour on the wrong problem.
+    """
+    import json
+    import os
+    from bpc.config import Settings
+    from bpc import inpaint as FILL
+
+    served = {"UNETLoader": {"input": {"required": {
+        "unet_name": [["installed.safetensors"], {}]}}}}
+
+    def graph(with_mask):
+        wf = {"1": {"class_type": "LoadImage", "inputs": {"image": "x.png"},
+                    "_meta": {"title": FILL.TITLE_IMAGE}},
+              "4": {"class_type": "UNETLoader",
+                    "inputs": {"unet_name": "installed.safetensors"}}}
+        if with_mask:
+            wf["2"] = {"class_type": "LoadImage", "inputs": {"image": "m.png"},
+                       "_meta": {"title": FILL.TITLE_MASK}}
+        return wf
+
+    def serve(url, *a, **k):
+        if "system_stats" in url:
+            return json.dumps({"system": {"comfyui_version": "9.9"}}).encode()
+        return json.dumps(served).encode()
+
+    seen = {}
+
+    def load(path=""):
+        seen["path"] = path
+        return graph(with_mask="outpaint" in os.path.basename(path))
+
+    orig_http, orig_load = FILL._http, FILL.load_workflow
+    FILL._http, FILL.load_workflow = serve, load
+    try:
+        state, line = FILL.status(Settings())
+        assert state == "ok", (state, line)
+        # It resolved the shipped default, and it says both halves: which file,
+        # and that the user never picked it.
+        assert seen["path"] == FILL.DEFAULT_WORKFLOW, seen
+        assert os.path.basename(FILL.DEFAULT_WORKFLOW) in line, line
+        assert "nobody chose it" in line, line
+        assert "inpainting" in line, line
+
+        s = Settings()
+        s.comfy_workflow = os.path.join(FILL.WORKFLOWS, FILL.SHIPPED[0][0])
+        state, line = FILL.status(s)
+        assert state == "ok", (state, line)
+        assert FILL.SHIPPED[0][0] in line, line
+        assert "edit-model" in line, line
+        assert "nobody chose it" not in line, line       # they did
+
+        # A server that is not answering must still say which graph it would
+        # have run: "disconnected" and nothing else sends people to the port
+        # when the workflow is the thing that is wrong.
+        FILL._http = lambda *a, **k: (_ for _ in ()).throw(OSError("refused"))
+        state, line = FILL.status(Settings())
+        assert state == "down" and "no answer" in line, (state, line)
+        assert os.path.basename(FILL.DEFAULT_WORKFLOW) in line, line
+    finally:
+        FILL._http, FILL.load_workflow = orig_http, orig_load
+
+
+def test_both_shipped_workflows_exist_and_are_postable():
+    """`SHIPPED` is what the window lists, so a name that has drifted from the
+    folder is a chooser offering a file that cannot be opened."""
+    import os
+    from bpc import inpaint as FILL
+
+    assert len(FILL.SHIPPED) == 2, FILL.SHIPPED
+    for name, what in FILL.SHIPPED:
+        path = os.path.join(FILL.WORKFLOWS, name)
+        assert os.path.isfile(path), path
+        wf = FILL.load_workflow(path)            # raises on an editor export
+        assert FILL._find(wf, FILL.TITLE_IMAGE) is not None, name
+        assert what.strip(), name
+    # The two shapes, not two of the same one -- that is the whole reason the
+    # choice has to be made rather than defaulted.
+    shapes = {FILL._find(FILL.load_workflow(os.path.join(FILL.WORKFLOWS, n)),
+                         FILL.TITLE_MASK) is None
+              for n, _ in FILL.SHIPPED}
+    assert shapes == {True, False}, shapes
+    assert os.path.basename(FILL.DEFAULT_WORKFLOW) in [n for n, _ in FILL.SHIPPED]
