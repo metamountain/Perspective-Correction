@@ -153,3 +153,30 @@ def test_telea_fills_the_band_and_leaves_the_rest_alone():
     assert "telea" in note
     assert np.array_equal(out[40:], img[40:]), "outside the hole nothing may move"
     assert not np.array_equal(out[:24], img[:24]), "inside the hole something must"
+
+
+def test_comfyui_gets_a_primed_band_not_a_padded_one():
+    """What a generator sees in the hole must be neither black nor the
+    resampler's streaks.  Both are bad starting points in opposite ways: black
+    reads as content, and the streaks are the artifact that cost this project
+    two wrong conclusions.  Primed with TELEA for colour, then pulled halfway to
+    grey so the structure TELEA invents alongside it does not survive.
+    """
+    import cv2
+    import numpy as np
+    from bpc import inpaint as FILL
+
+    rng = np.random.default_rng(3)
+    img = cv2.GaussianBlur((rng.random((200, 300, 3)) * 255).astype(np.uint8), (31, 31), 0)
+    mask = np.zeros((200, 300), np.uint8)
+    mask[:30, :] = 255
+    inside = mask > 0
+
+    out = FILL._prime_for_generation(img, mask)
+    assert np.array_equal(out[~inside], img[~inside]), "outside the hole is untouched"
+    assert not np.array_equal(out[inside], img[inside]), "inside the hole is primed"
+    assert abs(float(out[inside].mean()) - FILL.PRIME_GREY) < 12, "pulled towards grey"
+    plain = cv2.inpaint(img, mask, 3, cv2.INPAINT_TELEA)
+    assert out[inside].std() < plain[inside].std(), "grey flattens telea's invented structure"
+    assert np.array_equal(FILL._prime_for_generation(img, np.zeros_like(mask)), img), \
+        "no hole, no work"
