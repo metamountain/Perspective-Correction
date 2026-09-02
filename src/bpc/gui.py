@@ -1018,6 +1018,7 @@ class App(_ROOT_CLASS):
         # value as their initial state rather than being set afterwards.
         self._remembered = prefs.load()
         self._build()
+        self._build_menu()
         if self._remembered.get("output"):
             self.v_output.set(self._remembered["output"])
         self._refresh_items()          # opens on the drop stage, not the work one
@@ -1130,65 +1131,35 @@ class App(_ROOT_CLASS):
                                   justify="left")
         self.lbl_fill.grid(row=3, column=0, columnspan=9, sticky="w", pady=(4, 0))
 
-        # Where the ComfyUI generator lives, and whether it is actually there.
-        # Without this the mode was selectable and unconfigurable: the address
-        # and the workflow existed only as command-line flags, so choosing
-        # "comfyui" in the window could only ever mean the default port and the
-        # shipped workflow, and finding out it was wrong meant running a batch.
-        self.comfy_row = ttk.Frame(opt)
-        self.comfy_row.grid(row=4, column=0, columnspan=9, sticky="ew", pady=(4, 0))
-        ttk.Label(self.comfy_row, text="ComfyUI").pack(side="left")
-        # Host and port apart, because the port is the half that actually gets
-        # changed -- a second instance, a tunnel, a container -- and hunting for
-        # it inside a URL is how it gets mistyped.  One fact still lives in one
-        # place: `_comfy_url` composes them and nothing stores the joined form.
+        # The ComfyUI settings live in their own window rather than in this
+        # panel.  Two reasons, both found by looking: the panel is hidden until
+        # a folder is loaded, so the server could not be set up first at all;
+        # and these controls only matter for one of four fill modes, which is a
+        # poor bargain for six widgets of permanent clutter.
+        self.v_comfy_host = tk.StringVar()
+        self.v_comfy_port = tk.StringVar()
         host, port = _split_url(self._remembered.get("comfy_url", Settings.comfy_url))
-        self.v_comfy_host = tk.StringVar(value=host)
-        self.v_comfy_port = tk.StringVar(value=port)
-        ttk.Entry(self.comfy_row, textvariable=self.v_comfy_host,
-                  width=20).pack(side="left", padx=(6, 2))
-        ttk.Label(self.comfy_row, text=":").pack(side="left")
-        ttk.Entry(self.comfy_row, textvariable=self.v_comfy_port,
-                  width=6).pack(side="left", padx=(2, 6))
-        self.lbl_comfy_state = tk.Label(self.comfy_row, text="not checked",
-                                        background=INK["bg"], foreground=INK["dim"])
-        self.lbl_comfy_state.pack(side="left", padx=(0, 8))
-        # Editing the address invalidates the verdict.  A green "connected"
-        # sitting beside a port nobody has asked yet is worse than no light at
-        # all: it is an answer to a question that was not the one on screen.
-        for var in (self.v_comfy_host, self.v_comfy_port):
-            var.trace_add("write",
-                          lambda *_: self._set_comfy_state("not checked", INK["dim"]))
+        self.v_comfy_host.set(host)
+        self.v_comfy_port.set(port)
         self.v_comfy_wf = tk.StringVar(value=self._remembered.get("comfy_workflow", ""))
-        ttk.Button(self.comfy_row, text="workflow...",
-                   command=self._pick_comfy_workflow).pack(side="left")
-        self.lbl_comfy_wf = ttk.Label(self.comfy_row, text="", style="Dim.TLabel")
-        self.lbl_comfy_wf.pack(side="left", padx=6)
-        self.btn_comfy_test = ttk.Button(self.comfy_row, text="Test connection",
-                                         command=self._test_comfy)
-        self.btn_comfy_test.pack(side="left", padx=6)
-        self._sync_comfy_workflow_label()
-
-        # The three files a workflow names, chosen from what the server has.
-        # `resolve_models` guesses well enough when one candidate is obviously
-        # the same file under another name, and not at all when a machine has
-        # forty-six text encoders installed -- which is the normal case, and the
-        # reason these are a selector rather than a message.
-        self.comfy_models = ttk.Frame(opt)
-        self.comfy_models.grid(row=5, column=0, columnspan=9, sticky="ew", pady=(2, 0))
         self.v_comfy_models = {}
-        self.cb_comfy_models = {}
-        for label, key in (("model", "comfy_unet"), ("clip", "comfy_clip"),
-                           ("vae", "comfy_vae")):
-            ttk.Label(self.comfy_models, text=label).pack(side="left", padx=(0, 4))
-            var = tk.StringVar(value="")
-            box = ttk.Combobox(self.comfy_models, textvariable=var, width=30,
-                               state="readonly", values=["(from the workflow)"])
-            box.pack(side="left", padx=(0, 12))
-            var.set(self._remembered.get(key, "") or "(from the workflow)")
+        for key in ("comfy_unet", "comfy_clip", "comfy_vae"):
+            var = tk.StringVar(value=self._remembered.get(key, "") or "(from the workflow)")
             var.trace_add("write", lambda *_a, k=key: self._remember_model(k))
             self.v_comfy_models[key] = var
-            self.cb_comfy_models[key] = box
+        self.cb_comfy_models = {}
+        self._comfy_dialog = None
+        self._comfy_state = ("unknown", "not checked")
+        self._comfy_models_cache = {}
+        # Editing the address invalidates the verdict: a green light beside a
+        # port nobody has asked yet answers a question no longer on screen.
+        for var in (self.v_comfy_host, self.v_comfy_port):
+            var.trace_add("write", lambda *_a: self._show_comfy_state(
+                "unknown", "not checked -- the address changed"))
+        ttk.Button(opt, text="ComfyUI server...",
+                   command=self._open_comfy).grid(row=4, column=0, columnspan=2,
+                                                  sticky="w", pady=(4, 0))
+
         ttk.Checkbutton(opt, text="subfolders", variable=self.v_recursive).grid(row=2, column=0, sticky="w")
         ttk.Checkbutton(opt, text="overwrite originals", variable=self.v_overwrite).grid(row=2, column=1, sticky="w")
         ttk.Checkbutton(opt, text="offer manual review for unclear images",
@@ -1261,6 +1232,14 @@ class App(_ROOT_CLASS):
         if mode == "none":
             self.lbl_fill.configure(text="")
             return
+        if mode == "comfyui":
+            # Choosing it is asking for it: nothing about a ComfyUI fill works
+            # until an address and a workflow are settled, and a mode that
+            # silently needs six settings nobody was shown is the kind of quiet
+            # failure this project keeps arguing against.
+            self._open_comfy()
+            self._test_comfy()
+            return
         from . import inpaint as FILL
         s = self._settings()
         text = FILL.describe(mode, s)
@@ -1268,7 +1247,111 @@ class App(_ROOT_CLASS):
             text = "fill will FAIL on every image -- " + text
         self.lbl_fill.configure(text=text)
 
+    def _build_menu(self):
+        """A menu bar, because the options panel is hidden on the empty window.
+
+        Every other way into the ComfyUI settings lives inside that panel --
+        including the fill selector that opens it -- so on a freshly opened
+        window there was no way to reach them at all.  A menu is always there.
+        """
+        bar = tk.Menu(self)
+        setup = tk.Menu(bar, tearoff=0)
+        setup.add_command(label="ComfyUI server...", command=self._open_comfy)
+        setup.add_separator()
+        setup.add_command(label="Add images...", command=self._add_files)
+        setup.add_command(label="Add folder...", command=self._add_folder)
+        bar.add_cascade(label="Setup", menu=setup)
+        try:
+            self.configure(menu=bar)
+        except Exception:                     # a platform without menu bars
+            pass
+        self._menu = bar
+
+    # -- the ComfyUI window ----------------------------------------------
+    def _open_comfy(self):
+        """Server address, connection light, workflow and the three models.
+
+        Its own window because the options panel is hidden until a folder is
+        loaded -- so the server could not be configured first at all -- and
+        because these controls matter for one fill mode out of four.
+        """
+        if self._comfy_dialog is not None and self._comfy_dialog.winfo_exists():
+            self._comfy_dialog.lift()
+            return
+        win = tk.Toplevel(self)
+        win.title("ComfyUI server")
+        apply_theme(win)
+        win.configure(background=INK["bg"])
+        win.transient(self)
+        self._comfy_dialog = win
+        win.protocol("WM_DELETE_WINDOW", self._close_comfy)
+
+        body = ttk.Frame(win, padding=12)
+        body.pack(fill="both", expand=True)
+
+        addr = ttk.Frame(body)
+        addr.pack(fill="x")
+        ttk.Label(addr, text="address", width=10).pack(side="left")
+        ttk.Entry(addr, textvariable=self.v_comfy_host, width=22).pack(side="left")
+        ttk.Label(addr, text=":").pack(side="left", padx=2)
+        ttk.Entry(addr, textvariable=self.v_comfy_port, width=6).pack(side="left")
+        self.lbl_comfy_state = tk.Label(addr, text="not checked", width=16,
+                                        background=INK["bg"], foreground=INK["dim"])
+        self.lbl_comfy_state.pack(side="left", padx=10)
+        self.btn_comfy_test = ttk.Button(addr, text="Test connection",
+                                         command=self._test_comfy)
+        self.btn_comfy_test.pack(side="left")
+
+        wfr = ttk.Frame(body)
+        wfr.pack(fill="x", pady=(10, 0))
+        ttk.Label(wfr, text="workflow", width=10).pack(side="left")
+        ttk.Button(wfr, text="choose...",
+                   command=self._pick_comfy_workflow).pack(side="left")
+        self.lbl_comfy_wf = ttk.Label(wfr, text="", style="Dim.TLabel")
+        self.lbl_comfy_wf.pack(side="left", padx=8)
+
+        # The three files a workflow names, chosen from what the server has.
+        # `resolve_models` guesses well enough when one candidate is obviously
+        # the same file under another name, and not at all when a machine has
+        # forty-six text encoders installed -- which is the normal case, and the
+        # reason these are a selector rather than a message.
+        self.cb_comfy_models = {}
+        for label, key in (("model", "comfy_unet"), ("clip", "comfy_clip"),
+                           ("vae", "comfy_vae")):
+            row = ttk.Frame(body)
+            row.pack(fill="x", pady=(8, 0))
+            ttk.Label(row, text=label, width=10).pack(side="left")
+            box = ttk.Combobox(row, textvariable=self.v_comfy_models[key], width=46,
+                               state="readonly", values=["(from the workflow)"])
+            box.pack(side="left")
+            self.cb_comfy_models[key] = box
+
+        self.lbl_comfy_detail = ttk.Label(body, text="", style="Dim.TLabel",
+                                          wraplength=560, justify="left")
+        self.lbl_comfy_detail.pack(fill="x", pady=(12, 0))
+        ttk.Button(body, text="Close",
+                   command=self._close_comfy).pack(anchor="e", pady=(12, 0))
+
+        self._sync_comfy_workflow_label()
+        self._fill_model_lists(self._comfy_models_cache)
+        self._show_comfy_state(*self._comfy_state)
+
+    def _close_comfy(self):
+        win, self._comfy_dialog = self._comfy_dialog, None
+        self.lbl_comfy_state = None
+        self.btn_comfy_test = None
+        self.lbl_comfy_wf = None
+        self.lbl_comfy_detail = None
+        self.cb_comfy_models = {}
+        if win is not None:
+            win.destroy()
+
+    def _comfy_open(self):
+        return self._comfy_dialog is not None and self._comfy_dialog.winfo_exists()
+
     def _sync_comfy_workflow_label(self):
+        if not self._comfy_open():
+            return
         wf = self.v_comfy_wf.get()
         self.lbl_comfy_wf.configure(
             text=os.path.basename(wf) if wf else "shipped workflow")
@@ -1291,7 +1374,7 @@ class App(_ROOT_CLASS):
         # The workflow is half of what "connected" means -- a reachable server
         # with an unusable graph is not a working fill -- so the verdict is
         # stale the moment it changes.
-        self._set_comfy_state("not checked", INK["dim"])
+        self._show_comfy_state("unknown", "not checked -- the workflow changed")
         self._check_fill()
 
     def _comfy_url(self):
@@ -1309,8 +1392,11 @@ class App(_ROOT_CLASS):
         The first entry is always "(from the workflow)" -- the default, and the
         only honest label for it. Naming a file the user did not pick would make
         the selector claim a decision nobody made, and the workflow's own value
-        is what runs until they do.
+        is what runs until they do.  Silently does nothing when the window is
+        shut: the choices live on the App and outlive it.
         """
+        if not self._comfy_open():
+            return
         for key, box in self.cb_comfy_models.items():
             names = models.get(key) or []
             box.configure(values=["(from the workflow)"] + names)
@@ -1319,8 +1405,14 @@ class App(_ROOT_CLASS):
                 continue                          # a still-valid choice survives
             self.v_comfy_models[key].set("(from the workflow)")
 
-    def _set_comfy_state(self, text, colour):
-        self.lbl_comfy_state.configure(text=text, foreground=colour)
+    def _show_comfy_state(self, state, text):
+        """Remembered on the App, drawn only when the window is open."""
+        self._comfy_state = (state, text)
+        label, ink = self.COMFY_LIGHTS.get(state, self.COMFY_LIGHTS["down"])
+        if self._comfy_open():
+            self.lbl_comfy_state.configure(text=label, foreground=INK[ink])
+            self.lbl_comfy_detail.configure(text=text)
+        self.lbl_fill.configure(text=f"ComfyUI: {label} -- {text}")
 
     def _test_comfy(self):
         """Ask the server whether it is there, off the UI thread.
@@ -1330,8 +1422,9 @@ class App(_ROOT_CLASS):
         as a crash, not as a slow server.  The button says it is working and
         comes back either way; a check that cannot fail visibly is not a check.
         """
-        self.btn_comfy_test.configure(state="disabled")
-        self._set_comfy_state("checking...", INK["dim"])
+        if self._comfy_open():
+            self.btn_comfy_test.configure(state="disabled")
+            self.lbl_comfy_state.configure(text="checking...", foreground=INK["dim"])
         self.lbl_fill.configure(text="ComfyUI: asking...")
         settings = self._settings().replace(fill="comfyui")
 
@@ -1355,16 +1448,19 @@ class App(_ROOT_CLASS):
     # Three lights, because "up but running on a guessed checkpoint" is neither
     # of the other two: green would hide it, red would refuse something that
     # works.
-    COMFY_LIGHTS = {"ok":     ("connected", "ok"),
-                    "models": ("models missing", "warn"),
-                    "down":   ("disconnected", "err")}
+    COMFY_LIGHTS = {"ok":      ("connected", "ok"),
+                    "models":  ("models missing", "warn"),
+                    "down":    ("disconnected", "err"),
+                    # Not a verdict.  "disconnected" for an address nobody has
+                    # asked yet would be a claim, and a wrong one.
+                    "unknown": ("not checked", "dim")}
 
     def _comfy_result(self, state, text, models=None):
-        self.btn_comfy_test.configure(state="normal")
-        self._fill_model_lists(models or {})
-        label, ink = self.COMFY_LIGHTS.get(state, self.COMFY_LIGHTS["down"])
-        self._set_comfy_state(label, INK[ink])
-        self.lbl_fill.configure(text=text)
+        if self._comfy_open():
+            self.btn_comfy_test.configure(state="normal")
+        self._comfy_models_cache = models or self._comfy_models_cache
+        self._fill_model_lists(self._comfy_models_cache)
+        self._show_comfy_state(state, text)
         if state != "down":
             prefs.save(comfy_url=self._comfy_url())
 
