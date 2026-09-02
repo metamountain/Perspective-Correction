@@ -371,6 +371,18 @@ class ReviewWindow(tk.Toplevel):
         self._fire_closed()
         self.destroy()
 
+    def destroy(self):
+        """Every way this window goes away drops its listener.
+
+        `_save` and `_keep` call `destroy()` directly, so hanging the removal
+        off `_on_close` would leave a dead widget in the App's list after the
+        commonest exit of all.  `_show_comfy_state` catches and drops a stale
+        listener anyway -- but that net is for the unexpected, not for the
+        normal path.
+        """
+        self._unregister_comfy()
+        super().destroy()
+
     def _target_path(self):
         """Where Save writes: the original, or the ``_corr`` copy beside it."""
         return self.session.path if self.v_overwrite.get() else self.dest_path
@@ -474,7 +486,19 @@ class ReviewWindow(tk.Toplevel):
         self.lbl_pad_colour.grid(row=0, column=3, sticky="w", padx=(6, 0))
         ttk.Button(fill_row, text="edge",
                    command=self._pad_edge).grid(row=0, column=4, sticky="w", padx=(6, 0))
+        # The ComfyUI mode was selectable here with no way to configure it and
+        # no indicator -- so picking it meant the default address and, worse,
+        # the *unnamed default workflow*, which is the inpainting graph. An
+        # edit model run through it produces a wrong band at a green light.
+        # Same window as the batch panel's, because there is one server.
+        self.btn_comfy = ttk.Button(fill_row, text="ComfyUI server...",
+                                    command=self._open_comfy)
+        self.btn_comfy.grid(row=0, column=5, sticky="w", padx=(12, 0))
+        self.lbl_comfy = ttk.Label(fill_row, text="", style="Dim.TLabel")
+        self.lbl_comfy.grid(row=1, column=1, columnspan=5, sticky="w", padx=(6, 0))
+        fill_row.columnconfigure(5, weight=1)
         self._sync_pad_swatch()
+        self._register_comfy()
 
         btns = ttk.Frame(top, padding=(0, 8))
         btns.pack(fill="x")
@@ -593,10 +617,83 @@ class ReviewWindow(tk.Toplevel):
         self.session.mask_alpha = float(self.v_alpha.get())
         self._schedule_redraw()
 
+    # -- ComfyUI, which lives on the App -----------------------------------
+    # A fixed list, and it must stay one.  `_sync_comfy` copies from the App's
+    # `_settings()`, which is a *whole* Settings -- strength, confidence, crop,
+    # detector, mask.  Widening this to everything would silently overwrite the
+    # per-photograph decisions this window owns with the batch panel's.
+    COMFY_KEYS = ("comfy_url", "comfy_workflow", "comfy_unet", "comfy_clip",
+                  "comfy_vae")
+
+    def _app(self):
+        """The batch window, when there is one.  ``None`` under a test root."""
+        app = self.master
+        return app if hasattr(app, "_open_comfy") else None
+
+    def _register_comfy(self):
+        """Listen for the App's verdict rather than polling for it.
+
+        The App already computes the four-state light off the UI thread and
+        posts it through its queue; this window only has to be told. Registered
+        rather than read, so a state that changes while the window is open
+        reaches it -- an indicator that is only correct at open time is worse
+        than none.
+        """
+        app = self._app()
+        if app is None:
+            return
+        app._comfy_listeners.append(self._on_comfy_state)
+        self._on_comfy_state(*app._comfy_state)
+
+    def _unregister_comfy(self):
+        app = self._app()
+        if app is not None and self._on_comfy_state in app._comfy_listeners:
+            app._comfy_listeners.remove(self._on_comfy_state)
+
+    def _on_comfy_state(self, state, text):
+        if self.v_fill.get() != "comfyui":
+            self.lbl_comfy.configure(text="")
+            return
+        label, ink = App.COMFY_LIGHTS.get(state, App.COMFY_LIGHTS["down"])
+        self.lbl_comfy.configure(text=f"ComfyUI: {label} -- {text}",
+                                 foreground=INK[ink])
+
+    def _open_comfy(self):
+        app = self._app()
+        if app is None:
+            messagebox.showinfo("ComfyUI", "open the batch window to reach the "
+                                           "ComfyUI settings", parent=self)
+            return
+        app._open_comfy()
+        app._test_comfy()
+
+    def _sync_comfy(self):
+        """Take the App's current ComfyUI settings, not the ones this window
+        opened with.
+
+        ``self.session.settings`` is a snapshot from `_review_single`. Without
+        this, choosing a workflow in the settings window while a review is open
+        would change the light and not the file that gets written -- the
+        settings would appear to have been ignored.
+        """
+        app = self._app()
+        if app is None:
+            return
+        live = app._settings()
+        self.session.settings = self.session.settings.replace(
+            **{k: getattr(live, k) for k in self.COMFY_KEYS})
+
     def _apply_fill(self):
         """The session owns the settings the save reads; the window only shows
         them.  Writing ``self.settings`` here made the whole control a no-op."""
         self.session.settings = self.session.settings.replace(fill=self.v_fill.get())
+        if self.v_fill.get() == "comfyui":
+            # Choosing it is asking for it -- the same rule the batch panel
+            # follows. A mode that silently needs six settings nobody was shown
+            # is the quiet failure this project keeps arguing against.
+            self._open_comfy()
+        else:
+            self.lbl_comfy.configure(text="")
         self._schedule_redraw()
 
     def _pick_pad_colour(self):
@@ -976,6 +1073,9 @@ class ReviewWindow(tk.Toplevel):
                 and not messagebox.askyesno(
                     "Overwrite", f"Replace the original?\n\n{dst}", parent=self)):
             return
+        # The file that gets written must use the ComfyUI settings as they are
+        # now, not as they were when this window opened.
+        self._sync_comfy()
         try:
             self.session.save(dst)
         except Exception as exc:
@@ -1142,6 +1242,8 @@ class App(_ROOT_CLASS):
         self.v_comfy_host.set(host)
         self.v_comfy_port.set(port)
         self.v_comfy_wf = tk.StringVar(value=self._remembered.get("comfy_workflow", ""))
+        self.v_comfy_wf_pick = tk.StringVar()   # what the chooser shows
+        self.cb_comfy_wf = None
         self.v_comfy_models = {}
         for key in ("comfy_unet", "comfy_clip", "comfy_vae"):
             var = tk.StringVar(value=self._remembered.get(key, "") or "(from the workflow)")
@@ -1149,7 +1251,14 @@ class App(_ROOT_CLASS):
             self.v_comfy_models[key] = var
         self.cb_comfy_models = {}
         self._comfy_dialog = None
-        self._comfy_state = ("unknown", "not checked")
+        # The detail half, not a second copy of the label: "not checked --
+        # not checked" is what the pair rendered before.
+        self._comfy_state = ("unknown", "press Test connection to check the "
+                                        "server and the workflow")
+        # Review windows that want the same verdict.  Pushed to rather than
+        # polled: the check runs on a worker and lands through `self.queue`, so
+        # there is one place that knows the answer changed.
+        self._comfy_listeners = []
         self._comfy_models_cache = {}
         # Editing the address invalidates the verdict: a green light beside a
         # port nobody has asked yet answers a question no longer on screen.
@@ -1302,11 +1411,19 @@ class App(_ROOT_CLASS):
                                          command=self._test_comfy)
         self.btn_comfy_test.pack(side="left")
 
+        # A list, not a browse button.  Two graphs ship, for two *incompatible*
+        # model shapes, and the button offered no way to see that -- so the
+        # unset case silently took the inpainting one and ran an edit model
+        # through it, at a green light, because every checkpoint it named was
+        # installed.  Naming the choice is the fix; see `inpaint.SHIPPED`.
         wfr = ttk.Frame(body)
         wfr.pack(fill="x", pady=(10, 0))
         ttk.Label(wfr, text="workflow", width=10).pack(side="left")
-        ttk.Button(wfr, text="choose...",
-                   command=self._pick_comfy_workflow).pack(side="left")
+        self.cb_comfy_wf = ttk.Combobox(wfr, textvariable=self.v_comfy_wf_pick,
+                                        width=46, state="readonly")
+        self.cb_comfy_wf.pack(side="left")
+        self.cb_comfy_wf.bind("<<ComboboxSelected>>",
+                              lambda e: self._on_comfy_workflow_pick())
         self.lbl_comfy_wf = ttk.Label(wfr, text="", style="Dim.TLabel")
         self.lbl_comfy_wf.pack(side="left", padx=8)
 
@@ -1341,6 +1458,7 @@ class App(_ROOT_CLASS):
         self.lbl_comfy_state = None
         self.btn_comfy_test = None
         self.lbl_comfy_wf = None
+        self.cb_comfy_wf = None
         self.lbl_comfy_detail = None
         self.cb_comfy_models = {}
         if win is not None:
@@ -1349,12 +1467,63 @@ class App(_ROOT_CLASS):
     def _comfy_open(self):
         return self._comfy_dialog is not None and self._comfy_dialog.winfo_exists()
 
+    CHOOSE_A_FILE = "choose a file..."
+
+    def _comfy_workflow_choices(self):
+        """``([label, ...], {label: path})`` -- the shipped graphs, then a file.
+
+        The path is absolute so the choice is a *choice*: once it is stored,
+        `inpaint.workflow_path` reports ``chosen`` and the indicator stops
+        saying nobody picked one.
+        """
+        from . import inpaint as FILL
+        labels, paths = [], {}
+        for name, what in FILL.SHIPPED:
+            label = f"{what}  [{name}]"
+            labels.append(label)
+            paths[label] = os.path.join(FILL.WORKFLOWS, name)
+        current = self.v_comfy_wf.get()
+        if current and current not in paths.values():
+            label = os.path.basename(current)
+            labels.append(label)
+            paths[label] = current
+        labels.append(self.CHOOSE_A_FILE)
+        return labels, paths
+
     def _sync_comfy_workflow_label(self):
+        """Show which graph is in force -- by name, and never as 'shipped'.
+
+        The old label said "shipped workflow" while two of them ship, which is
+        the whole defect: it read as an answer and named nothing.
+        """
         if not self._comfy_open():
             return
-        wf = self.v_comfy_wf.get()
-        self.lbl_comfy_wf.configure(
-            text=os.path.basename(wf) if wf else "shipped workflow")
+        labels, paths = self._comfy_workflow_choices()
+        self.cb_comfy_wf.configure(values=labels)
+        current = self.v_comfy_wf.get()
+        from . import inpaint as FILL
+        if not current:
+            # Nobody chose. Say so where the choice is made, not only in the
+            # detail line -- a blank box reads as "fine".
+            self.v_comfy_wf_pick.set("")
+            self.lbl_comfy_wf.configure(
+                text=f"not chosen -- {os.path.basename(FILL.DEFAULT_WORKFLOW)} will run")
+            return
+        for label, path in paths.items():
+            if path == current:
+                self.v_comfy_wf_pick.set(label)
+                break
+        self.lbl_comfy_wf.configure(text="")
+
+    def _on_comfy_workflow_pick(self):
+        labels, paths = self._comfy_workflow_choices()
+        picked = self.v_comfy_wf_pick.get()
+        if picked == self.CHOOSE_A_FILE:
+            # A cancelled dialog must not leave the box showing the sentinel.
+            if not self._pick_comfy_workflow():
+                self._sync_comfy_workflow_label()
+            return
+        self._use_comfy_workflow(paths.get(picked, ""))
 
     def _pick_comfy_workflow(self):
         """The API export, not the editor export.
@@ -1365,12 +1534,24 @@ class App(_ROOT_CLASS):
         """
         p = filedialog.askopenfilename(
             title="ComfyUI workflow (API format)", parent=self,
+            initialdir=self._comfy_workflow_dir(),
             filetypes=[("ComfyUI API workflow", "*.json"), ("All files", "*.*")])
         if not p:
+            return False
+        self._use_comfy_workflow(p)
+        return True
+
+    def _comfy_workflow_dir(self):
+        from . import inpaint as FILL
+        current = self.v_comfy_wf.get()
+        return os.path.dirname(current) if current else FILL.WORKFLOWS
+
+    def _use_comfy_workflow(self, path):
+        if not path:
             return
-        self.v_comfy_wf.set(p)
+        self.v_comfy_wf.set(path)
         self._sync_comfy_workflow_label()
-        prefs.save(comfy_workflow=p)       # an address, not a correction setting
+        prefs.save(comfy_workflow=path)    # an address, not a correction setting
         # The workflow is half of what "connected" means -- a reachable server
         # with an unusable graph is not a working fill -- so the verdict is
         # stale the moment it changes.
@@ -1413,6 +1594,11 @@ class App(_ROOT_CLASS):
             self.lbl_comfy_state.configure(text=label, foreground=INK[ink])
             self.lbl_comfy_detail.configure(text=text)
         self.lbl_fill.configure(text=f"ComfyUI: {label} -- {text}")
+        for listen in list(self._comfy_listeners):
+            try:
+                listen(state, text)
+            except Exception:     # a dead review window must not take this one down
+                self._comfy_listeners.remove(listen)
 
     def _test_comfy(self):
         """Ask the server whether it is there, off the UI thread.

@@ -218,10 +218,16 @@ def build_parser():
                    help="torch device for the local fill; empty picks its default")
     g.add_argument("--comfy-url", default=Settings.comfy_url)
     g.add_argument("--comfy-workflow", default="", metavar="FILE.json",
-                   help="ComfyUI API-format workflow; empty uses the bundled "
-                        "workflows/flux-klein-outpaint.json. Nodes titled "
-                        "BPC_IMAGE, BPC_MASK and (optionally) BPC_PROMPT are "
-                        "where the photograph, the hole and the prompt go")
+                   help="ComfyUI API-format workflow. Two ship, for two "
+                        "incompatible model shapes: workflows/"
+                        "flux2-klein-edit-nomask.json for an edit model (image "
+                        "+ instruction) and workflows/flux-klein-outpaint.json "
+                        "for an inpainting model (image + mask). Empty takes "
+                        "the second, so name the one you mean -- an edit model "
+                        "run through the inpainting graph fails quietly. Nodes "
+                        "titled BPC_IMAGE, BPC_MASK and (optionally) "
+                        "BPC_PROMPT are where the photograph, the hole and the "
+                        "prompt go")
     g.add_argument("--comfy-prompt", default="",
                    help="text for the node titled BPC_PROMPT")
     g.add_argument("--comfy-seed", type=int, default=0,
