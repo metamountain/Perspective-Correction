@@ -222,3 +222,25 @@ def test_a_workflow_without_a_mask_node_is_an_edit_model_not_an_error():
         with open(p, "w", encoding="utf-8") as fh:
             json.dump(edit, fh)
         assert "BPC_IMAGE is REQUIRED" in FILL.describe("comfyui", s)
+
+
+def test_the_shipped_edit_workflow_carries_the_titles_the_code_writes_into():
+    """The maskless workflow is a real ComfyUI graph, flattened out of a
+    subgraph export, so it is exactly the kind of file that rots silently: a
+    rename in the editor and BPC would upload into nothing.  Same guard the
+    inpainting workflow already has, plus the assertion that this one has *no*
+    mask node -- that absence is the feature, not an oversight.
+    """
+    import os
+    from bpc import inpaint as FILL
+
+    path = os.path.join(os.path.dirname(FILL.DEFAULT_WORKFLOW),
+                        "flux2-klein-edit-nomask.json")
+    assert os.path.isfile(path), "the edit-model workflow ships with the project"
+    wf = FILL.load_workflow(path)          # also asserts it is the API format
+    assert FILL._find(wf, FILL.TITLE_IMAGE), "BPC_IMAGE is where the photo goes"
+    assert FILL._find(wf, FILL.TITLE_PROMPT), "BPC_PROMPT is the instruction"
+    assert FILL._find(wf, FILL.TITLE_MASK) is None, \
+        "an edit model takes no mask; if this ever gains one, say why"
+    assert any(n.get("class_type") == "SaveImage" for n in wf.values()), \
+        "without an output node the run completes and returns nothing"

@@ -1,0 +1,286 @@
+{
+ "9": {
+  "class_type": "SaveImage",
+  "inputs": {
+   "images": [
+    "sg75_65",
+    0
+   ],
+   "filename_prefix": "BPC_fill"
+  },
+  "_meta": {
+   "title": "BPC_OUTPUT"
+  }
+ },
+ "76": {
+  "class_type": "LoadImage",
+  "inputs": {
+   "image": "bpc_input.png"
+  },
+  "_meta": {
+   "title": "BPC_IMAGE"
+  }
+ },
+ "131": {
+  "class_type": "ImageScaleDownToSize",
+  "inputs": {
+   "images": [
+    "76",
+    0
+   ],
+   "size": 2048,
+   "mode": true
+  },
+  "_meta": {
+   "title": "ImageScaleDownToSize"
+  }
+ },
+ "sg75_61": {
+  "class_type": "KSamplerSelect",
+  "inputs": {
+   "sampler_name": "euler"
+  },
+  "_meta": {
+   "title": "KSamplerSelect"
+  }
+ },
+ "sg75_62": {
+  "class_type": "Flux2Scheduler",
+  "inputs": {
+   "width": [
+    "sg75_100",
+    0
+   ],
+   "height": [
+    "sg75_100",
+    1
+   ],
+   "steps": 20
+  },
+  "_meta": {
+   "title": "Flux2Scheduler"
+  }
+ },
+ "sg75_63": {
+  "class_type": "CFGGuider",
+  "inputs": {
+   "model": [
+    "sg75_70",
+    0
+   ],
+   "positive": [
+    "sg75_124",
+    0
+   ],
+   "negative": [
+    "sg75_122",
+    0
+   ],
+   "cfg": 5
+  },
+  "_meta": {
+   "title": "CFGGuider"
+  }
+ },
+ "sg75_64": {
+  "class_type": "SamplerCustomAdvanced",
+  "inputs": {
+   "noise": [
+    "sg75_73",
+    0
+   ],
+   "guider": [
+    "sg75_63",
+    0
+   ],
+   "sampler": [
+    "sg75_61",
+    0
+   ],
+   "sigmas": [
+    "sg75_62",
+    0
+   ],
+   "latent_image": [
+    "sg75_66",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "SamplerCustomAdvanced"
+  }
+ },
+ "sg75_65": {
+  "class_type": "VAEDecode",
+  "inputs": {
+   "samples": [
+    "sg75_64",
+    0
+   ],
+   "vae": [
+    "sg75_72",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "VAEDecode"
+  }
+ },
+ "sg75_73": {
+  "class_type": "RandomNoise",
+  "inputs": {
+   "noise_seed": 192774551144773
+  },
+  "_meta": {
+   "title": "RandomNoise"
+  }
+ },
+ "sg75_70": {
+  "class_type": "UNETLoader",
+  "inputs": {
+   "unet_name": "flux-2-klein-9b-fp8.safetensors",
+   "weight_dtype": "default"
+  },
+  "_meta": {
+   "title": "UNETLoader"
+  }
+ },
+ "sg75_71": {
+  "class_type": "CLIPLoader",
+  "inputs": {
+   "clip_name": "qwen_3_8b_fp8mixed.safetensors",
+   "type": "flux2",
+   "device": "default"
+  },
+  "_meta": {
+   "title": "CLIPLoader"
+  }
+ },
+ "sg75_74": {
+  "class_type": "CLIPTextEncode",
+  "inputs": {
+   "clip": [
+    "sg75_71",
+    0
+   ],
+   "text": "remove grey border\n"
+  },
+  "_meta": {
+   "title": "BPC_PROMPT"
+  }
+ },
+ "sg75_67": {
+  "class_type": "CLIPTextEncode",
+  "inputs": {
+   "clip": [
+    "sg75_71",
+    0
+   ],
+   "text": ""
+  },
+  "_meta": {
+   "title": "CLIP Text Encode (Negative Prompt)"
+  }
+ },
+ "sg75_72": {
+  "class_type": "VAELoader",
+  "inputs": {
+   "vae_name": "flux2-vae.safetensors"
+  },
+  "_meta": {
+   "title": "VAELoader"
+  }
+ },
+ "sg75_66": {
+  "class_type": "EmptyFlux2LatentImage",
+  "inputs": {
+   "width": [
+    "sg75_100",
+    0
+   ],
+   "height": [
+    "sg75_100",
+    1
+   ],
+   "batch_size": 1
+  },
+  "_meta": {
+   "title": "EmptyFlux2LatentImage"
+  }
+ },
+ "sg75_80": {
+  "class_type": "ImageScaleToTotalPixels",
+  "inputs": {
+   "image": [
+    "131",
+    0
+   ],
+   "upscale_method": "lanczos",
+   "megapixels": 1,
+   "resolution_steps": 1
+  },
+  "_meta": {
+   "title": "ImageScaleToTotalPixels"
+  }
+ },
+ "sg75_100": {
+  "class_type": "GetImageSize",
+  "inputs": {
+   "image": [
+    "sg75_80",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "GetImageSize"
+  }
+ },
+ "sg75_122": {
+  "class_type": "ReferenceLatent",
+  "inputs": {
+   "conditioning": [
+    "sg75_67",
+    0
+   ],
+   "latent": [
+    "sg75_123",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "ReferenceLatent"
+  }
+ },
+ "sg75_123": {
+  "class_type": "VAEEncode",
+  "inputs": {
+   "pixels": [
+    "sg75_80",
+    0
+   ],
+   "vae": [
+    "sg75_72",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "VAEEncode"
+  }
+ },
+ "sg75_124": {
+  "class_type": "ReferenceLatent",
+  "inputs": {
+   "conditioning": [
+    "sg75_74",
+    0
+   ],
+   "latent": [
+    "sg75_123",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "ReferenceLatent"
+  }
+ }
+}

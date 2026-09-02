@@ -1,5 +1,34 @@
 # ComfyUI workflows for `--fill comfyui`
 
+Two are shipped, for the two shapes a generator comes in:
+
+| file | model shape | needs a mask |
+|---|---|---|
+| `flux-klein-outpaint.json` | inpainting: image + mask + prompt | yes |
+| `flux2-klein-edit-nomask.json` | **edit model**: image + instruction | no |
+
+An edit model has nowhere to put a mask, so for the second one the *band itself*
+carries the information. BPC primes it before uploading -- TELEA propagates the
+boundary colour inwards and the result is pulled halfway to mid grey -- and the
+prompt says `remove grey border`. `docs/outpaint-band-example.jpg` is what that
+looks like before priming: a corrected frame whose rotation opened a flat grey
+band at the edges.
+
+Either way the guarantee is the same and does not depend on the workflow
+honouring anything: BPC composites the returned image back through the hole and
+nowhere else, so a model that repaints the whole frame still cannot move a
+photographed pixel.
+
+`flux2-klein-edit-nomask.json` was produced by flattening a ComfyUI *subgraph*
+export -- the editor stores such a node as an opaque UUID type, and its 17 inner
+nodes had to be inlined and their positional widget values named against the
+running server's `/object_info`. Worth knowing if you ever need to do it again:
+a widget promoted to a subgraph boundary appears as a socket **and** keeps its
+slot in `widgets_values`, so dropping the linked names before zipping shifts
+every later value by one. That is how a `UNETLoader` acquires a checkpoint
+filename as its `weight_dtype`.
+
+
 `flux-klein-outpaint.json` is a starting point, not a guarantee. It is written
 for **FLUX.2 [klein] 9B** and it names three files that almost certainly differ
 from what your ComfyUI has installed:
@@ -23,7 +52,7 @@ BPC does not care what the graph does. It looks for nodes by their **title**
 | title | what BPC puts there | required |
 |---|---|---|
 | `BPC_IMAGE` | the corrected photograph, uploaded as a PNG | yes |
-| `BPC_MASK` | white where the rotation opened a hole, black elsewhere | yes |
+| `BPC_MASK` | white where the rotation opened a hole, black elsewhere | no -- see below |
 | `BPC_PROMPT` | the text from `--comfy-prompt`, when given | no |
 
 Both image nodes must be `LoadImage`-shaped -- BPC writes the uploaded filename
