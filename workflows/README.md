@@ -1,27 +1,40 @@
 # ComfyUI workflows for `--fill comfyui`
 
-Two are shipped, for the two shapes a generator comes in:
+One ships, and it is the edit-model shape:
 
 | file | model shape | needs a mask |
 |---|---|---|
-| `flux-klein-outpaint.json` | inpainting: image + mask + prompt | yes |
 | `flux2-klein-edit-nomask.json` | **edit model**: image + instruction | no |
 
-**Pick one.** They are not interchangeable and nothing can tell from a
-checkpoint's filename which one it wants -- so `Setup > ComfyUI server...` lists
-both by shape and the indicator names whichever is in force. Leaving it unset
-takes `flux-klein-outpaint.json`, and running an *edit* model through that
-graph's `InpaintModelConditioning` produces a wrong band **at a green light**:
-every checkpoint the workflow named was installed, so nothing was missing. The
-wrong graph was running. That is why the line now reads
+There were two. The other, `flux-klein-outpaint.json`, was an inpainting graph
+(image + mask + prompt) **and it was the unnamed default**, so an edit model
+picked in the model selector was fed through its `InpaintModelConditioning`
+node. The band came back wrong at a **green** light: every checkpoint the
+workflow named was installed, so nothing was missing. The wrong graph was
+running. It has been deleted rather than demoted.
 
-    ComfyUI 0.34.0, workflow: flux-klein-outpaint.json, inpainting
-    (shipped default -- nobody chose it), every model present
+Two things follow.
 
-rather than stopping at "every model present".
+**The indicator names the file, in every state**, because `--comfy-workflow`
+still takes any graph and "connected" without saying *to what* is that failure
+waiting to happen again:
 
-An edit model has nowhere to put a mask, so for the second one the *band itself*
-carries the information. BPC primes it before uploading -- TELEA propagates the
+    ComfyUI 0.34.0, workflow: flux2-klein-edit-nomask.json, edit-model,
+    every model present
+
+and when nobody has picked, it says so rather than staying quiet:
+
+    ... (shipped default -- nobody chose it) ...
+
+**`BPC_MASK` still works and no longer has an example.** BPC uploads the hole
+and writes it into that node whenever a graph has one, so an inpainting
+workflow you build yourself behaves exactly as before -- there is just nothing
+bundled to copy. The wiring is in "The contract is three node titles" below,
+and `test_a_masked_workflow_still_gets_its_mask` builds its own graph so the
+branch cannot rot unnoticed.
+
+An edit model has nowhere to put a mask, so the *band itself* carries the
+information. BPC primes it before uploading -- TELEA propagates the
 boundary colour inwards and the result is pulled halfway to mid grey -- and the
 prompt says `remove grey border`. `docs/outpaint-band-example.jpg` is what that
 looks like before priming: a corrected frame whose rotation opened a flat grey
@@ -47,9 +60,7 @@ usable workflows -- `/prompt` cannot take an editor export -- which is why they
 do not live in this folder.
 
 
-`flux-klein-outpaint.json` is a starting point, not a guarantee. It is written
-for **FLUX.2 [klein] 9B** and it names three files that almost certainly differ
-from what your ComfyUI has installed:
+**The shipped graph names three files your ComfyUI probably does not have:**
 
 | node | input | change it to |
 |---|---|---|
@@ -60,7 +71,7 @@ from what your ComfyUI has installed:
 BPC checks these three against the server before it posts, substitutes the
 closest name it finds, and lights the panel amber when it had to guess. **The
 guess is by filename, and a filename does not know what a model is compatible
-with.** The middle row is the example: this workflow used to name
+with.** The middle row is the example: a graph once named
 `mistral_3_small_flux2_fp8_scaled.safetensors`, an install had
 `mistral_3_small_flux2_fp8.safetensors`, and the substitution was a good match
 and the wrong encoder -- Klein 9B wants Qwen3 here, and ComfyUI failed with
@@ -70,10 +81,10 @@ and the wrong encoder -- Klein 9B wants Qwen3 here, and ComfyUI failed with
 which is a text-embedding width, not the VAE it looks like. If the panel is
 amber, pick the three explicitly in the selectors beside it.
 
-The fastest way to fix it is not to edit the JSON: open ComfyUI, build (or fix)
-the graph there until it runs by hand, then **Save (API format)** and point
-`--comfy-workflow` at the result. The editor's plain "Save" produces a different
-file that `/prompt` cannot take -- BPC detects that one and says so.
+The fastest way to fix a graph is not to edit the JSON: open ComfyUI, build (or
+fix) it there until it runs by hand, then **Save (API format)** and point
+`--comfy-workflow` at the result. The editor's plain "Save" produces a
+different file that `/prompt` cannot take -- BPC detects that one and says so.
 
 ## The contract is three node titles
 
@@ -87,9 +98,10 @@ BPC does not care what the graph does. It looks for nodes by their **title**
 | `BPC_PROMPT` | the text from `--comfy-prompt`, when given | no |
 
 Both image nodes must be `LoadImage`-shaped -- BPC writes the uploaded filename
-into their `image` input. The mask arrives as an image, so the shipped graph
-converts it with `ImageToMask` on the red channel; keep that, or use whatever
-your inpainting nodes expect.
+into their `image` input. The mask arrives as an image, so an inpainting graph
+needs `ImageToMask` on the red channel between the `BPC_MASK` node and whatever
+takes a `MASK`; the shipped graph has no mask node at all, so there is nothing
+in it to copy.
 
 **A graph that runs perfectly by hand is still refused without these**, and the
 refusal names the file: `workflow: outpaint.json has no node titled BPC_IMAGE`.

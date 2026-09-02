@@ -103,7 +103,8 @@ class Settings:
     fill_max_share: float = 0.35        # refuse to invent more of the frame than this
     fill_device: str = ""               # torch device for lama; "" = its default
     comfy_url: str = "http://127.0.0.1:8188"
-    comfy_workflow: str = ""            # "" = workflows/flux-klein-outpaint.json
+    comfy_workflow: str = ""            # "" = inpaint.DEFAULT_WORKFLOW, and the
+                                        # indicator says nobody chose it
     comfy_prompt: str = ""              # fills the node titled BPC_PROMPT
     comfy_seed: int = 0                 # 0 = leave the workflow's own seeds alone
     comfy_timeout: float = 300.0

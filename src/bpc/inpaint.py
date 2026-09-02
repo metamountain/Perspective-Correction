@@ -79,20 +79,29 @@ _LAMA = None
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.normpath(os.path.join(HERE, "..", ".."))
 WORKFLOWS = os.path.join(ROOT, "workflows")
-DEFAULT_WORKFLOW = os.path.join(WORKFLOWS, "flux-klein-outpaint.json")
+DEFAULT_WORKFLOW = os.path.join(WORKFLOWS, "flux2-klein-edit-nomask.json")
 
-SHIPPED = (("flux2-klein-edit-nomask.json", "edit model -- image + instruction"),
-           ("flux-klein-outpaint.json", "inpainting -- image + mask"))
-"""The two shipped graphs, for the two shapes a generator comes in.
+SHIPPED = (("flux2-klein-edit-nomask.json", "edit model -- image + instruction"),)
+"""The graphs that ship, listed by the window and named by `status`.
 
-One table, because the window lists them and `status` has to name whichever one
-is actually in force.  That naming is the point: two workflows ship for two
-*incompatible* model shapes, and an unnamed default is how a FLUX.2 [klein]
-**edit** model gets run through an `InpaintModelConditioning` graph -- which
-produces a plausible-looking wrong band and a **green** light, because every
-checkpoint it named was installed.  Nothing was missing; the wrong graph was
-running.  So `workflow_path` reports whether anybody chose, and every state of
-the indicator says which file it is talking about.
+There were two, for the two shapes a generator comes in, and the inpainting one
+was the unnamed default.  That is how a FLUX.2 [klein] **edit** model got run
+through an `InpaintModelConditioning` graph: a wrong band at a **green** light,
+because every checkpoint the workflow named was installed.  Nothing was
+missing; the wrong graph was running.
+
+Only the edit graph ships now, so the default is at least the right *shape* for
+the model this project was tested against.  That does not make the naming
+redundant -- `--comfy-workflow` takes any file, and an indicator that says
+"connected" without saying to what is the failure above waiting to happen again
+with a graph nobody in this repo wrote.  `workflow_path` still reports whether
+anybody chose, and every state still names the file.
+
+**The `BPC_MASK` half of the contract is still supported and no longer
+demonstrated.**  `_fill_comfy` uploads a mask whenever a graph has that node,
+and any inpainting workflow a user builds will work -- but there is no shipped
+example left to copy, so `workflows/README.md` carries the wiring in prose and
+`test_a_masked_workflow_still_gets_its_mask` keeps the path from rotting.
 """
 
 
