@@ -431,6 +431,16 @@ def apply_prefs(args, parser):
     if not args.focal_35mm and stored.get("focal_35mm"):
         args.focal_35mm = float(stored["focal_35mm"])
         used.append("focal_35mm")
+    # The ComfyUI address is where the generator lives, not how hard to correct,
+    # so it belongs with the paths.  It cannot use the "empty means untouched"
+    # test above because it has a real default, so compare against that default:
+    # an explicit --comfy-url must still win over a remembered one.
+    if args.comfy_url == Settings.comfy_url and stored.get("comfy_url"):
+        args.comfy_url = stored["comfy_url"]
+        used.append("comfy_url")
+    if not args.comfy_workflow and stored.get("comfy_workflow"):
+        args.comfy_workflow = stored["comfy_workflow"]
+        used.append("comfy_workflow")
     return used
 
 
@@ -456,7 +466,10 @@ def main(argv=None) -> int:
     if args.remember:
         ok = prefs.save(birefnet_model=args.birefnet_model, mask_file=args.mask_file,
                         output=args.output,
-                        focal_35mm=args.focal_35mm if args.focal_35mm else None)
+                        focal_35mm=args.focal_35mm if args.focal_35mm else None,
+                        comfy_url=(args.comfy_url
+                                   if args.comfy_url != Settings.comfy_url else None),
+                        comfy_workflow=args.comfy_workflow)
         print(f"# remembered in {prefs.path()}" if ok else "# nothing to remember")
     if args.fill_info:
         from . import inpaint as FILL

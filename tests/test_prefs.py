@@ -85,3 +85,22 @@ def test_forget_removes_everything():
         prefs.save(birefnet_model="/a.pth")
         assert prefs.forget()
         assert prefs.load() == {}
+
+
+def test_the_comfyui_address_is_remembered_but_the_correction_is_not():
+    """A server URL and a workflow file are *addresses*, like the checkpoint and
+    the mask folder, so they are remembered.  How hard to correct is not: a
+    setting that silently persists between runs is one nobody can reason about,
+    and a batch must stay reproducible from its command line.
+    """
+    with tempfile.TemporaryDirectory() as d:
+        _isolated(d)
+        prefs.save(comfy_url="http://10.0.0.5:8188",
+                   comfy_workflow=os.path.join("wf", "outpaint.json"),
+                   pitch_strength=0.5, fill="comfyui")
+        got = prefs.load()
+
+    assert got["comfy_url"] == "http://10.0.0.5:8188"
+    assert got["comfy_workflow"].endswith("outpaint.json")
+    assert "pitch_strength" not in got, "a correction parameter must not persist"
+    assert "fill" not in got, "which backend runs is a decision per run"

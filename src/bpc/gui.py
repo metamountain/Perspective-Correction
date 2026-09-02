@@ -972,12 +972,13 @@ class App(_ROOT_CLASS):
         self.worker = None
         self.stop_flag = threading.Event()
         self.results = {}
+        # Loaded before the widgets, because some of them show a remembered
+        # value as their initial state rather than being set afterwards.
+        self._remembered = prefs.load()
         self._build()
-        stored = prefs.load()
-        if stored.get("output"):
-            self.v_output.set(stored["output"])
+        if self._remembered.get("output"):
+            self.v_output.set(self._remembered["output"])
         # a remembered path is offered, never forced: the selector still says off
-        self._remembered = stored
         if initial:
             self._add(list(initial))
         self.after(120, self._pump)
@@ -1079,6 +1080,28 @@ class App(_ROOT_CLASS):
         self.lbl_fill = ttk.Label(opt, text="", style="Dim.TLabel", wraplength=900,
                                   justify="left")
         self.lbl_fill.grid(row=3, column=0, columnspan=9, sticky="w", pady=(4, 0))
+
+        # Where the ComfyUI generator lives, and whether it is actually there.
+        # Without this the mode was selectable and unconfigurable: the address
+        # and the workflow existed only as command-line flags, so choosing
+        # "comfyui" in the window could only ever mean the default port and the
+        # shipped workflow, and finding out it was wrong meant running a batch.
+        self.comfy_row = ttk.Frame(opt)
+        self.comfy_row.grid(row=4, column=0, columnspan=9, sticky="ew", pady=(4, 0))
+        ttk.Label(self.comfy_row, text="ComfyUI").pack(side="left")
+        self.v_comfy_url = tk.StringVar(
+            value=self._remembered.get("comfy_url", Settings.comfy_url))
+        ttk.Entry(self.comfy_row, textvariable=self.v_comfy_url,
+                  width=26).pack(side="left", padx=6)
+        self.v_comfy_wf = tk.StringVar(value=self._remembered.get("comfy_workflow", ""))
+        ttk.Button(self.comfy_row, text="workflow...",
+                   command=self._pick_comfy_workflow).pack(side="left")
+        self.lbl_comfy_wf = ttk.Label(self.comfy_row, text="", style="Dim.TLabel")
+        self.lbl_comfy_wf.pack(side="left", padx=6)
+        self.btn_comfy_test = ttk.Button(self.comfy_row, text="Test connection",
+                                         command=self._test_comfy)
+        self.btn_comfy_test.pack(side="left", padx=6)
+        self._sync_comfy_workflow_label()
         ttk.Checkbutton(opt, text="subfolders", variable=self.v_recursive).grid(row=2, column=0, sticky="w")
         ttk.Checkbutton(opt, text="overwrite originals", variable=self.v_overwrite).grid(row=2, column=1, sticky="w")
         ttk.Checkbutton(opt, text="offer manual review for unclear images",
@@ -1120,6 +1143,8 @@ class App(_ROOT_CLASS):
         s.crop = self.v_crop.get()
         s.detector = self.v_detector.get()
         s.fill = self.v_fill.get()
+        s.comfy_url = self.v_comfy_url.get().strip() or Settings.comfy_url
+        s.comfy_workflow = self.v_comfy_wf.get()
         s.mask_mode = self.v_mask.get()
         path = self.v_maskpath.get() or self._remembered.get(
             "birefnet_model" if self.v_mask.get() == "birefnet" else "mask_file", "")
@@ -1145,6 +1170,61 @@ class App(_ROOT_CLASS):
         if not FILL.available(mode, s):
             text = "fill will FAIL on every image -- " + text
         self.lbl_fill.configure(text=text)
+
+    def _sync_comfy_workflow_label(self):
+        wf = self.v_comfy_wf.get()
+        self.lbl_comfy_wf.configure(
+            text=os.path.basename(wf) if wf else "shipped workflow")
+
+    def _pick_comfy_workflow(self):
+        """The API export, not the editor export.
+
+        ``inpaint.load_workflow`` tells the two apart and says which one it got,
+        because posting an editor export to ``/prompt`` is the mistake everyone
+        makes once and the error it produces on its own is unreadable.
+        """
+        p = filedialog.askopenfilename(
+            title="ComfyUI workflow (API format)", parent=self,
+            filetypes=[("ComfyUI API workflow", "*.json"), ("All files", "*.*")])
+        if not p:
+            return
+        self.v_comfy_wf.set(p)
+        self._sync_comfy_workflow_label()
+        prefs.save(comfy_workflow=p)       # an address, not a correction setting
+        self._check_fill()
+
+    def _test_comfy(self):
+        """Ask the server whether it is there, off the UI thread.
+
+        ``describe`` does two network round trips with a three second timeout
+        each, and doing that inline freezes the window mid-click -- which reads
+        as a crash, not as a slow server.  The button says it is working and
+        comes back either way; a check that cannot fail visibly is not a check.
+        """
+        self.btn_comfy_test.configure(state="disabled")
+        self.lbl_fill.configure(text="ComfyUI: asking...")
+        settings = self._settings().replace(fill="comfyui")
+
+        def work():
+            from . import inpaint as FILL
+            try:
+                ok = FILL.available("comfyui", settings)
+                text = FILL.describe("comfyui", settings)
+            except Exception as exc:                     # never take the window down
+                ok, text = False, f"comfyui check failed: {exc}"
+            # Through the queue the batch run already uses, not `after` from
+            # here: Tk is not thread-safe, and registering a callback from a
+            # worker raises "main thread is not in main loop" outright.
+            self.queue.put(("comfy", (ok, text)))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _comfy_result(self, ok, text):
+        self.btn_comfy_test.configure(state="normal")
+        self.lbl_fill.configure(
+            text=("ComfyUI reachable -- " if ok else "ComfyUI NOT usable -- ") + text)
+        if ok:
+            prefs.save(comfy_url=self.v_comfy_url.get())
 
     def _pick_mask_source(self):
         """One button for both, because the batch panel had a mask selector with
@@ -1361,6 +1441,8 @@ class App(_ROOT_CLASS):
                     i, r = payload
                     self._add_row(r)
                     self.progress.configure(value=i)
+                elif kind == "comfy":
+                    self._comfy_result(*payload)
                 elif kind == "error":
                     src, msg = payload
                     self.tree.insert("", "end", values=(ERROR, os.path.basename(src),

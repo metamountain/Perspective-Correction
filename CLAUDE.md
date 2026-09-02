@@ -536,6 +536,30 @@ who would rather their own Flux graph did it; the workflow is a file
 an editor export instead of an API export to `/prompt` -- is caught with the fix
 in the message.
 
+**The batch window now has the address and a "Test connection" button**, because
+`comfyui` was selectable there and unconfigurable: the URL and the workflow
+existed only as command-line flags, so choosing it in the window could only ever
+mean the default port and the shipped workflow, and finding out otherwise meant
+running a batch. `inpaint.describe` already answered the question in two
+independently readable halves -- *server up, ComfyUI 0.3.x* and *workflow: 12
+nodes, sockets [BPC_IMAGE, BPC_MASK]* -- so the button is wiring, not new logic.
+A dead port and a live one are both asserted, the second against a stub server.
+
+Two things it must not do. It must not run on the UI thread: `describe` makes
+two network round trips at three seconds each, and a window frozen mid-click
+reads as a crash rather than as a slow server. And it must not post its result
+with `after()` from the worker -- Tk is not thread-safe and that raises "main
+thread is not in main loop" outright. It goes through `self.queue`, the same
+one the batch run already uses.
+
+`comfy_url` and `comfy_workflow` joined `--remember`. They are **addresses**,
+like the checkpoint and the mask folder -- where the generator lives, not how
+hard to correct -- so they do not breach the rule that correction parameters
+never persist. `comfy_url` needs a different test from the others in
+`apply_prefs`, because it has a real default rather than an empty one and
+"unset" cannot be read as falsy. Pinned by
+`test_the_comfyui_address_is_remembered_but_the_correction_is_not`.
+
 **`pip install simple-lama-inpainting` downgrades Pillow to 9.5 and numpy to
 1.26 and breaks OpenCV in the same interpreter.** Install it with `--no-deps`.
 This is the third time an optional dependency has moved a required one (see
@@ -712,15 +736,16 @@ them. `run_and_log.bat` collects a whole run — corrected images, overlays, log
 report — into one folder, and writes the environment *before* the run so a failed
 run still leaves something diagnosable.
 
-`--remember` stores **paths only** (checkpoint, mask folder, output, focal
-length). Correction parameters are deliberately not remembered: a setting that
+`--remember` stores **addresses only** (checkpoint, mask folder, output, focal
+length, ComfyUI URL and workflow). Correction parameters are deliberately not
+remembered: a setting that
 silently persists between runs is one nobody can reason about, and a batch must
 stay reproducible from its command line. Unknown keys are dropped on load so the
 file cannot become a second, hidden place where behaviour is configured.
 
 ## Testing
 
-`python tests/run_tests.py` -- 147 tests, standalone, no pytest. The modules are
+`python tests/run_tests.py` -- 148 tests, standalone, no pytest. The modules are
 listed explicitly in `run_tests.py`, so a new test file that is not in `MODULES`
 runs nowhere and is worse than no test at all.
 

@@ -61,7 +61,7 @@ Log lines are one per file:
 | `--detector-info` | which detectors this Python can actually run |
 | `--fill telea` | fill the band the rotation opens up by propagating the edge inwards. No model, no download, deterministic |
 | `--fill lama` | generate that band with a learned model instead. Off by default -- those pixels were never photographed |
-| `--fill comfyui --comfy-workflow x.json` | the same through a running ComfyUI ([workflows/README.md](workflows/README.md)) |
+| `--fill comfyui --comfy-workflow x.json` | the same through a running ComfyUI ([workflows/README.md](workflows/README.md)). The batch window has the address and a "Test connection" button |
 | `--remember` | store `--birefnet-model`, `--mask-file`, `-o` and `--focal-35mm` as defaults; `--forget` clears them |
 | `--birefnet-model auto` | find usable weights in the usual ComfyUI folders |
 | `--mask-info` | what this Python can import, and whether the weights load |
