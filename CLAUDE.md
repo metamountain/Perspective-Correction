@@ -627,11 +627,29 @@ so an unguarded resolver helpfully rewrites the photograph about to be uploaded
 into somebody else's leftover PNG. That bug existed for one commit and is
 pinned by `test_the_workflow_is_pointed_at_files_the_server_actually_has`.
 
-**The light has three states, and the third one is the point.** `down` (red):
+**The ComfyUI settings are their own window, reached from a menu bar.** They
+were a row in the options panel, and two things made that unusable. The panel
+is hidden until a folder is loaded -- the two-stage window above -- so the
+server could not be configured *before* the work, which is the only time anyone
+wants to. And every way in lived inside that same hidden panel, including the
+fill selector that opens the dialog, so on a freshly opened window there was no
+route to them at all. Hence `Setup > ComfyUI server...`, which is always there.
+Choosing `comfyui` in the fill selector opens it too and tests immediately: a
+mode that silently needs six settings nobody was shown is the quiet failure
+this file keeps arguing against.
+
+The window owns no state. Host, port, workflow and the three model choices are
+`StringVar`s on the App, so closing it loses nothing and `_settings()` does not
+care whether it is open; every helper that draws into it returns early when it
+is shut.
+
+**The light has four states, and the last two are the point.** `down` (red):
 nothing will run -- no answer, or a workflow `/prompt` cannot take. `ok`
 (green): every model name resolves as written. `models` (amber): the server
 answered and the graph is sound, but the checkpoints it names are not the ones
-installed, so a *guess* is in force. Two states would have to fold that into one
+installed, so a *guess* is in force. `unknown` (grey, "not checked"): nobody has
+asked yet, or the address or workflow changed since anyone did -- red there
+would be a claim, and a wrong one. Two states would have to fold that into one
 of the others and both readings are wrong -- green hides the guess, red refuses
 something that works. The judgement lives in `inpaint.status`, not the window,
 so it is asserted without a display.
