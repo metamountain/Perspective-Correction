@@ -1,6 +1,6 @@
 # Batch Perspective Correction
 
-![before and after: a facade with converging verticals, straightened](docs/hero-before-after.jpg)
+![left: detected verticals, horizontals and the implied horizon. right: corrected and cropped to the original aspect ratio](docs/hero-before-after.jpg)
 
 Straightens converging verticals in architectural photographs, a folder at a
 time. Built for the case where most of a batch needs a small correction, some
