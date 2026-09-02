@@ -43,6 +43,7 @@ from . import prefs
 from .config import Settings
 from .imageio import READABLE
 from .pipeline import ERROR, OK, SKIPPED, process
+from .inpaint import join_url as _join_url, split_url as _split_url
 from .review import AUTO, MANUAL, ReviewSession
 
 STATUS_COLOUR = {OK: "#5ac37f", SKIPPED: "#e0b24c", ERROR: "#ef6b6b"}
@@ -1137,10 +1138,27 @@ class App(_ROOT_CLASS):
         self.comfy_row = ttk.Frame(opt)
         self.comfy_row.grid(row=4, column=0, columnspan=9, sticky="ew", pady=(4, 0))
         ttk.Label(self.comfy_row, text="ComfyUI").pack(side="left")
-        self.v_comfy_url = tk.StringVar(
-            value=self._remembered.get("comfy_url", Settings.comfy_url))
-        ttk.Entry(self.comfy_row, textvariable=self.v_comfy_url,
-                  width=26).pack(side="left", padx=6)
+        # Host and port apart, because the port is the half that actually gets
+        # changed -- a second instance, a tunnel, a container -- and hunting for
+        # it inside a URL is how it gets mistyped.  One fact still lives in one
+        # place: `_comfy_url` composes them and nothing stores the joined form.
+        host, port = _split_url(self._remembered.get("comfy_url", Settings.comfy_url))
+        self.v_comfy_host = tk.StringVar(value=host)
+        self.v_comfy_port = tk.StringVar(value=port)
+        ttk.Entry(self.comfy_row, textvariable=self.v_comfy_host,
+                  width=20).pack(side="left", padx=(6, 2))
+        ttk.Label(self.comfy_row, text=":").pack(side="left")
+        ttk.Entry(self.comfy_row, textvariable=self.v_comfy_port,
+                  width=6).pack(side="left", padx=(2, 6))
+        self.lbl_comfy_state = tk.Label(self.comfy_row, text="not checked",
+                                        background=INK["bg"], foreground=INK["dim"])
+        self.lbl_comfy_state.pack(side="left", padx=(0, 8))
+        # Editing the address invalidates the verdict.  A green "connected"
+        # sitting beside a port nobody has asked yet is worse than no light at
+        # all: it is an answer to a question that was not the one on screen.
+        for var in (self.v_comfy_host, self.v_comfy_port):
+            var.trace_add("write",
+                          lambda *_: self._set_comfy_state("not checked", INK["dim"]))
         self.v_comfy_wf = tk.StringVar(value=self._remembered.get("comfy_workflow", ""))
         ttk.Button(self.comfy_row, text="workflow...",
                    command=self._pick_comfy_workflow).pack(side="left")
@@ -1196,7 +1214,7 @@ class App(_ROOT_CLASS):
         s.crop = self.v_crop.get()
         s.detector = self.v_detector.get()
         s.fill = self.v_fill.get()
-        s.comfy_url = self.v_comfy_url.get().strip() or Settings.comfy_url
+        s.comfy_url = self._comfy_url()
         s.comfy_workflow = self.v_comfy_wf.get()
         s.mask_mode = self.v_mask.get()
         path = self.v_maskpath.get() or self._remembered.get(
@@ -1244,7 +1262,17 @@ class App(_ROOT_CLASS):
         self.v_comfy_wf.set(p)
         self._sync_comfy_workflow_label()
         prefs.save(comfy_workflow=p)       # an address, not a correction setting
+        # The workflow is half of what "connected" means -- a reachable server
+        # with an unusable graph is not a working fill -- so the verdict is
+        # stale the moment it changes.
+        self._set_comfy_state("not checked", INK["dim"])
         self._check_fill()
+
+    def _comfy_url(self):
+        return _join_url(self.v_comfy_host.get(), self.v_comfy_port.get())
+
+    def _set_comfy_state(self, text, colour):
+        self.lbl_comfy_state.configure(text=text, foreground=colour)
 
     def _test_comfy(self):
         """Ask the server whether it is there, off the UI thread.
@@ -1255,6 +1283,7 @@ class App(_ROOT_CLASS):
         comes back either way; a check that cannot fail visibly is not a check.
         """
         self.btn_comfy_test.configure(state="disabled")
+        self._set_comfy_state("checking...", INK["dim"])
         self.lbl_fill.configure(text="ComfyUI: asking...")
         settings = self._settings().replace(fill="comfyui")
 
@@ -1274,10 +1303,12 @@ class App(_ROOT_CLASS):
 
     def _comfy_result(self, ok, text):
         self.btn_comfy_test.configure(state="normal")
+        self._set_comfy_state("connected" if ok else "disconnected",
+                              INK["ok"] if ok else INK["err"])
         self.lbl_fill.configure(
             text=("ComfyUI reachable -- " if ok else "ComfyUI NOT usable -- ") + text)
         if ok:
-            prefs.save(comfy_url=self.v_comfy_url.get())
+            prefs.save(comfy_url=self._comfy_url())
 
     def _pick_mask_source(self):
         """One button for both, because the batch panel had a mask selector with

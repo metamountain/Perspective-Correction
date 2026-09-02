@@ -573,6 +573,17 @@ independently readable halves -- *server up, ComfyUI 0.3.x* and *workflow: 12
 nodes, sockets [BPC_IMAGE, BPC_MASK]* -- so the button is wiring, not new logic.
 A dead port and a live one are both asserted, the second against a stub server.
 
+**Host and port are two fields, and the verdict expires.** The port is the half
+that actually gets changed -- a second instance, a tunnel, a container -- and
+hunting for it inside a URL is how it gets mistyped. Only the joined form is
+ever stored, so `inpaint.split_url` / `join_url` have to round-trip anything a
+user might type and tolerate what they are halfway through typing; they live in
+`inpaint.py` rather than the window because they are pure, which is the same
+rule that keeps `review.py` free of Tkinter. Beside them a label reads
+*connected* / *disconnected* / *not checked*, and **editing the address or the
+workflow puts it back to "not checked"** -- a green light next to a port nobody
+has asked yet is an answer to a question that is no longer on screen.
+
 Two things it must not do. It must not run on the UI thread: `describe` makes
 two network round trips at three seconds each, and a window frozen mid-click
 reads as a crash rather than as a slow server. And it must not post its result
@@ -815,7 +826,7 @@ file cannot become a second, hidden place where behaviour is configured.
 
 ## Testing
 
-`python tests/run_tests.py` -- 150 tests, standalone, no pytest. The modules are
+`python tests/run_tests.py` -- 152 tests, standalone, no pytest. The modules are
 listed explicitly in `run_tests.py`, so a new test file that is not in `MODULES`
 runs nowhere and is worse than no test at all.
 

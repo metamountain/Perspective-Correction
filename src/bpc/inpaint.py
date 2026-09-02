@@ -247,6 +247,8 @@ def _png(arr: np.ndarray) -> bytes:
     return buf.tobytes()
 
 
+DEFAULT_COMFY_URL = "http://127.0.0.1:8188"
+
 PRIME_GREY = 128
 PRIME_MIX = 0.5
 """How the band is primed before a generator sees it.
@@ -265,6 +267,29 @@ nothing in the band reads as an edge worth preserving. Only the hole is
 touched, and the result is a starting point, not an answer: the generator
 replaces it.
 """
+
+
+def split_url(url):
+    """``http://host:port`` -> ``("http://host", "port")``.
+
+    Tolerant on purpose: a URL with no port, or one someone half-edited, still
+    has to come back as two fields rather than an exception in a constructor.
+    """
+    url = (url or DEFAULT_COMFY_URL).strip().rstrip("/")
+    head, sep, tail = url.rpartition(":")
+    if sep and tail.isdigit():
+        return head, tail
+    return url, ""
+
+
+def join_url(host, port):
+    """The inverse, with the scheme filled in when someone typed a bare host."""
+    host = (host or "").strip().rstrip("/") or DEFAULT_COMFY_URL
+    if "://" not in host:
+        host = "http://" + host
+    port = (port or "").strip()
+    return f"{host}:{port}" if port.isdigit() else host
+
 
 
 def _prime_for_generation(small: np.ndarray, mask: np.ndarray) -> np.ndarray:

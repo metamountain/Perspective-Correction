@@ -244,3 +244,23 @@ def test_the_shipped_edit_workflow_carries_the_titles_the_code_writes_into():
         "an edit model takes no mask; if this ever gains one, say why"
     assert any(n.get("class_type") == "SaveImage" for n in wf.values()), \
         "without an output node the run completes and returns nothing"
+
+
+def test_the_server_address_survives_being_taken_apart_and_put_together():
+    """The window edits host and port as two fields, because the port is the
+    half that gets changed -- a second instance, a tunnel, a container -- and
+    hunting for it inside a URL is how it gets mistyped.  Only the joined form
+    is ever stored, so the split has to be lossless for anything a user might
+    have typed, and forgiving of what they are halfway through typing.
+    """
+    from bpc import inpaint as FILL
+
+    for url in ("http://127.0.0.1:8188", "https://box.local:9000",
+                "http://127.0.0.1", "http://[::1]:8188"):
+        host, port = FILL.split_url(url)
+        assert FILL.join_url(host, port) == url, url
+
+    assert FILL.join_url("myserver", "8188") == "http://myserver:8188", "scheme filled in"
+    assert FILL.split_url("127.0.0.1:8188") == ("127.0.0.1", "8188")
+    assert FILL.join_url("http://a", "not-a-port") == "http://a", "junk port dropped"
+    assert FILL.split_url("") == ("http://127.0.0.1", "8188"), "empty falls back"
