@@ -329,6 +329,52 @@ class ReviewSession:
         x1, y1 = max(x1 - inset, x0), max(y1 - inset, y0)
         return self.set_crop_rect(x0, y0, x1, y1, ow, oh)
 
+    def auto_crop_if_cheap(self):
+        """Trim the padded band away when doing so costs little frame.
+
+        A small correction opens a band a few per cent wide, and there are only
+        two honest answers to it: invent pixels, or lose that frame.  When the
+        loss is this small the second is plainly the better one -- nobody wants
+        a generative model, a checkpoint and three seconds of inference to
+        replace 2 % of sky that cropping removes for free.
+
+        The threshold is ``auto_crop_max_loss`` and **cannot** be
+        ``max_crop_loss``, however much a second number offends. The padded band
+        exists precisely *because* the plan's gate was exceeded, so reusing that
+        gate here would mean never firing. Measured on rendered scenes, with the
+        fitted angle rather than the requested one:
+
+        ==========  ==========  ==========  ==========
+        pitch       band        crop costs  batch does
+        ==========  ==========  ==========  ==========
+        0.5 deg     3.2 %       6.5 %       crops
+        1.0 deg     3.4 %       7.5 %       crops
+        2.0 deg     4.1 %       9.4 %       pads
+        3.0 deg     5.0 %       12.0 %      pads
+        9.0 deg     8.9 %       23.0 %      pads
+        ==========  ==========  ==========  ==========
+
+        Cropping costs about **2.5x the band**, because the rectangle keeps the
+        original aspect ratio and stays anchored on the mapped centre. The
+        default of 0.12 therefore covers corrections up to roughly 3 degrees,
+        which is where most of them are.
+
+        Twelve per cent taken without being asked would be indefensible in the
+        batch. It is defensible here for one reason: this runs in the review
+        window, the result is on screen with the discarded part shaded, and it
+        becomes a file only when the user presses Save. "Reset crop" undoes it.
+
+        Returns True when it cropped.  Never overrides a crop already there.
+        """
+        if self.crop_rect is not None:
+            return False
+        if not self.auto_crop():
+            return False
+        if self.crop_loss() <= float(getattr(self.settings, "auto_crop_max_loss", 0.12)):
+            return True
+        self.clear_crop_rect()
+        return False
+
     def crop_loss(self):
         """Fraction of the corrected frame the current crop discards."""
         if self.crop_rect is None:

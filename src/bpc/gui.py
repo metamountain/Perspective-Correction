@@ -322,9 +322,10 @@ def _brand_header(parent):
 # review window
 # ==========================================================================
 class ReviewWindow(tk.Toplevel):
-    def __init__(self, master, path, settings, dest_path, on_saved=None):
+    def __init__(self, master, path, settings, dest_path, on_saved=None,
+                 overwrite=False, on_closed=None, position=""):
         super().__init__(master)
-        self.title(os.path.basename(path))
+        self.title(f"{position}  {os.path.basename(path)}".strip())
         self.geometry("1280x820")
         self.minsize(900, 600)
         apply_theme(self)
@@ -333,6 +334,11 @@ class ReviewWindow(tk.Toplevel):
         self.settings = settings
         self.dest_path = dest_path
         self.on_saved = on_saved
+        # Fired however the window goes away -- saved, kept, or closed by the
+        # window manager.  A queue that only advances on Save stalls forever on
+        # the first photograph someone closes with the X.
+        self.on_closed = on_closed
+        self._closed_sent = False
         self._busy = False
         self._before_scale = 1.0
 
@@ -340,12 +346,33 @@ class ReviewWindow(tk.Toplevel):
             self.session = ReviewSession(path, settings)
         except Exception as exc:
             messagebox.showerror("Review", f"cannot open image:\n{exc}", parent=master)
+            self._fire_closed()
             self.destroy()
             return
 
         self._build()
+        self.v_overwrite.set(bool(overwrite))
         self.v_alpha.set(self.session.mask_alpha)
+        # Small correction, small band: take the crop rather than leave a band
+        # that would otherwise need a generative model to fill.  Visible, shaded
+        # and undoable with "Reset crop" -- see `auto_crop_if_cheap`.
+        if self.session.auto_crop_if_cheap():
+            self._refresh_crop()
+        self.protocol("WM_DELETE_WINDOW", self._on_close)
         self.after(60, self._sync_from_session)
+
+    def _fire_closed(self):
+        if self.on_closed and not self._closed_sent:
+            self._closed_sent = True
+            self.on_closed()
+
+    def _on_close(self):
+        self._fire_closed()
+        self.destroy()
+
+    def _target_path(self):
+        """Where Save writes: the original, or the ``_corr`` copy beside it."""
+        return self.session.path if self.v_overwrite.get() else self.dest_path
 
     # -- layout ----------------------------------------------------------
     def _build(self):
@@ -470,6 +497,9 @@ class ReviewWindow(tk.Toplevel):
                          variable=self._mk_mask()).pack(side="left", padx=6)
         ttk.Button(btns, text="Save", command=self._save,
                    style="Accent.TButton").pack(side="right")
+        self.v_overwrite = tk.BooleanVar(value=False)
+        ttk.Checkbutton(btns, text="overwrite original",
+                        variable=self.v_overwrite).pack(side="right", padx=8)
         ttk.Button(btns, text="Keep original",
                    command=self._keep).pack(side="right", padx=6)
 
@@ -937,23 +967,34 @@ class ReviewWindow(tk.Toplevel):
 
     # -- output ----------------------------------------------------------
     def _save(self):
+        dst = self._target_path()
+        # Asked once per photograph, because replacing an original is the one
+        # action here nothing can undo -- and in a queue of thirty the checkbox
+        # was ticked long before this particular picture came up.
+        if (self.v_overwrite.get()
+                and not messagebox.askyesno(
+                    "Overwrite", f"Replace the original?\n\n{dst}", parent=self)):
+            return
         try:
-            self.session.save(self.dest_path)
+            self.session.save(dst)
         except Exception as exc:
             messagebox.showerror("Save", str(exc), parent=self)
             return
         if self.on_saved:
-            self.on_saved(self.session.path, self.dest_path)
+            self.on_saved(self.session.path, dst)
+        self._fire_closed()
         self.destroy()
 
     def _keep(self):
         try:
             from .imageio import copy_through
-            if os.path.abspath(self.dest_path) != os.path.abspath(self.session.path):
-                copy_through(self.session.path, self.dest_path)
+            dst = self._target_path()
+            if os.path.abspath(dst) != os.path.abspath(self.session.path):
+                copy_through(self.session.path, dst)
         except Exception as exc:
             messagebox.showerror("Save", str(exc), parent=self)
             return
+        self._fire_closed()
         self.destroy()
 
 
@@ -978,6 +1019,7 @@ class App(_ROOT_CLASS):
         self._build()
         if self._remembered.get("output"):
             self.v_output.set(self._remembered["output"])
+        self._refresh_items()          # opens on the drop stage, not the work one
         # a remembered path is offered, never forced: the selector still says off
         if initial:
             self._add(list(initial))
@@ -1023,6 +1065,7 @@ class App(_ROOT_CLASS):
         # so dropping a second one and clicking review opened the first again.
         listrow = ttk.Frame(top)
         listrow.grid(row=2, column=0, columnspan=3, sticky="ew", **pad)
+        self._w_listrow = listrow
         self.lst = tk.Listbox(listrow, height=4, activestyle="none",
                               exportselection=False, borderwidth=0,
                               highlightthickness=0, background=INK["field"],
@@ -1035,13 +1078,18 @@ class App(_ROOT_CLASS):
         self.lst.configure(yscrollcommand=sb.set)
         self.lst.bind("<Double-1>", lambda e: self._review_single())
 
-        ttk.Label(top, text="Output", style="Head.TLabel").grid(row=3, column=0, sticky="w", **pad)
-        ttk.Entry(top, textvariable=self.v_output, width=70).grid(row=3, column=1, sticky="ew", **pad)
-        ttk.Button(top, text="Browse", command=self._pick_out).grid(row=3, column=2, **pad)
+        self._w_out = [
+            ttk.Label(top, text="Output", style="Head.TLabel"),
+            ttk.Entry(top, textvariable=self.v_output, width=70),
+            ttk.Button(top, text="Browse", command=self._pick_out)]
+        self._w_out[0].grid(row=3, column=0, sticky="w", **pad)
+        self._w_out[1].grid(row=3, column=1, sticky="ew", **pad)
+        self._w_out[2].grid(row=3, column=2, **pad)
         top.columnconfigure(1, weight=1)
 
         opt = ttk.Frame(self, padding=(14, 4, 14, 8))
         opt.pack(fill="x")
+        self._w_opt = opt
         self.v_strength = tk.DoubleVar(value=1.0)
         self.v_conf = tk.DoubleVar(value=Settings.min_confidence)
         self.v_maxpitch = tk.DoubleVar(value=Settings.max_pitch_deg)
@@ -1109,11 +1157,16 @@ class App(_ROOT_CLASS):
 
         bar = ttk.Frame(self, padding=8)
         bar.pack(fill="x")
+        self._w_bar = bar
         self.btn_run = ttk.Button(bar, text="Start", command=self._start,
                                   style="Accent.TButton")
         self.btn_run.pack(side="left")
         self.btn_stop = ttk.Button(bar, text="Stop", command=self._stop, state="disabled")
         self.btn_stop.pack(side="left", padx=6)
+        # The other way through a folder: no unattended writing at all, one
+        # window per photograph, each one confirmed by hand.
+        ttk.Button(bar, text="Review each...",
+                   command=self._review_each).pack(side="left", padx=(6, 0))
         self.progress = ttk.Progressbar(bar, mode="determinate")
         self.progress.pack(side="left", fill="x", expand=True, padx=10)
         self.lbl_count = ttk.Label(bar, text="", style="Value.TLabel")
@@ -1308,6 +1361,34 @@ class App(_ROOT_CLASS):
             del self.items[i]
         self._refresh_items()
 
+    def _set_stage(self):
+        """Two stages in one window: open, then work.
+
+        With nothing loaded there is exactly one thing to do, and a screen of
+        sliders, an empty results table and a disabled Start button do not help
+        anyone do it -- they bury the drop target, which is the only control
+        that matters yet. So the empty window is the drop target, at four times
+        the height, plus the buttons that do the same thing for anyone who would
+        rather browse.
+
+        Everything else appears the moment there is something to work on, and
+        goes away again on "Clear". Nothing is destroyed and rebuilt: the
+        widgets keep their state, so a folder chosen, a detector picked or a
+        ComfyUI address typed survives emptying the list.
+        """
+        loaded = bool(self.items)
+        self.drop.configure(height=14 if not loaded else 3)
+        for w in (self._w_listrow, *self._w_out):
+            (w.grid() if loaded else w.grid_remove())
+        # Re-packed in order, because `pack` appends and the three of them must
+        # not end up above the frame they belong under.
+        for w in (self._w_opt, self._w_bar, self.tree):
+            w.pack_forget()
+        if loaded:
+            self._w_opt.pack(fill="x")
+            self._w_bar.pack(fill="x")
+            self.tree.pack(fill="both", expand=True, padx=8, pady=(0, 8))
+
     def _refresh_items(self):
         keep = list(self.lst.curselection()) if hasattr(self, "lst") else []
         if hasattr(self, "lst"):
@@ -1335,6 +1416,7 @@ class App(_ROOT_CLASS):
         hint = ("drop photos or a folder here" if HAVE_DND
                 else "click to add photos or a folder   "
                      "(pip install tkinterdnd2 for drag and drop)")
+        self._set_stage()
         if self.items:
             hint += "\n" + os.path.basename(self.items[-1]) + \
                     (f"  (+{len(self.items) - 1} more)" if len(self.items) > 1 else "")
@@ -1358,7 +1440,72 @@ class App(_ROOT_CLASS):
                 messagebox.showinfo("Review", "that folder has no readable images")
                 return
             item = inside[0]
-        ReviewWindow(self, item, self._settings(), self._dest(item))
+        ReviewWindow(self, item, self._settings(), self._dest_corr(item),
+                     overwrite=self.v_overwrite.get(),
+                     on_saved=self._forget_saved)
+
+    # -- one at a time ---------------------------------------------------
+    def _dest_corr(self, src):
+        """The ``_corr`` copy, never the original.
+
+        ``_dest`` folds the overwrite decision into the path, which is right for
+        an unattended run and wrong for the review window: there the checkbox is
+        per photograph, so the window needs both candidates and picks one.
+        """
+        stem, ext = os.path.splitext(os.path.basename(src))
+        out_dir = self.v_output.get() or os.path.dirname(src)
+        return os.path.join(out_dir, f"{stem}_corr{ext}")
+
+    def _forget_saved(self, src, dst):
+        """Drop a photograph from the list once it has been written.
+
+        What is left in the list is then exactly what is left to do, which is
+        the only reading of it that survives a session long enough to be
+        interrupted.
+        """
+        if src in self.items:
+            self.items.remove(src)
+            self._refresh_items()
+
+    def _review_each(self):
+        """Walk the whole selection, one review window at a time.
+
+        The batch decides and writes; this asks. Every photograph is opened,
+        corrected as it comes, and becomes a file only when Save is pressed --
+        so the run cannot produce a single output nobody looked at.
+
+        Chained rather than looped: Tk has one event loop, and a `for` around a
+        modal window either blocks it or opens thirty windows at once. Each
+        window's `on_closed` opens the next, whichever way it was closed, so
+        closing one with the X advances the queue instead of stalling it.
+        """
+        files = self._files()
+        if not files:
+            messagebox.showinfo("Review", "add some images or a folder first")
+            return
+        self._review_queue = list(files)
+        self._review_total = len(files)
+        self._open_next_review()
+
+    def _open_next_review(self):
+        queue_left = getattr(self, "_review_queue", [])
+        if not queue_left:
+            if getattr(self, "_review_total", 0):
+                self.lbl_count.configure(
+                    text=f"reviewed {self._review_total} file(s); "
+                         f"{len(self.items)} left in the list")
+                self._review_total = 0
+            return
+        src = queue_left.pop(0)
+        done = self._review_total - len(queue_left)
+        ReviewWindow(self, src, self._settings(), self._dest_corr(src),
+                     overwrite=self.v_overwrite.get(),
+                     on_saved=self._forget_saved,
+                     # Deferred: `on_closed` fires while the old window is being
+                     # destroyed, and building a Toplevel inside that teardown is
+                     # asking for a half-dead parent.
+                     on_closed=lambda: self.after(50, self._open_next_review),
+                     position=f"[{done}/{self._review_total}]")
 
     def _pick_out(self):
         d = filedialog.askdirectory(title="output folder")
@@ -1481,8 +1628,10 @@ class App(_ROOT_CLASS):
         r = self.results.get(sel[0])
         if r is None:
             return
-        ReviewWindow(self, r.src, self._settings(), self._dest(r.src),
-                     on_saved=lambda s, d: self._mark_manual(sel[0]))
+        ReviewWindow(self, r.src, self._settings(), self._dest_corr(r.src),
+                     overwrite=self.v_overwrite.get(),
+                     on_saved=lambda s, d: (self._mark_manual(sel[0]),
+                                            self._forget_saved(s, d)))
 
     def _mark_manual(self, iid):
         vals = list(self.tree.item(iid, "values"))

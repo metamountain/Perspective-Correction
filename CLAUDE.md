@@ -528,6 +528,17 @@ its swatch reads `pad` back rather than showing black over a setting that says
   hole to `inpaint.fill`) and
   `test_single_image_save_does_not_load_a_backend_when_fill_is_off`.
 
+**What ComfyUI receives in the hole is primed, not padded.** Left alone the
+band arriving at the sampler is either black or `BORDER_REPLICATE`'s long
+straight streaks, and both are bad starting points in opposite ways: black is an
+edge a sampler will treat as content, and the streaks are the very artifact that
+cost this project two confident wrong conclusions. `_prime_for_generation` runs
+TELEA over the hole and then pulls it halfway to mid grey. The TELEA half hands
+over the right colours and rough gradient to continue; the grey half destroys
+the *structure* TELEA invents alongside them, so nothing in the band reads as an
+edge worth preserving. It is a starting point, not an answer -- the generator
+replaces it -- and it touches nothing outside the hole.
+
 LaMa is the right default backend: no prompt, ~3 s, and it *continues* structure
 rather than inventing objects. ComfyUI is there for the wide band and for anyone
 who would rather their own Flux graph did it; the workflow is a file
@@ -689,6 +700,48 @@ stored rectangle that trimmed only the inset. Pinned at all three definitions
 of the hole by `test_the_auto_crop_contains_no_invented_pixel`, so the constant
 and its two users cannot drift apart.
 
+## Going through a folder by hand, one photograph at a time
+
+`Review each...` is the other way through a selection: no unattended writing at
+all, one window per photograph, each becoming a file only when Save is pressed.
+A batch run decides; this asks. It cannot produce a single output nobody looked
+at, which makes it the right mode for a folder that matters and the wrong one
+for four hundred holiday snaps.
+
+**Chained, never looped.** Tk has one event loop, so a `for` around a modal
+window either blocks it or opens thirty windows at once. Each window's
+`on_closed` opens the next -- and it fires however the window went away, saved,
+kept, or closed with the X, because a queue that only advances on Save stalls
+forever on the first photograph someone dismisses. The next window is opened
+through `after(50, ...)` rather than inline, since `on_closed` runs while the
+old window is being torn down.
+
+**A saved photograph leaves the list.** What is left is then exactly what is
+left to do, which is the only reading of a list that survives being interrupted.
+
+**Overwriting is decided per photograph and confirmed per photograph.** The
+batch checkbox seeds the review window's, but replacing an original is the one
+action here nothing undoes, and in a queue of thirty the checkbox was ticked
+long before this particular picture came up. So the window asks, every time,
+naming the file. `_dest_corr` exists because `_dest` folds the overwrite
+decision into the path -- right for an unattended run, wrong where the choice
+is per image and the window needs both candidates.
+
+## The window opens on one thing, because there is one thing to do
+
+With nothing loaded, a screen of sliders, an empty results table and a disabled
+Start button do not help anyone start -- they bury the drop target, which is
+the only control that matters yet. So the empty window *is* the drop target, at
+four times the height, plus the buttons that do the same for anyone who would
+rather browse. Everything else appears when there is something to work on and
+goes away again on "Clear".
+
+Nothing is destroyed and rebuilt: `_set_stage` only hides. The widgets keep
+their state, so an output folder chosen, a detector picked or a ComfyUI address
+typed survives emptying the list. The three packed sections have to be
+re-packed in order, because `pack` appends and they would otherwise surface
+above the frame they belong under.
+
 ## Known weakness, stated plainly
 
 **A flat-on facade with no EXIF.** One horizontal direction fixes one *point* on
@@ -745,7 +798,7 @@ file cannot become a second, hidden place where behaviour is configured.
 
 ## Testing
 
-`python tests/run_tests.py` -- 148 tests, standalone, no pytest. The modules are
+`python tests/run_tests.py` -- 149 tests, standalone, no pytest. The modules are
 listed explicitly in `run_tests.py`, so a new test file that is not in `MODULES`
 runs nowhere and is worse than no test at all.
 

@@ -247,6 +247,39 @@ def _png(arr: np.ndarray) -> bytes:
     return buf.tobytes()
 
 
+PRIME_GREY = 128
+PRIME_MIX = 0.5
+"""How the band is primed before a generator sees it.
+
+What arrives at ComfyUI would otherwise be the *padded* band -- either black, or
+`BORDER_REPLICATE`'s long straight streaks.  Both are bad starting points, and
+in opposite ways: black is an edge the sampler will happily treat as content,
+and the streaks are exactly the artifact that once cost this project two wrong
+conclusions (see the round-trip section of the working notes).
+
+So the hole is primed with TELEA first -- boundary colour propagated inwards,
+no model, milliseconds -- and then pulled halfway towards mid grey. The TELEA
+half gives the sampler the right colours and rough gradient to continue; the
+grey half destroys the smeared *structure* TELEA invents along with them, so
+nothing in the band reads as an edge worth preserving. Only the hole is
+touched, and the result is a starting point, not an answer: the generator
+replaces it.
+"""
+
+
+def _prime_for_generation(small: np.ndarray, mask: np.ndarray) -> np.ndarray:
+    """TELEA the hole, then blend it halfway to grey.  ``mask`` is 0/255."""
+    if not mask.any():
+        return small
+    radius = max(3, int(min(small.shape[:2]) * 0.01))
+    primed = cv2.inpaint(small, mask, radius, cv2.INPAINT_TELEA).astype(np.float32)
+    primed = primed * (1.0 - PRIME_MIX) + float(PRIME_GREY) * PRIME_MIX
+    out = small.copy()
+    inside = mask > 0
+    out[inside] = primed[inside].clip(0, 255).astype(np.uint8)
+    return out
+
+
 def _fill_comfy(bgr: np.ndarray, hole: np.ndarray, settings) -> np.ndarray:
     base = getattr(settings, "comfy_url", "http://127.0.0.1:8188").rstrip("/")
     wf = load_workflow(getattr(settings, "comfy_workflow", ""))
@@ -257,6 +290,7 @@ def _fill_comfy(bgr: np.ndarray, hole: np.ndarray, settings) -> np.ndarray:
             f"{TITLE_MASK} (rename them in ComfyUI: right-click > Title)")
 
     small, m = _prepare(bgr, hole, int(getattr(settings, "fill_max_edge", 2048)))
+    small = _prime_for_generation(small, m)
     stamp = uuid.uuid4().hex[:12]
     try:
         wf[n_img]["inputs"]["image"] = _upload(base, f"bpc_{stamp}.png", _png(small))
