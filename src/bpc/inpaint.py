@@ -305,9 +305,133 @@ def _prime_for_generation(small: np.ndarray, mask: np.ndarray) -> np.ndarray:
     return out
 
 
+def _combo_options(decl):
+    """The choices a COMBO input offers, in either schema shape.
+
+    The same server answers both ways: older nodes declare the list inline as
+    ``[[...], {...}]``, newer ones say ``["COMBO", {"options": [...]}]``.
+    """
+    if not isinstance(decl, (list, tuple)) or not decl:
+        return None
+    head = decl[0]
+    if isinstance(head, list):
+        return head
+    if head == "COMBO" and len(decl) > 1 and isinstance(decl[1], dict):
+        return decl[1].get("options")
+    return None
+
+
+def _score(wanted, candidate):
+    """How much two model filenames look like the same thing."""
+    def toks(s):
+        s = os.path.basename(str(s)).lower()
+        s = s.rsplit(".", 1)[0]
+        return {t for t in "".join(c if c.isalnum() else " " for c in s).split() if t}
+    a, b = toks(wanted), toks(candidate)
+    return len(a & b) / float(len(a | b)) if a | b else 0.0
+
+
+def resolve_models(wf: dict, base: str, timeout: float = 30.0) -> list:
+    """Point every loader at a file this server actually has.
+
+    A workflow names checkpoints, and the names are the first thing that is
+    wrong on somebody else's machine -- the shipped one says
+    ``flux2-klein-9b.safetensors`` and a real install has
+    ``flux-2-klein-9b-fp8.safetensors``.  ComfyUI answers that with three
+    ``Value not in list`` errors and ignores the output, which is a correct
+    message about the wrong problem.
+
+    So each COMBO whose value the server does not offer is replaced by the
+    closest name it does, by shared filename tokens.  Substitutions are
+    **returned, not silent**: this is a guess about which of 46 text encoders was
+    meant, and a guess that nobody is told about is how a batch quietly produces
+    something else.  A value the server already has is never touched, and when
+    nothing scores well enough the original is left in place for ComfyUI to
+    reject with its own, better message.
+    """
+    try:
+        info = json.loads(_http(base.rstrip("/") + "/object_info",
+                                timeout=timeout).decode())
+    except Exception:
+        return []                      # unreachable is the caller's problem
+    swapped = []
+    for node in wf.values():
+        # Never the nodes BPC fills itself.  Their `image` is a COMBO too --
+        # ComfyUI offers whatever is sitting in its input folder -- so an
+        # unguarded resolver helpfully rewrites the photograph about to be
+        # uploaded into somebody else's leftover PNG.
+        if node.get("_meta", {}).get("title", "").startswith("BPC_"):
+            continue
+        if node.get("class_type") in ("LoadImage", "LoadImageMask", "LoadImageOutput"):
+            continue
+        spec = info.get(node.get("class_type"), {}).get("input", {})
+        for section in ("required", "optional"):
+            for name, decl in (spec.get(section) or {}).items():
+                value = node.get("inputs", {}).get(name)
+                if not isinstance(value, str):
+                    continue
+                options = _combo_options(decl)
+                if not options or value in options:
+                    continue
+                best = max(options, key=lambda c: _score(value, c))
+                if _score(value, best) < 0.34:      # too different to guess at
+                    continue
+                node["inputs"][name] = best
+                swapped.append(f"{node['class_type']}.{name}: {value} -> {best}")
+    return swapped
+
+
+# Which loader input each explicit choice belongs to.  One place, because the
+# GUI offers these three and `_fill_comfy` applies them.
+MODEL_SLOTS = (("comfy_unet", "UNETLoader", "unet_name"),
+               ("comfy_clip", "CLIPLoader", "clip_name"),
+               ("comfy_vae", "VAELoader", "vae_name"))
+
+
+def model_options(base: str, timeout: float = 30.0) -> dict:
+    """``{"comfy_unet": [...], ...}`` -- what this server has installed.
+
+    Asked of the server rather than read off a folder, because the server is
+    the authority on what it will accept: it may be on another machine, and its
+    `extra_model_paths.yaml` may point somewhere no local walk would find.
+    """
+    try:
+        info = json.loads(_http(base.rstrip("/") + "/object_info",
+                                timeout=timeout).decode())
+    except Exception:
+        return {}
+    out = {}
+    for key, cls, field in MODEL_SLOTS:
+        decl = info.get(cls, {}).get("input", {}).get("required", {}).get(field)
+        out[key] = list(_combo_options(decl) or [])
+    return out
+
+
+def apply_model_choices(wf: dict, settings) -> list:
+    """Write the explicitly chosen files over whatever the workflow names.
+
+    Applied *before* `resolve_models`, so a name the user picked from the
+    server's own list is never second-guessed by the matcher.
+    """
+    used = []
+    for key, cls, field in MODEL_SLOTS:
+        value = (getattr(settings, key, "") or "").strip()
+        if not value:
+            continue
+        for node in wf.values():
+            if node.get("class_type") == cls and field in node.get("inputs", {}):
+                node["inputs"][field] = value
+                used.append(f"{cls}.{field} = {value}")
+    return used
+
+
 def _fill_comfy(bgr: np.ndarray, hole: np.ndarray, settings) -> np.ndarray:
     base = getattr(settings, "comfy_url", "http://127.0.0.1:8188").rstrip("/")
     wf = load_workflow(getattr(settings, "comfy_workflow", ""))
+    # Chosen names first, then a guess for anything still absent.  Both happen
+    # before the uploads, so nothing can rewrite the filename BPC just posted.
+    apply_model_choices(wf, settings)
+    resolve_models(wf, base)
     n_img, n_mask = _find(wf, TITLE_IMAGE), _find(wf, TITLE_MASK)
     if n_img is None:
         raise FillUnavailable(

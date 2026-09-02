@@ -18,7 +18,8 @@ import os
 
 APP = "batch-perspective-correction"
 REMEMBERED = ("birefnet_model", "mask_file", "output", "focal_35mm",
-              "comfy_url", "comfy_workflow")
+              "comfy_url", "comfy_workflow",
+              "comfy_unet", "comfy_clip", "comfy_vae")
 
 
 def path() -> str:

@@ -1168,6 +1168,27 @@ class App(_ROOT_CLASS):
                                          command=self._test_comfy)
         self.btn_comfy_test.pack(side="left", padx=6)
         self._sync_comfy_workflow_label()
+
+        # The three files a workflow names, chosen from what the server has.
+        # `resolve_models` guesses well enough when one candidate is obviously
+        # the same file under another name, and not at all when a machine has
+        # forty-six text encoders installed -- which is the normal case, and the
+        # reason these are a selector rather than a message.
+        self.comfy_models = ttk.Frame(opt)
+        self.comfy_models.grid(row=5, column=0, columnspan=9, sticky="ew", pady=(2, 0))
+        self.v_comfy_models = {}
+        self.cb_comfy_models = {}
+        for label, key in (("model", "comfy_unet"), ("clip", "comfy_clip"),
+                           ("vae", "comfy_vae")):
+            ttk.Label(self.comfy_models, text=label).pack(side="left", padx=(0, 4))
+            var = tk.StringVar(value="")
+            box = ttk.Combobox(self.comfy_models, textvariable=var, width=30,
+                               state="readonly", values=["(from the workflow)"])
+            box.pack(side="left", padx=(0, 12))
+            var.set(self._remembered.get(key, "") or "(from the workflow)")
+            var.trace_add("write", lambda *_a, k=key: self._remember_model(k))
+            self.v_comfy_models[key] = var
+            self.cb_comfy_models[key] = box
         ttk.Checkbutton(opt, text="subfolders", variable=self.v_recursive).grid(row=2, column=0, sticky="w")
         ttk.Checkbutton(opt, text="overwrite originals", variable=self.v_overwrite).grid(row=2, column=1, sticky="w")
         ttk.Checkbutton(opt, text="offer manual review for unclear images",
@@ -1216,6 +1237,11 @@ class App(_ROOT_CLASS):
         s.fill = self.v_fill.get()
         s.comfy_url = self._comfy_url()
         s.comfy_workflow = self.v_comfy_wf.get()
+        for key, var in self.v_comfy_models.items():
+            chosen = var.get()
+            # The placeholder is not a filename; it means "whatever the
+            # workflow says", which is the default and must stay empty.
+            setattr(s, key, "" if chosen.startswith("(") else chosen)
         s.mask_mode = self.v_mask.get()
         path = self.v_maskpath.get() or self._remembered.get(
             "birefnet_model" if self.v_mask.get() == "birefnet" else "mask_file", "")
@@ -1271,6 +1297,28 @@ class App(_ROOT_CLASS):
     def _comfy_url(self):
         return _join_url(self.v_comfy_host.get(), self.v_comfy_port.get())
 
+    def _remember_model(self, key):
+        """A chosen checkpoint is an address, like the mask folder."""
+        value = self.v_comfy_models[key].get()
+        if value and not value.startswith("("):
+            prefs.save(**{key: value})
+
+    def _fill_model_lists(self, models):
+        """Offer what the server reported, keeping any choice still valid.
+
+        The first entry is always "(from the workflow)" -- the default, and the
+        only honest label for it. Naming a file the user did not pick would make
+        the selector claim a decision nobody made, and the workflow's own value
+        is what runs until they do.
+        """
+        for key, box in self.cb_comfy_models.items():
+            names = models.get(key) or []
+            box.configure(values=["(from the workflow)"] + names)
+            current = self.v_comfy_models[key].get()
+            if current and not current.startswith("(") and current in names:
+                continue                          # a still-valid choice survives
+            self.v_comfy_models[key].set("(from the workflow)")
+
     def _set_comfy_state(self, text, colour):
         self.lbl_comfy_state.configure(text=text, foreground=colour)
 
@@ -1289,20 +1337,25 @@ class App(_ROOT_CLASS):
 
         def work():
             from . import inpaint as FILL
+            models = {}
             try:
                 ok = FILL.available("comfyui", settings)
                 text = FILL.describe("comfyui", settings)
+                if ok:
+                    # Same round trip answers both questions, so ask once.
+                    models = FILL.model_options(settings.comfy_url)
             except Exception as exc:                     # never take the window down
                 ok, text = False, f"comfyui check failed: {exc}"
             # Through the queue the batch run already uses, not `after` from
             # here: Tk is not thread-safe, and registering a callback from a
             # worker raises "main thread is not in main loop" outright.
-            self.queue.put(("comfy", (ok, text)))
+            self.queue.put(("comfy", (ok, text, models)))
 
         threading.Thread(target=work, daemon=True).start()
 
-    def _comfy_result(self, ok, text):
+    def _comfy_result(self, ok, text, models=None):
         self.btn_comfy_test.configure(state="normal")
+        self._fill_model_lists(models or {})
         self._set_comfy_state("connected" if ok else "disconnected",
                               INK["ok"] if ok else INK["err"])
         self.lbl_fill.configure(
