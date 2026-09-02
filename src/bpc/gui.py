@@ -491,7 +491,7 @@ class ReviewWindow(tk.Toplevel):
         # the *unnamed default workflow*, which is the inpainting graph. An
         # edit model run through it produces a wrong band at a green light.
         # Same window as the batch panel's, because there is one server.
-        self.btn_comfy = ttk.Button(fill_row, text="ComfyUI server...",
+        self.btn_comfy = ttk.Button(fill_row, text="ComfyUI settings",
                                     command=self._open_comfy)
         self.btn_comfy.grid(row=0, column=5, sticky="w", padx=(12, 0))
         self.lbl_comfy = ttk.Label(fill_row, text="", style="Dim.TLabel")
@@ -1250,7 +1250,6 @@ class App(_ROOT_CLASS):
             var.trace_add("write", lambda *_a, k=key: self._remember_model(k))
             self.v_comfy_models[key] = var
         self.cb_comfy_models = {}
-        self._comfy_dialog = None
         # The detail half, not a second copy of the label: "not checked --
         # not checked" is what the pair rendered before.
         self._comfy_state = ("unknown", "press Test connection to check the "
@@ -1265,10 +1264,6 @@ class App(_ROOT_CLASS):
         for var in (self.v_comfy_host, self.v_comfy_port):
             var.trace_add("write", lambda *_a: self._show_comfy_state(
                 "unknown", "not checked -- the address changed"))
-        ttk.Button(opt, text="ComfyUI server...",
-                   command=self._open_comfy).grid(row=4, column=0, columnspan=2,
-                                                  sticky="w", pady=(4, 0))
-
         ttk.Checkbutton(opt, text="subfolders", variable=self.v_recursive).grid(row=2, column=0, sticky="w")
         ttk.Checkbutton(opt, text="overwrite originals", variable=self.v_overwrite).grid(row=2, column=1, sticky="w")
         ttk.Checkbutton(opt, text="offer manual review for unclear images",
@@ -1300,6 +1295,10 @@ class App(_ROOT_CLASS):
         self.tree.bind("<Double-1>", lambda e: self._review_selected())
         for status, colour in STATUS_COLOUR.items():
             self.tree.tag_configure(status, foreground=colour)
+
+        # Last, and along the bottom: outside everything `_set_stage` hides, so
+        # the server can be configured before there is any work to do.
+        self._build_comfy_dock()
 
     def _spin(self, parent, r, c, label, var, lo, hi, step):
         ttk.Label(parent, text=label).grid(row=r, column=c, sticky="e", padx=4)
@@ -1357,11 +1356,13 @@ class App(_ROOT_CLASS):
         self.lbl_fill.configure(text=text)
 
     def _build_menu(self):
-        """A menu bar, because the options panel is hidden on the empty window.
+        """A menu bar for the things that are not a control on screen.
 
-        Every other way into the ComfyUI settings lives inside that panel --
-        including the fill selector that opens it -- so on a freshly opened
-        window there was no way to reach them at all.  A menu is always there.
+        The ComfyUI entry no longer opens anything -- the settings are docked
+        along the bottom of this window -- so it raises the window and puts the
+        cursor in the address field. It stays because a user who has been told
+        "configure the server" looks in a menu before they look at a strip they
+        have been scrolling past.
         """
         bar = tk.Menu(self)
         setup = tk.Menu(bar, tearoff=0)
@@ -1376,51 +1377,48 @@ class App(_ROOT_CLASS):
             pass
         self._menu = bar
 
-    # -- the ComfyUI window ----------------------------------------------
-    def _open_comfy(self):
-        """Server address, connection light, workflow and the three models.
+    # -- the ComfyUI dock ------------------------------------------------
+    def _build_comfy_dock(self):
+        """The ComfyUI controls, docked along the bottom of this window.
 
-        Its own window because the options panel is hidden until a folder is
-        loaded -- so the server could not be configured first at all -- and
-        because these controls matter for one fill mode out of four.
+        They were a Toplevel, and before that a row inside the options panel.
+        The panel is hidden until a folder is loaded, so the server could not be
+        configured *before* the work -- which is the only time anyone wants to.
+        A separate window fixed that and cost a second window.
+
+        Docking with ``side="bottom"`` gets both: it claims the bottom strip
+        once, outside everything `_set_stage` hides and re-packs, so it is there
+        on the empty window and stays put when the list fills. One window, and
+        the controls are always reachable.
         """
-        if self._comfy_dialog is not None and self._comfy_dialog.winfo_exists():
-            self._comfy_dialog.lift()
-            return
-        win = tk.Toplevel(self)
-        win.title("ComfyUI server")
-        apply_theme(win)
-        win.configure(background=INK["bg"])
-        win.transient(self)
-        self._comfy_dialog = win
-        win.protocol("WM_DELETE_WINDOW", self._close_comfy)
+        dock = ttk.Frame(self, padding=(8, 6))
+        dock.pack(side="bottom", fill="x")
+        self._w_comfy = dock
+        ttk.Separator(dock, orient="horizontal").pack(fill="x", pady=(0, 6))
 
-        body = ttk.Frame(win, padding=12)
-        body.pack(fill="both", expand=True)
-
-        addr = ttk.Frame(body)
+        addr = ttk.Frame(dock)
         addr.pack(fill="x")
-        ttk.Label(addr, text="address", width=10).pack(side="left")
-        ttk.Entry(addr, textvariable=self.v_comfy_host, width=22).pack(side="left")
+        ttk.Label(addr, text="ComfyUI", width=9).pack(side="left")
+        self.ent_comfy_host = ttk.Entry(addr, textvariable=self.v_comfy_host, width=22)
+        self.ent_comfy_host.pack(side="left")
         ttk.Label(addr, text=":").pack(side="left", padx=2)
         ttk.Entry(addr, textvariable=self.v_comfy_port, width=6).pack(side="left")
-        self.lbl_comfy_state = tk.Label(addr, text="not checked", width=16,
-                                        background=INK["bg"], foreground=INK["dim"])
-        self.lbl_comfy_state.pack(side="left", padx=10)
         self.btn_comfy_test = ttk.Button(addr, text="Test connection",
                                          command=self._test_comfy)
-        self.btn_comfy_test.pack(side="left")
+        self.btn_comfy_test.pack(side="left", padx=8)
+        self.lbl_comfy_state = tk.Label(addr, text="not checked", width=16,
+                                        background=INK["bg"], foreground=INK["dim"])
+        self.lbl_comfy_state.pack(side="left")
 
-        # A list, not a browse button.  Two graphs ship, for two *incompatible*
-        # model shapes, and the button offered no way to see that -- so the
-        # unset case silently took the inpainting one and ran an edit model
-        # through it, at a green light, because every checkpoint it named was
-        # installed.  Naming the choice is the fix; see `inpaint.SHIPPED`.
-        wfr = ttk.Frame(body)
-        wfr.pack(fill="x", pady=(10, 0))
-        ttk.Label(wfr, text="workflow", width=10).pack(side="left")
+        # A list, not a browse button.  The graph decides what the fill *is*,
+        # and the unset case silently took the inpainting one and ran an edit
+        # model through it, at a green light, because every checkpoint it named
+        # was installed.  Naming the choice is the fix; see `inpaint.SHIPPED`.
+        wfr = ttk.Frame(dock)
+        wfr.pack(fill="x", pady=(6, 0))
+        ttk.Label(wfr, text="workflow", width=9).pack(side="left")
         self.cb_comfy_wf = ttk.Combobox(wfr, textvariable=self.v_comfy_wf_pick,
-                                        width=46, state="readonly")
+                                        width=44, state="readonly")
         self.cb_comfy_wf.pack(side="left")
         self.cb_comfy_wf.bind("<<ComboboxSelected>>",
                               lambda e: self._on_comfy_workflow_pick())
@@ -1431,41 +1429,54 @@ class App(_ROOT_CLASS):
         # `resolve_models` guesses well enough when one candidate is obviously
         # the same file under another name, and not at all when a machine has
         # forty-six text encoders installed -- which is the normal case, and the
-        # reason these are a selector rather than a message.
+        # reason these are a selector rather than a message.  On one row, since
+        # this is a strip along a window rather than a page of its own.
+        mrow = ttk.Frame(dock)
+        mrow.pack(fill="x", pady=(6, 0))
+        ttk.Label(mrow, text="models", width=9).pack(side="left")
         self.cb_comfy_models = {}
         for label, key in (("model", "comfy_unet"), ("clip", "comfy_clip"),
                            ("vae", "comfy_vae")):
-            row = ttk.Frame(body)
-            row.pack(fill="x", pady=(8, 0))
-            ttk.Label(row, text=label, width=10).pack(side="left")
-            box = ttk.Combobox(row, textvariable=self.v_comfy_models[key], width=46,
-                               state="readonly", values=["(from the workflow)"])
-            box.pack(side="left")
+            ttk.Label(mrow, text=label, style="Dim.TLabel").pack(side="left",
+                                                                 padx=(0, 3))
+            box = ttk.Combobox(mrow, textvariable=self.v_comfy_models[key],
+                               width=24, state="readonly",
+                               values=["(from the workflow)"])
+            box.pack(side="left", padx=(0, 10))
             self.cb_comfy_models[key] = box
 
-        self.lbl_comfy_detail = ttk.Label(body, text="", style="Dim.TLabel",
-                                          wraplength=560, justify="left")
-        self.lbl_comfy_detail.pack(fill="x", pady=(12, 0))
-        ttk.Button(body, text="Close",
-                   command=self._close_comfy).pack(anchor="e", pady=(12, 0))
+        self.lbl_comfy_detail = ttk.Label(dock, text="", style="Dim.TLabel",
+                                          wraplength=1180, justify="left")
+        self.lbl_comfy_detail.pack(fill="x", pady=(6, 0))
 
         self._sync_comfy_workflow_label()
         self._fill_model_lists(self._comfy_models_cache)
         self._show_comfy_state(*self._comfy_state)
 
-    def _close_comfy(self):
-        win, self._comfy_dialog = self._comfy_dialog, None
-        self.lbl_comfy_state = None
-        self.btn_comfy_test = None
-        self.lbl_comfy_wf = None
-        self.cb_comfy_wf = None
-        self.lbl_comfy_detail = None
-        self.cb_comfy_models = {}
-        if win is not None:
-            win.destroy()
+    def _open_comfy(self):
+        """Bring attention to the dock rather than opening anything.
+
+        Kept as a name because three callers mean "let them at the ComfyUI
+        settings": the menu, the fill selector, and a review window's button.
+        Nothing to open now -- the controls are already on screen -- so this
+        raises the window and puts the cursor in the address, which is the field
+        anybody arriving here is most likely to change.
+        """
+        try:
+            self.deiconify()
+            self.lift()
+            self.ent_comfy_host.focus_set()
+        except Exception:                     # a torn-down or headless window
+            pass
 
     def _comfy_open(self):
-        return self._comfy_dialog is not None and self._comfy_dialog.winfo_exists()
+        """Whether the controls exist to be drawn into.
+
+        Always true once `_build` has run, and false during construction and
+        teardown -- which is what the `_show_comfy_state` and
+        `_sync_comfy_workflow_label` guards are actually asking.
+        """
+        return getattr(self, "lbl_comfy_state", None) is not None
 
     CHOOSE_A_FILE = "choose a file..."
 

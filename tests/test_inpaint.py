@@ -94,12 +94,74 @@ def test_an_unknown_backend_is_an_error_not_a_pass_through():
 def test_the_shipped_workflow_has_the_sockets_the_code_fills_in():
     """The contract with ComfyUI is three node titles. If the bundled graph
     loses them, every fill fails at run time with a server error instead of
-    here."""
+    here.
+
+    ``BPC_MASK`` is *not* asserted: the shipped default is an edit-model graph,
+    which has nowhere to put one. That the mask still gets uploaded when a
+    graph does have the node is
+    ``test_a_masked_workflow_still_gets_its_mask``, which builds its own --
+    nothing ships with a mask node any more, and an unexercised branch is how
+    that half of the contract would rot unnoticed.
+    """
     wf = F.load_workflow()
-    for title in (F.TITLE_IMAGE, F.TITLE_MASK):
-        assert F._find(wf, title) is not None, f"no node titled {title}"
+    assert F._find(wf, F.TITLE_IMAGE) is not None, f"no node titled {F.TITLE_IMAGE}"
     n = F._find(wf, F.TITLE_IMAGE)
     assert "image" in wf[n]["inputs"], "BPC_IMAGE must be a LoadImage-shaped node"
+
+
+def test_a_masked_workflow_still_gets_its_mask():
+    """The inpainting half of the contract, with no shipped graph behind it.
+
+    `flux-klein-outpaint.json` was the only bundled example of a `BPC_MASK`
+    node and it is gone, so this builds one.  `_fill_comfy` must still upload
+    the hole and write the returned filename into that node -- a user's own
+    inpainting graph is the whole reason the branch exists, and a branch no
+    shipped file exercises is one nobody would notice breaking.
+    """
+    import json
+    import numpy as np
+    from bpc.config import Settings
+    from bpc import inpaint as FILL
+
+    wf = {"1": {"class_type": "LoadImage", "inputs": {"image": ""},
+                "_meta": {"title": FILL.TITLE_IMAGE}},
+          "2": {"class_type": "LoadImage", "inputs": {"image": ""},
+                "_meta": {"title": FILL.TITLE_MASK}},
+          "3": {"class_type": "SaveImage", "inputs": {"images": ["1", 0]},
+                "_meta": {"title": "out"}}}
+
+    bgr = np.full((60, 80, 3), 200, np.uint8)
+    hole = np.zeros((60, 80), bool)
+    hole[:8, :] = True                       # a band, as a rotation would open
+
+    posted, uploaded = {}, []
+
+    def http(url, data=None, headers=None, timeout=30.0):
+        if url.endswith("/upload/image"):
+            uploaded.append(len(data or b""))
+            return json.dumps({"name": f"up{len(uploaded)}.png"}).encode()
+        if url.endswith("/prompt"):
+            posted.update(json.loads(data.decode())["prompt"])
+            return json.dumps({"prompt_id": "p1"}).encode()
+        if "/history/" in url:
+            return json.dumps({"p1": {"status": {"completed": True}, "outputs": {
+                "3": {"images": [{"filename": "o.png", "type": "output"}]}}}}).encode()
+        ok, buf = __import__("cv2").imencode(".png", bgr)
+        return buf.tobytes()
+
+    orig_http, orig_load = FILL._http, FILL.load_workflow
+    FILL._http = http
+    FILL.load_workflow = lambda *a, **k: json.loads(json.dumps(wf))
+    try:
+        out = FILL._fill_comfy(bgr, hole, Settings().replace(fill="comfyui"))
+    finally:
+        FILL._http, FILL.load_workflow = orig_http, orig_load
+
+    assert len(uploaded) == 2, f"the photograph and the mask, not {len(uploaded)}"
+    assert posted["1"]["inputs"]["image"] == "up1.png", posted["1"]
+    assert posted["2"]["inputs"]["image"] == "up2.png", posted["2"]
+    # And the guarantee that does not depend on the mask being honoured.
+    assert (out[hole == False] == bgr[hole == False]).all(),         "a photographed pixel moved"
 
 
 def test_an_editor_export_is_rejected_with_the_fix_in_the_message():
@@ -481,7 +543,7 @@ def test_the_indicator_names_the_workflow_and_says_when_nobody_chose_it():
 
     def load(path=""):
         seen["path"] = path
-        return graph(with_mask="outpaint" in os.path.basename(path))
+        return graph(with_mask="mask" not in os.path.basename(path))
 
     orig_http, orig_load = FILL._http, FILL.load_workflow
     FILL._http, FILL.load_workflow = serve, load
@@ -493,15 +555,21 @@ def test_the_indicator_names_the_workflow_and_says_when_nobody_chose_it():
         assert seen["path"] == FILL.DEFAULT_WORKFLOW, seen
         assert os.path.basename(FILL.DEFAULT_WORKFLOW) in line, line
         assert "nobody chose it" in line, line
-        assert "inpainting" in line, line
+        assert "edit-model" in line, line       # the shipped default's shape
 
+        # The same file, chosen: same graph, and the caveat drops away.
         s = Settings()
         s.comfy_workflow = os.path.join(FILL.WORKFLOWS, FILL.SHIPPED[0][0])
         state, line = FILL.status(s)
         assert state == "ok", (state, line)
         assert FILL.SHIPPED[0][0] in line, line
-        assert "edit-model" in line, line
         assert "nobody chose it" not in line, line       # they did
+
+        # A graph that does carry a mask node is reported as inpainting, so the
+        # shape in the line is read off the graph and not off the filename.
+        s.comfy_workflow = os.path.join(FILL.WORKFLOWS, "someones-inpaint.json")
+        state, line = FILL.status(s)
+        assert "inpainting" in line, line
 
         # A server that is not answering must still say which graph it would
         # have run: "disconnected" and nothing else sends people to the port
@@ -514,23 +582,27 @@ def test_the_indicator_names_the_workflow_and_says_when_nobody_chose_it():
         FILL._http, FILL.load_workflow = orig_http, orig_load
 
 
-def test_both_shipped_workflows_exist_and_are_postable():
+def test_every_shipped_workflow_exists_and_is_postable():
     """`SHIPPED` is what the window lists, so a name that has drifted from the
-    folder is a chooser offering a file that cannot be opened."""
+    folder is a chooser offering a file that cannot be opened.
+
+    And the default has to be one of them: it is what runs when nobody picks,
+    and a default pointing outside the list is the unnamed choice this whole
+    section exists to stop.
+    """
     import os
     from bpc import inpaint as FILL
 
-    assert len(FILL.SHIPPED) == 2, FILL.SHIPPED
+    assert FILL.SHIPPED, "the chooser would be empty"
     for name, what in FILL.SHIPPED:
         path = os.path.join(FILL.WORKFLOWS, name)
         assert os.path.isfile(path), path
         wf = FILL.load_workflow(path)            # raises on an editor export
         assert FILL._find(wf, FILL.TITLE_IMAGE) is not None, name
         assert what.strip(), name
-    # The two shapes, not two of the same one -- that is the whole reason the
-    # choice has to be made rather than defaulted.
-    shapes = {FILL._find(FILL.load_workflow(os.path.join(FILL.WORKFLOWS, n)),
-                         FILL.TITLE_MASK) is None
-              for n, _ in FILL.SHIPPED}
-    assert shapes == {True, False}, shapes
     assert os.path.basename(FILL.DEFAULT_WORKFLOW) in [n for n, _ in FILL.SHIPPED]
+    # The folder holds exactly what is offered.  A stray .json beside them is a
+    # file the browse dialog shows and `load_workflow` then refuses -- which is
+    # how two ComfyUI *editor* exports came to sit in there.
+    on_disk = {f for f in os.listdir(FILL.WORKFLOWS) if f.endswith(".json")}
+    assert on_disk == {n for n, _ in FILL.SHIPPED}, on_disk

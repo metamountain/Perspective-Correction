@@ -576,7 +576,7 @@ produced the band.
 LaMa is the right default backend: no prompt, ~3 s, and it *continues* structure
 rather than inventing objects. ComfyUI is there for the wide band and for anyone
 who would rather their own Flux graph did it; the workflow is a file
-(`workflows/flux-klein-outpaint.json`), the contract is three node titles
+(`workflows/flux2-klein-edit-nomask.json`), the contract is three node titles
 (`BPC_IMAGE`, `BPC_MASK`, `BPC_PROMPT`), and the most likely user error -- posting
 an editor export instead of an API export to `/prompt` -- is caught with the fix
 in the message.
@@ -627,31 +627,47 @@ so an unguarded resolver helpfully rewrites the photograph about to be uploaded
 into somebody else's leftover PNG. That bug existed for one commit and is
 pinned by `test_the_workflow_is_pointed_at_files_the_server_actually_has`.
 
-**The ComfyUI settings are their own window, reached from a menu bar.** They
-were a row in the options panel, and two things made that unusable. The panel
-is hidden until a folder is loaded -- the two-stage window above -- so the
-server could not be configured *before* the work, which is the only time anyone
-wants to. And every way in lived inside that same hidden panel, including the
-fill selector that opens the dialog, so on a freshly opened window there was no
-route to them at all. Hence `Setup > ComfyUI server...`, which is always there.
-Choosing `comfyui` in the fill selector opens it too and tests immediately: a
-mode that silently needs six settings nobody was shown is the quiet failure
-this file keeps arguing against.
+**The ComfyUI settings are docked along the bottom of the main window.** They
+have been in three places and the first two were both wrong for the same
+reason. A row in the options panel: that panel is hidden until a folder is
+loaded -- the two-stage window above -- so the server could not be configured
+*before* the work, which is the only time anyone wants to, and every route in
+lived inside the hidden panel, including the fill selector. Then a `Toplevel`,
+which fixed reachability and cost a second window for a tool that is otherwise
+one.
 
-The window owns no state. Host, port, workflow and the three model choices are
-`StringVar`s on the App, so closing it loses nothing and `_settings()` does not
-care whether it is open; every helper that draws into it returns early when it
-is shut.
+`side="bottom"` gets both. The dock claims the bottom strip once, outside
+everything `_set_stage` hides and re-packs, so it is on screen with nothing
+loaded and stays put when the list fills. `Setup > ComfyUI server...` and the
+review window's button no longer *open* anything -- they raise the window and
+focus the address field, which is what "let me at the settings" means when the
+settings are already visible. Choosing `comfyui` in a fill selector does the
+same and tests immediately: a mode that silently needs six settings nobody was
+shown is the quiet failure this file keeps arguing against.
 
-**Two workflows ship, and the one that ran was whichever nobody chose.**
+The dock owns no state. Host, port, workflow and the three model choices are
+`StringVar`s on the App, so `_settings()` reads them whether or not anything is
+drawn, and `_comfy_open()` -- which used to ask "is the dialog up" -- now only
+asks whether `_build` has run yet.
+
+**Two workflows shipped, and the one that ran was whichever nobody chose.**
 `--comfy-workflow` defaulted to `flux-klein-outpaint.json` and the window's
-label read "shipped workflow", singular, while two of them ship for two
+label read "shipped workflow", singular, while two of them shipped for two
 *incompatible* model shapes. So a FLUX.2 [klein] **edit** model -- picked
 explicitly in the model selector, present on the server under exactly that
 name -- was fed through an `InpaintModelConditioning` + `KSampler` graph. The
 band came back wrong and **the light was green**, correctly: every checkpoint
 the workflow named was installed. Nothing was missing. The wrong graph was
 running.
+
+**The inpainting graph is now deleted, not demoted**, so only the edit-model
+one ships and the default is at least the right *shape*. That does not retire
+the naming: `--comfy-workflow` takes any file, and an indicator that says
+"connected" without saying to what is the same failure waiting on a graph
+nobody here wrote. The cost is that `BPC_MASK` -- still uploaded whenever a
+graph has the node -- has no shipped example left, so
+`test_a_masked_workflow_still_gets_its_mask` builds one; a branch no bundled
+file exercises is one nobody notices breaking.
 
 This is the same shape as the text-encoder failure above and one level up from
 it. There the guess was about *which file*; here it was about *which graph*,
@@ -948,7 +964,7 @@ file cannot become a second, hidden place where behaviour is configured.
 
 ## Testing
 
-`python tests/run_tests.py` -- 157 tests, standalone, no pytest. The modules are
+`python tests/run_tests.py` -- 158 tests, standalone, no pytest. The modules are
 listed explicitly in `run_tests.py`, so a new test file that is not in `MODULES`
 runs nowhere and is worse than no test at all.
 
