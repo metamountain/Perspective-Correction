@@ -1,5 +1,7 @@
 # Batch Perspective Correction
 
+![before and after: a facade with converging verticals, straightened](docs/hero-before-after.jpg)
+
 Straightens converging verticals in architectural photographs, a folder at a
 time. Built for the case where most of a batch needs a small correction, some
 needs none, and a few must not be touched at all -- so the default behaviour
