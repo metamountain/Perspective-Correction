@@ -311,7 +311,7 @@ def test_the_workflow_is_pointed_at_files_the_server_actually_has():
     try:
         chosen = FILL.apply_model_choices(
             wf, Settings().replace(comfy_unet="wan2.2_i2v.safetensors"))
-        swapped = FILL.resolve_models(wf, "http://stub")
+        swapped, unresolved = FILL.resolve_models(wf, "http://stub")
     finally:
         FILL._http = orig
 
@@ -323,3 +323,102 @@ def test_the_workflow_is_pointed_at_files_the_server_actually_has():
     assert wf["1"]["inputs"]["image"] == "bpc_image.png", \
         "the node BPC uploads into must not be resolved away"
     assert len(swapped) == 2 and all("UNETLoader" not in s for s in swapped)
+    assert unresolved == [], "everything here had a close enough match"
+
+    # A name nothing on the server resembles is reported, not guessed at.
+    wf["6"]["inputs"]["vae_name"] = "something_entirely_different.pt"
+    FILL._http = lambda url, *a, **k: json.dumps(served).encode()
+    try:
+        swapped, unresolved = FILL.resolve_models(wf, "http://stub")
+    finally:
+        FILL._http = orig
+    assert swapped == [] and len(unresolved) == 1, (swapped, unresolved)
+    assert wf["6"]["inputs"]["vae_name"] == "something_entirely_different.pt",         "left for ComfyUI to reject with its own, better message"
+
+
+def test_a_band_that_comes_back_smaller_is_scaled_up_and_still_touches_nothing():
+    """A workflow may cap its own resolution -- a `ImageScaleDownToSize` at 2048
+    is a normal thing to have in one -- so what comes back is smaller than what
+    was sent.  That is fine: the band is sky and wall at the frame edge, it is
+    low-frequency by construction, and only the hole is kept.  It is scaled back
+    up and the photograph never leaves full resolution.
+
+    What must not be tolerated is a different *shape*.  `_composite` maps the
+    returned image onto the frame corner to corner, so a changed aspect ratio
+    slides the band sideways and pastes wall where sky was -- and afterwards
+    that looks like a bad inpaint, not like an error.
+    """
+    import cv2
+    import numpy as np
+    from bpc import inpaint as FILL
+
+    rng = np.random.default_rng(11)
+    photo = (rng.random((300, 400, 3)) * 255).astype(np.uint8)
+    hole = np.zeros((300, 400), bool)
+    hole[:40, :] = True
+
+    half = cv2.resize(photo, (200, 150), interpolation=cv2.INTER_AREA)
+    half[:] = 0                                    # a "generated" band, obviously
+    back = FILL._match_sent_shape(half, photo)
+    assert back.shape[:2] == photo.shape[:2], "scaled back onto the grid it was sent on"
+
+    out = FILL._composite(photo, back, hole)
+    assert np.array_equal(out[60:], photo[60:]), \
+        "a lower-resolution return still may not move a photographed pixel"
+    assert not np.array_equal(out[:40], photo[:40]), "the band did change"
+
+    for bad in ((150, 150), (400, 300)):
+        try:
+            FILL._match_sent_shape(np.zeros((*bad, 3), np.uint8), photo)
+        except FILL.FillUnavailable as exc:
+            assert "wrong place" in str(exc)
+        else:
+            raise AssertionError(f"{bad} should have been refused")
+
+
+def test_the_server_light_has_three_states_not_two():
+    """"Up, but running on a guessed checkpoint" is neither green nor red.
+    Green would hide the guess; red would refuse something that works.  So the
+    indicator has a third state, and `status` is where that judgement lives --
+    in the module, not the window, so it can be asserted without a display.
+    """
+    import json
+    from bpc.config import Settings
+    from bpc import inpaint as FILL
+
+    served = {"UNETLoader": {"input": {"required": {
+        "unet_name": [["installed.safetensors"], {}]}}}}
+    wf = {"1": {"class_type": "LoadImage", "inputs": {"image": "x.png"},
+                "_meta": {"title": FILL.TITLE_IMAGE}},
+          "4": {"class_type": "UNETLoader",
+                "inputs": {"unet_name": "installed.safetensors"}}}
+
+    def serve(url, *a, **k):
+        if "system_stats" in url:
+            return json.dumps({"system": {"comfyui_version": "9.9"}}).encode()
+        return json.dumps(served).encode()
+
+    orig_http, orig_load = FILL._http, FILL.load_workflow
+    FILL._http = serve
+    FILL.load_workflow = lambda *a, **k: json.loads(json.dumps(wf))
+    try:
+        state, line = FILL.status(Settings())
+        assert state == "ok", (state, line)
+
+        wf["4"]["inputs"]["unet_name"] = "installed_v2.safetensors"   # close enough
+        state, line = FILL.status(Settings())
+        assert state == "models" and "guessing" in line, (state, line)
+
+        wf["4"]["inputs"]["unet_name"] = "nothing_like_it.pt"         # too far
+        state, line = FILL.status(Settings())
+        assert state == "models" and "not installed" in line, (state, line)
+
+        del wf["1"]["_meta"]                                          # no BPC_IMAGE
+        state, line = FILL.status(Settings())
+        assert state == "down", (state, line)
+
+        FILL._http = lambda *a, **k: (_ for _ in ()).throw(OSError("refused"))
+        state, line = FILL.status(Settings())
+        assert state == "down" and "no answer" in line, (state, line)
+    finally:
+        FILL._http, FILL.load_workflow = orig_http, orig_load

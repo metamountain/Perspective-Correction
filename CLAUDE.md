@@ -599,6 +599,15 @@ so an unguarded resolver helpfully rewrites the photograph about to be uploaded
 into somebody else's leftover PNG. That bug existed for one commit and is
 pinned by `test_the_workflow_is_pointed_at_files_the_server_actually_has`.
 
+**The light has three states, and the third one is the point.** `down` (red):
+nothing will run -- no answer, or a workflow `/prompt` cannot take. `ok`
+(green): every model name resolves as written. `models` (amber): the server
+answered and the graph is sound, but the checkpoints it names are not the ones
+installed, so a *guess* is in force. Two states would have to fold that into one
+of the others and both readings are wrong -- green hides the guess, red refuses
+something that works. The judgement lives in `inpaint.status`, not the window,
+so it is asserted without a display.
+
 **Host and port are two fields, and the verdict expires.** The port is the half
 that actually gets changed -- a second instance, a tunnel, a container -- and
 hunting for it inside a URL is how it gets mistyped. Only the joined form is
@@ -852,7 +861,7 @@ file cannot become a second, hidden place where behaviour is configured.
 
 ## Testing
 
-`python tests/run_tests.py` -- 153 tests, standalone, no pytest. The modules are
+`python tests/run_tests.py` -- 155 tests, standalone, no pytest. The modules are
 listed explicitly in `run_tests.py`, so a new test file that is not in `MODULES`
 runs nowhere and is worse than no test at all.
 

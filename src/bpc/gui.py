@@ -1339,28 +1339,33 @@ class App(_ROOT_CLASS):
             from . import inpaint as FILL
             models = {}
             try:
-                ok = FILL.available("comfyui", settings)
-                text = FILL.describe("comfyui", settings)
-                if ok:
+                state, text = FILL.status(settings)
+                if state != "down":
                     # Same round trip answers both questions, so ask once.
                     models = FILL.model_options(settings.comfy_url)
             except Exception as exc:                     # never take the window down
-                ok, text = False, f"comfyui check failed: {exc}"
+                state, text = "down", f"comfyui check failed: {exc}"
             # Through the queue the batch run already uses, not `after` from
             # here: Tk is not thread-safe, and registering a callback from a
             # worker raises "main thread is not in main loop" outright.
-            self.queue.put(("comfy", (ok, text, models)))
+            self.queue.put(("comfy", (state, text, models)))
 
         threading.Thread(target=work, daemon=True).start()
 
-    def _comfy_result(self, ok, text, models=None):
+    # Three lights, because "up but running on a guessed checkpoint" is neither
+    # of the other two: green would hide it, red would refuse something that
+    # works.
+    COMFY_LIGHTS = {"ok":     ("connected", "ok"),
+                    "models": ("models missing", "warn"),
+                    "down":   ("disconnected", "err")}
+
+    def _comfy_result(self, state, text, models=None):
         self.btn_comfy_test.configure(state="normal")
         self._fill_model_lists(models or {})
-        self._set_comfy_state("connected" if ok else "disconnected",
-                              INK["ok"] if ok else INK["err"])
-        self.lbl_fill.configure(
-            text=("ComfyUI reachable -- " if ok else "ComfyUI NOT usable -- ") + text)
-        if ok:
+        label, ink = self.COMFY_LIGHTS.get(state, self.COMFY_LIGHTS["down"])
+        self._set_comfy_state(label, INK[ink])
+        self.lbl_fill.configure(text=text)
+        if state != "down":
             prefs.save(comfy_url=self._comfy_url())
 
     def _pick_mask_source(self):

@@ -305,6 +305,38 @@ def _prime_for_generation(small: np.ndarray, mask: np.ndarray) -> np.ndarray:
     return out
 
 
+def _match_sent_shape(gen: np.ndarray, small: np.ndarray) -> np.ndarray:
+    """Put what came back on the grid it was sent on.
+
+    A workflow is free to resize -- a `ImageScaleDownToSize` capping the long
+    edge at 2048 is a common and sensible thing to have in one -- and a band
+    that returns at a lower resolution is **fine**: it is sky, wall and road at
+    the frame edge, it is low-frequency by construction, and only the hole is
+    kept. `_composite` scales it back up and the photograph itself never leaves
+    full resolution, so the visible cost is a slightly softer few per cent at
+    the very edge.
+
+    What is not fine is a different *shape*. `_composite` maps the returned
+    image onto the frame corner to corner, so a returned aspect ratio that
+    differs from the one sent slides the whole band sideways and pastes wall
+    where sky was. Nothing about that looks like an error afterwards; it looks
+    like a bad inpaint. So the aspect is checked here, a real mismatch is
+    refused with both sizes named, and only the resolution is allowed to change.
+    """
+    gh, gw = gen.shape[:2]
+    sh, sw = small.shape[:2]
+    if (gh, gw) == (sh, sw):
+        return gen
+    sent, back = sw / float(sh), gw / float(gh)
+    if abs(sent - back) > 0.01 * sent:
+        raise FillUnavailable(
+            f"ComfyUI returned {gw}x{gh} for a {sw}x{sh} image -- a different "
+            f"shape, not just a different size. The band would be pasted in the "
+            f"wrong place. Check the workflow for a crop or a fixed-size latent; "
+            f"a node that only scales is fine.")
+    return cv2.resize(gen, (sw, sh), interpolation=cv2.INTER_LANCZOS4)
+
+
 def _combo_options(decl):
     """The choices a COMBO input offers, in either schema shape.
 
@@ -353,8 +385,8 @@ def resolve_models(wf: dict, base: str, timeout: float = 30.0) -> list:
         info = json.loads(_http(base.rstrip("/") + "/object_info",
                                 timeout=timeout).decode())
     except Exception:
-        return []                      # unreachable is the caller's problem
-    swapped = []
+        return [], []                  # unreachable is the caller's problem
+    swapped, unresolved = [], []
     for node in wf.values():
         # Never the nodes BPC fills itself.  Their `image` is a COMBO too --
         # ComfyUI offers whatever is sitting in its input folder -- so an
@@ -375,10 +407,11 @@ def resolve_models(wf: dict, base: str, timeout: float = 30.0) -> list:
                     continue
                 best = max(options, key=lambda c: _score(value, c))
                 if _score(value, best) < 0.34:      # too different to guess at
+                    unresolved.append(f"{node['class_type']}.{name}: {value}")
                     continue
                 node["inputs"][name] = best
                 swapped.append(f"{node['class_type']}.{name}: {value} -> {best}")
-    return swapped
+    return swapped, unresolved
 
 
 # Which loader input each explicit choice belongs to.  One place, because the
@@ -425,13 +458,57 @@ def apply_model_choices(wf: dict, settings) -> list:
     return used
 
 
+def status(settings) -> tuple:
+    """``(state, line)`` for the window's indicator.  Three states, not two.
+
+    ``down``    nothing will run: no answer from the server, or a workflow that
+                cannot be posted -- an editor export, or one with no
+                ``BPC_IMAGE``.
+    ``models``  the server answered and the graph is sound, but the checkpoints
+                it names are not the ones installed. The fill may still work,
+                because the matcher substitutes what it can -- and that is
+                exactly why this is its own colour rather than green. A guess is
+                in force, and a guess about which of forty-six text encoders was
+                meant deserves a look before a batch runs on it.
+    ``ok``      every name resolves as written, nothing guessed.
+
+    Two states would have to fold "running on a guess" into one of the other
+    two, and both readings are wrong: green would hide it, red would refuse
+    something that works.
+    """
+    base = getattr(settings, "comfy_url", DEFAULT_COMFY_URL)
+    try:
+        stats = json.loads(_http(base.rstrip("/") + "/system_stats",
+                                 timeout=5.0).decode())
+    except Exception as exc:
+        return "down", f"no answer from {base} ({exc})"
+    version = stats.get("system", {}).get("comfyui_version", "?")
+    try:
+        wf = load_workflow(getattr(settings, "comfy_workflow", ""))
+    except FillUnavailable as exc:
+        return "down", str(exc)
+    if _find(wf, TITLE_IMAGE) is None:
+        return "down", f"the workflow has no node titled {TITLE_IMAGE}"
+
+    apply_model_choices(wf, settings)
+    swapped, unresolved = resolve_models(wf, base)
+    if unresolved:
+        return "models", (f"ComfyUI {version} is up, but not installed: "
+                          + "; ".join(unresolved))
+    if swapped:
+        return "models", (f"ComfyUI {version} is up; guessing at "
+                          + "; ".join(swapped))
+    mode = "edit-model" if _find(wf, TITLE_MASK) is None else "inpainting"
+    return "ok", f"ComfyUI {version}, {mode} workflow, every model present"
+
+
 def _fill_comfy(bgr: np.ndarray, hole: np.ndarray, settings) -> np.ndarray:
     base = getattr(settings, "comfy_url", "http://127.0.0.1:8188").rstrip("/")
     wf = load_workflow(getattr(settings, "comfy_workflow", ""))
     # Chosen names first, then a guess for anything still absent.  Both happen
     # before the uploads, so nothing can rewrite the filename BPC just posted.
     apply_model_choices(wf, settings)
-    resolve_models(wf, base)
+    resolve_models(wf, base)          # (swapped, unresolved) -- `status` reports them
     n_img, n_mask = _find(wf, TITLE_IMAGE), _find(wf, TITLE_MASK)
     if n_img is None:
         raise FillUnavailable(
@@ -515,7 +592,7 @@ def _fill_comfy(bgr: np.ndarray, hole: np.ndarray, settings) -> np.ndarray:
         gen = cv2.imdecode(np.frombuffer(raw, np.uint8), cv2.IMREAD_COLOR)
         if gen is None:
             raise FillUnavailable("could not decode the image ComfyUI returned")
-        return _composite(bgr, gen, hole)
+        return _composite(bgr, _match_sent_shape(gen, small), hole)
 
 
 # --------------------------------------------------------------------------
