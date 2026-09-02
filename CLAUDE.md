@@ -573,6 +573,32 @@ independently readable halves -- *server up, ComfyUI 0.3.x* and *workflow: 12
 nodes, sockets [BPC_IMAGE, BPC_MASK]* -- so the button is wiring, not new logic.
 A dead port and a live one are both asserted, the second against a stub server.
 
+**The model filenames are resolved, then chosen.** A workflow names three
+checkpoints and those names are the first thing that is wrong on somebody
+else's machine: the shipped graph says `flux2-klein-9b.safetensors` where a
+real install has `flux-2-klein-9b-fp8.safetensors`. ComfyUI answers with three
+`Value not in list` errors and ignores the output -- a correct message about
+the wrong problem, and one nothing in BPC could have prevented.
+
+Two layers, in this order. `apply_model_choices` writes whatever the user
+picked in the window, and `resolve_models` then matches anything still absent
+against what `/object_info` reports, by shared filename tokens. A match below
+0.34 is left alone: better ComfyUI's own error than a silent swap to the wrong
+file. Every substitution is *returned*, never merely done -- it is a guess
+about which of forty-six text encoders was meant, and a guess nobody is told
+about is how a batch quietly produces something else.
+
+**The guess is not enough on its own, which is why there is a selector.** With
+sixteen UNETs, forty-six text encoders and twenty-seven VAEs installed -- the
+normal case -- two candidates are routinely equally plausible. The three
+dropdowns are filled from the server on a successful connection test (the same
+round trip that answers "is it there", so it is asked once), default to
+"(from the workflow)", and are remembered like any other address. They must
+skip nodes titled `BPC_*` and every `LoadImage`: their `image` is a COMBO too,
+so an unguarded resolver helpfully rewrites the photograph about to be uploaded
+into somebody else's leftover PNG. That bug existed for one commit and is
+pinned by `test_the_workflow_is_pointed_at_files_the_server_actually_has`.
+
 **Host and port are two fields, and the verdict expires.** The port is the half
 that actually gets changed -- a second instance, a tunnel, a container -- and
 hunting for it inside a URL is how it gets mistyped. Only the joined form is
@@ -818,7 +844,7 @@ report — into one folder, and writes the environment *before* the run so a fai
 run still leaves something diagnosable.
 
 `--remember` stores **addresses only** (checkpoint, mask folder, output, focal
-length, ComfyUI URL and workflow). Correction parameters are deliberately not
+length, ComfyUI URL, workflow, and the three model files chosen for it). Correction parameters are deliberately not
 remembered: a setting that
 silently persists between runs is one nobody can reason about, and a batch must
 stay reproducible from its command line. Unknown keys are dropped on load so the
@@ -826,7 +852,7 @@ file cannot become a second, hidden place where behaviour is configured.
 
 ## Testing
 
-`python tests/run_tests.py` -- 152 tests, standalone, no pytest. The modules are
+`python tests/run_tests.py` -- 153 tests, standalone, no pytest. The modules are
 listed explicitly in `run_tests.py`, so a new test file that is not in `MODULES`
 runs nowhere and is worse than no test at all.
 

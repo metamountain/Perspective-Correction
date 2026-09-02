@@ -264,3 +264,62 @@ def test_the_server_address_survives_being_taken_apart_and_put_together():
     assert FILL.split_url("127.0.0.1:8188") == ("127.0.0.1", "8188")
     assert FILL.join_url("http://a", "not-a-port") == "http://a", "junk port dropped"
     assert FILL.split_url("") == ("http://127.0.0.1", "8188"), "empty falls back"
+
+
+def test_the_workflow_is_pointed_at_files_the_server_actually_has():
+    """A workflow names checkpoints, and those names are the first thing that is
+    wrong on somebody else's machine: the shipped one says
+    ``flux2-klein-9b.safetensors`` where a real install has
+    ``flux-2-klein-9b-fp8.safetensors``.  ComfyUI answers with three "Value not
+    in list" errors and ignores the output -- a correct message about the wrong
+    problem.
+
+    An explicit choice wins outright and is never second-guessed.  Anything left
+    over is matched by shared filename tokens, and a match too weak to trust is
+    left alone for ComfyUI to reject with its own, better message.  The nodes
+    BPC fills itself are excluded: their ``image`` is a COMBO too, so an
+    unguarded resolver rewrites the photograph about to be uploaded into
+    somebody else's leftover PNG.
+    """
+    import json
+    from bpc.config import Settings
+    from bpc import inpaint as FILL
+
+    served = {
+        "UNETLoader": {"input": {"required": {
+            "unet_name": [["flux-2-klein-9b.safetensors", "wan2.2_i2v.safetensors"], {}]}}},
+        "CLIPLoader": {"input": {"required": {
+            "clip_name": ["COMBO", {"options": ["mistral_3_small_flux2_fp8.safetensors",
+                                                "EVA02_CLIP_L_336.pt"]}]}}},
+        "VAELoader": {"input": {"required": {
+            "vae_name": [["flux2-vae.safetensors"], {}]}}},
+        "LoadImage": {"input": {"required": {
+            "image": [["someone_elses.png"], {}]}}},
+    }
+    wf = {
+        "4": {"class_type": "UNETLoader",
+              "inputs": {"unet_name": "flux2-klein-9b.safetensors"}},
+        "5": {"class_type": "CLIPLoader",
+              "inputs": {"clip_name": "mistral_3_small_flux2_fp8_scaled.safetensors"}},
+        "6": {"class_type": "VAELoader", "inputs": {"vae_name": "flux2_vae.safetensors"}},
+        "1": {"class_type": "LoadImage", "inputs": {"image": "bpc_image.png"},
+              "_meta": {"title": FILL.TITLE_IMAGE}},
+    }
+
+    orig = FILL._http
+    FILL._http = lambda url, *a, **k: json.dumps(served).encode()
+    try:
+        chosen = FILL.apply_model_choices(
+            wf, Settings().replace(comfy_unet="wan2.2_i2v.safetensors"))
+        swapped = FILL.resolve_models(wf, "http://stub")
+    finally:
+        FILL._http = orig
+
+    assert chosen == ["UNETLoader.unet_name = wan2.2_i2v.safetensors"]
+    assert wf["4"]["inputs"]["unet_name"] == "wan2.2_i2v.safetensors", \
+        "an explicit choice is never second-guessed"
+    assert wf["5"]["inputs"]["clip_name"] == "mistral_3_small_flux2_fp8.safetensors"
+    assert wf["6"]["inputs"]["vae_name"] == "flux2-vae.safetensors"
+    assert wf["1"]["inputs"]["image"] == "bpc_image.png", \
+        "the node BPC uploads into must not be resolved away"
+    assert len(swapped) == 2 and all("UNETLoader" not in s for s in swapped)

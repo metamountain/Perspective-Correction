@@ -104,6 +104,14 @@ class Settings:
     comfy_prompt: str = ""              # fills the node titled BPC_PROMPT
     comfy_seed: int = 0                 # 0 = leave the workflow's own seeds alone
     comfy_timeout: float = 300.0
+    # Chosen by hand from what the server offers, and applied over whatever the
+    # workflow names.  Empty means "leave the workflow alone and let
+    # `inpaint.resolve_models` guess", which is right until two files on the
+    # same machine are equally plausible -- and with 46 text encoders installed
+    # they usually are.
+    comfy_unet: str = ""
+    comfy_clip: str = ""
+    comfy_vae: str = ""
     keep_size: bool = False
     interpolation: str = "lanczos"      # lanczos | cubic | linear
     jpeg_quality: int = 95
