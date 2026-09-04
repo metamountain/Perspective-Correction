@@ -395,13 +395,16 @@ class ReviewWindow(tk.Toplevel):
 
         panes = ttk.Frame(top)
         panes.pack(fill="both", expand=True)
-        panes.columnconfigure(0, weight=1)
-        panes.columnconfigure(1, weight=1)
+        # `uniform` is what actually splits these evenly: weight only shares out
+        # surplus space, so the long heading in column 0 set that column's
+        # minimum and squeezed the corrected image to a sliver on a narrow
+        # window. The hint that caused it now sits below the panes instead.
+        panes.columnconfigure(0, weight=1, uniform="panes")
+        panes.columnconfigure(1, weight=1, uniform="panes")
         panes.rowconfigure(1, weight=1)
 
-        ttk.Label(panes, text="before  (click a line to strike it out / bring it back)"
-                  ).grid(row=0, column=0, sticky="w")
-        ttk.Label(panes, text="after").grid(row=1 - 1, column=1, sticky="w")
+        ttk.Label(panes, text="before").grid(row=0, column=0, sticky="w")
+        ttk.Label(panes, text="after").grid(row=0, column=1, sticky="w")
 
         self.c_before = tk.Canvas(panes, bg=INK["field"], highlightthickness=0)
         self.c_before.grid(row=1, column=0, sticky="nsew", padx=(0, 3))
@@ -416,6 +419,10 @@ class ReviewWindow(tk.Toplevel):
         self.c_after.bind("<ButtonRelease-1>", self._on_crop_release)
         for c in (self.c_before, self.c_after):
             c.bind("<Configure>", lambda e: self._schedule_redraw())
+
+        ttk.Label(top, style="Dim.TLabel",
+                  text="click a line in the left image to strike it out, "
+                       "or to bring it back").pack(anchor="w", pady=(4, 0))
 
         self.status = tk.Text(top, height=4, wrap="word", relief="flat",
                               borderwidth=0, highlightthickness=0, padx=10, pady=8,

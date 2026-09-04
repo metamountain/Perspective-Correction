@@ -6,7 +6,7 @@ guiding rule is the one from the brief -- when in doubt, leave the photo alone.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, asdict, fields
+from dataclasses import dataclass, asdict
 
 
 @dataclass
@@ -125,7 +125,3 @@ class Settings:
         d = asdict(self)
         d.update(kw)
         return Settings(**d)
-
-    @classmethod
-    def field_names(cls):
-        return [f.name for f in fields(cls)]
