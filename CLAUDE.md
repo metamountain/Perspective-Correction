@@ -330,7 +330,7 @@ load-bearing: without `masks.protect_structure` the same set measures
 
 **`--mask-export` writes the masks once.** It bridges the interpreter split
 (torch without tkinter, tkinter without torch) *and* turns a repeated run into a
-file read. `tests/assets/masks` is that cache, 160 KB for sixteen photographs (four of
+file read. `tests/assets/masks` is that cache, 154 KB for twenty photographs (four of
 them not yet in the asset folder), white meaning ignore. It must never be used for the round-trip test — the warped copy
 has moved and the cached mask has not (IoU 1.000 unwarped, 0.802 warped), which
 reports 0.69°/2.35° for an estimator that achieves 0.56°/1.40°.
@@ -982,7 +982,7 @@ present. `*_upright.*` is asserted to be left unchanged, `*_skip.*` to be
 refused.
 
 **Two of those six are currently dormant, and the mask cache is what gives it
-away.** There are sixteen masks and twelve photographs: `painted-hall`,
+away.** There are twenty masks and sixteen photographs: `painted-hall`,
 `prague-main-railway-station-ceiling`, `tiled-skyscraper-facade` and
 `warsaw-d3200-27mm_upright` have a cached mask and no image. So
 `test_files_marked_upright_are_left_alone` and `test_files_marked_skip_are_refused`
