@@ -57,13 +57,13 @@ Log lines are one per file:
 | `--max-pitch`, `--max-roll` | caps in degrees (20 / 12) |
 | `--min-confidence` | raise to skip more, lower to correct more |
 | `--no-pitch` / `--no-roll` | level only, or straighten verticals only |
-| `--crop aspect\|inside\|none` | keep the original aspect ratio, fit inside, or don't crop |
+| `--crop auto\|aspect\|inside\|none` | **auto** (the default) crops while the loss stays small and keeps the whole frame otherwise; `aspect`/`inside` always crop; `none` never does |
 | `--detector hybrid` | combine LSD's precision with M-LSD's judgement. Needs `pip install ai-edge-litert` ([measurements](docs/detectors.md)) |
 | `--detector deep-hybrid` | the same idea with DeepLSD as the guide, and the only one measured to beat plain LSD here. Needs torch, a DeepLSD checkout and its weights ([measurements](docs/detectors.md)) |
 | `--detector-info` | which detectors this Python can actually run |
 | `--fill telea` | **the default.** Fills the band the rotation opens up by propagating the edge inwards: no model, no download, deterministic. `--fill none` keeps the pad instead |
 | `--fill lama` | generate that band with a learned model instead. Off by default -- those pixels were never photographed |
-| `--fill comfyui --comfy-workflow x.json` | the same through a running ComfyUI ([workflows/README.md](workflows/README.md)). The batch window has the address and a "Test connection" button |
+| `--fill comfyui` | the same through a running ComfyUI; a Klein edit-model workflow ships, `--comfy-workflow` names another ([workflows/README.md](workflows/README.md)). The window docks the server address, workflow and model pickers behind a four-state connection light |
 | `--remember` | store `--birefnet-model`, `--mask-file`, `-o` and `--focal-35mm` as defaults; `--forget` clears them |
 | `--birefnet-model auto` | find usable weights in the usual ComfyUI folders |
 | `--mask-info` | what this Python can import, and whether the weights load |
