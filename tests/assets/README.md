@@ -36,6 +36,7 @@ Present:
 | `kastner-mansion-newark-dscw730_f25.jpg` | Sony DSC-W730 | **25 mm** | the `_f25` suffix; EXIF has only `FocalLength` (4.5 mm = 25 mm at the W730's wide end, per Sony's spec) |
 | `burgebrach-pfarrweg-1-scheune-001-nikond7000-33mm.jpg` | Nikon D7000 | **33 mm** | `FocalLengthIn35mmFilm` in EXIF |
 | `wilsdruff-scheunen-6-coolpixp71-41mm.jpg` | Nikon Coolpix P7100 | **41 mm** | `FocalLengthIn35mmFilm` in EXIF |
+| `berlin-u-bf-dahlem-dorf-asv2023-06-img1-ilce7rm3-29mm.jpg` | Sony A7R III | **29 mm** | `FocalLengthIn35mmFilm` in EXIF |
 
 Add more with `python tools/fetch_commons_asset.py <commons url>`. It refuses any
 file without `FocalLengthIn35mmFilm`, preserves the tag through the resize, and
@@ -70,7 +71,8 @@ fixtures rather than part of the MIT-licensed source, but the repository does
 then contain share-alike content, and that is a deliberate choice to be aware
 of. `haseldorf-…` is plain CC BY, and `kastner-…` is **CC0** (public domain,
 no attribution required) -- the cleanest licences, to prefer when there is a
-choice.
+choice. `berlin-u-bf-dahlem-…` is **FAL** (Free Art License), a copyleft
+licence like CC BY-SA; fine as a fixture, same share-alike caveat.
 
 | asset | source | author | licence |
 |---|---|---|---|
@@ -83,6 +85,7 @@ choice.
 | `kastner-mansion-newark-dscw730_f25.jpg` | [Commons](https://commons.wikimedia.org/wiki/File:Kastner_Mansion_Newark.jpg) | Djflem | **CC0** |
 | `burgebrach-pfarrweg-1-scheune-001-nikond7000-33mm.jpg` | [Commons](https://commons.wikimedia.org/wiki/File:Burgebrach,_Pfarrweg_1,_Scheune,_001.jpg) | Tilman2007 | CC BY-SA 3.0 |
 | `wilsdruff-scheunen-6-coolpixp71-41mm.jpg` | [Commons](https://commons.wikimedia.org/wiki/File:Wilsdruff-Scheunen-6.jpg) | SchiDD | CC BY-SA 4.0 |
+| `berlin-u-bf-dahlem-dorf-asv2023-06-img1-ilce7rm3-29mm.jpg` | [Commons](https://commons.wikimedia.org/wiki/File:Berlin_U-Bf_Dahlem-Dorf_asv2023-06_img1.jpg) | A.Savin | FAL |
 
 All were downscaled to a long edge of 1800 px with EXIF preserved; nothing else
 was altered. Verify with `piexif.load(path)["Exif"][41989]` (FocalLengthIn35mmFilm).
@@ -96,6 +99,7 @@ was altered. Verify with `piexif.load(path)["Exif"][41989]` (FocalLengthIn35mmFi
 | Kastner Mansion | **strong upward tilt, 25 mm** | 14.7 deg pitch, confidence 0.66 -- the biggest correction in the set; CC0 |
 | Burgebrach barn | **Fachwerk, 33 mm** | the adversarial case: the slanted braces are correctly rejected as outliers |
 | Wilsdruff barns | **oblique row, 41 mm** | sits near the confidence gate -- OK or SKIP depending on the seed |
+| Dahlem-Dorf station | **flat-on Fachwerk, 29 mm** | small correction (1.6 deg) at confidence 0.68 -- the highest in the set; f trusted from EXIF, not fitted |
 
 Three others were fetched at the same time and **deliberately not kept**, which
 is worth recording because each earned its place on the reject pile:
