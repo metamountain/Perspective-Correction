@@ -69,6 +69,51 @@ def _plausible_horizontal(vp, cx, cy, min_dist):
     return abs(math.atan2(abs(dy), abs(dx))) <= math.radians(45.0)
 
 
+def _normalize_rows(v):
+    """Row-wise :func:`geometry.normalize_vp`.
+
+    Same contract, including the sign convention that makes equal vanishing
+    points compare equal -- without it the non-maximum suppression below would
+    treat ``v`` and ``-v`` as different hypotheses.
+    """
+    norm = np.linalg.norm(v, axis=1)
+    bad = norm < 1e-12
+    norm[bad] = 1.0
+    out = v / norm[:, None]
+    out[bad] = (0.0, 1.0, 0.0)
+    lead = np.abs(out).argmax(axis=1)
+    flip = out[np.arange(len(out)), lead] < 0
+    out[flip] *= -1.0
+    return out
+
+
+def _offsets(vps, cx, cy):
+    """Row-wise offset from the principal point, finite and infinite alike.
+
+    Returns ``(dx, dy, at_infinity)``; for a point at infinity the offset is the
+    direction itself, which is what the orientation prior needs and what a
+    dehomogenising version would turn into a division by zero.
+    """
+    at_inf = np.abs(vps[:, 2]) < 1e-9
+    w = np.where(at_inf, 1.0, vps[:, 2])
+    dx = np.where(at_inf, vps[:, 0], vps[:, 0] / w - cx)
+    dy = np.where(at_inf, vps[:, 1], vps[:, 1] / w - cy)
+    return dx, dy, at_inf
+
+
+def _plausible_vertical_rows(vps, cx, cy, min_dist, max_lean_deg):
+    dx, dy, at_inf = _offsets(vps, cx, cy)
+    far = at_inf | (np.hypot(dx, dy) >= min_dist)
+    lean = np.abs(np.arctan2(np.abs(dx), np.abs(dy)))
+    return far & (lean <= math.radians(max_lean_deg))
+
+
+def _plausible_horizontal_rows(vps, cx, cy, min_dist):
+    dx, dy, at_inf = _offsets(vps, cx, cy)
+    far = at_inf | (np.hypot(dx, dy) >= min_dist)
+    return far & (np.abs(np.arctan2(np.abs(dy), np.abs(dx))) <= math.radians(45.0))
+
+
 def _score(ls, vp, thr_rad):
     res = G.angular_residual(vp, ls.mid, ls.dir)
     inl = res <= thr_rad
@@ -91,11 +136,11 @@ def search(ls, w, h, settings, orientation="vertical", n_hypotheses=None):
     rng = np.random.default_rng(settings.seed)
 
     if orientation == "vertical":
-        ok = lambda v: _plausible_vertical(v, cx, cy, min_dist,
-                                           settings.vertical_window_deg + 8.0)
+        ok_rows = lambda v: _plausible_vertical_rows(
+            v, cx, cy, min_dist, settings.vertical_window_deg + 8.0)
         axis_angle = ls.angle_to_vert
     else:
-        ok = lambda v: _plausible_horizontal(v, cx, cy, min_dist * 0.25)
+        ok_rows = lambda v: _plausible_horizontal_rows(v, cx, cy, min_dist * 0.25)
         axis_angle = math.pi / 2.0 - ls.angle_to_vert
 
     n = len(ls)
@@ -103,16 +148,34 @@ def search(ls, w, h, settings, orientation="vertical", n_hypotheses=None):
     # the minimal sample needs two lines that actually intersect at a
     # well-conditioned point; require a minimum angular separation
     min_sep = math.radians(0.6)
+    iters = settings.ransac_iters
+
+    # Draw every minimal sample and build every candidate in one pass.
+    # `rng.choice` with a probability vector rebuilds a cumulative distribution
+    # on each call, and `np.cross` carries heavy per-call overhead on 3-vectors;
+    # measured over 800 iterations on 390 lines the two together were 37 ms of a
+    # 62 ms loop, and both all but vanish when batched.  Scoring, the remaining
+    # 25 ms, is the algorithm itself and stays a loop.
+    cdf = np.cumsum(p)
+    cdf[-1] = 1.0
+    idx = np.clip(np.searchsorted(cdf, rng.random((iters, 2))), 0, n - 1)
+    i, j = idx[:, 0], idx[:, 1]
+    keep = (i != j) & (np.abs(axis_angle[i] - axis_angle[j]) >= min_sep)
+    i, j = i[keep], j[keep]
+    if len(i) == 0:
+        return []
+
+    a, b = ls.lines[i], ls.lines[j]
+    vps = _normalize_rows(np.column_stack([
+        a[:, 1] * b[:, 2] - a[:, 2] * b[:, 1],
+        a[:, 2] * b[:, 0] - a[:, 0] * b[:, 2],
+        a[:, 0] * b[:, 1] - a[:, 1] * b[:, 0]]))
+    vps = vps[np.all(np.isfinite(vps), axis=1)]
+    if len(vps):
+        vps = vps[ok_rows(vps)]
 
     found = []
-    iters = settings.ransac_iters
-    for _ in range(iters):
-        i, j = rng.choice(n, size=2, replace=False, p=p)
-        if abs(axis_angle[i] - axis_angle[j]) < min_sep:
-            continue
-        vp = G.vp_from_two(ls.lines[i], ls.lines[j])
-        if not np.all(np.isfinite(vp)) or not ok(vp):
-            continue
+    for vp in vps:
         inl, sc = _score(ls, vp, thr)
         if sc <= 0:
             continue
@@ -132,7 +195,7 @@ def search(ls, w, h, settings, orientation="vertical", n_hypotheses=None):
             continue
         sub = ls.subset(inl)
         vp_ref = G.refine_vp(sub.lines, sub.mid, sub.weight, vp)
-        if not ok(vp_ref):
+        if not ok_rows(vp_ref[None, :])[0]:
             vp_ref = vp
         inl2, sc2 = _score(ls, vp_ref, thr)
         total = float(ls.weight.sum()) or 1.0
