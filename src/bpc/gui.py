@@ -401,7 +401,7 @@ class ReviewWindow(tk.Toplevel):
 
         ttk.Label(panes, text="before  (click a line to strike it out / bring it back)"
                   ).grid(row=0, column=0, sticky="w")
-        ttk.Label(panes, text="after").grid(row=1 - 1, column=1, sticky="w")
+        ttk.Label(panes, text="after").grid(row=0, column=1, sticky="w")
 
         self.c_before = tk.Canvas(panes, bg=INK["field"], highlightthickness=0)
         self.c_before.grid(row=1, column=0, sticky="nsew", padx=(0, 3))
@@ -1263,7 +1263,7 @@ class App(_ROOT_CLASS):
         # port nobody has asked yet answers a question no longer on screen.
         for var in (self.v_comfy_host, self.v_comfy_port):
             var.trace_add("write", lambda *_a: self._show_comfy_state(
-                "unknown", "not checked -- the address changed"))
+                "unknown", "the address changed -- press Test connection"))
         ttk.Checkbutton(opt, text="subfolders", variable=self.v_recursive).grid(row=2, column=0, sticky="w")
         ttk.Checkbutton(opt, text="overwrite originals", variable=self.v_overwrite).grid(row=2, column=1, sticky="w")
         ttk.Checkbutton(opt, text="offer manual review for unclear images",
@@ -1566,7 +1566,7 @@ class App(_ROOT_CLASS):
         # The workflow is half of what "connected" means -- a reachable server
         # with an unusable graph is not a working fill -- so the verdict is
         # stale the moment it changes.
-        self._show_comfy_state("unknown", "not checked -- the workflow changed")
+        self._show_comfy_state("unknown", "the workflow changed -- press Test connection")
         self._check_fill()
 
     def _comfy_url(self):
