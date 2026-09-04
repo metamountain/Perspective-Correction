@@ -11,6 +11,10 @@ debug/
 tests/_out/
 bpc-run-*/
 
+# generated analysis images -- regenerable, kept out of the repo (the README stays)
+analysis/*
+!analysis/README.md
+
 # a vendored third-party checkout (MIT), kept local, never committed
 tools/DeepLSD/
 
