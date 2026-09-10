@@ -322,35 +322,56 @@ def _brand_header(parent):
 # ==========================================================================
 # review window
 # ==========================================================================
-class ReviewWindow(tk.Toplevel):
-    def __init__(self, master, path, settings, dest_path, on_saved=None,
-                 overwrite=False, on_closed=None, position=""):
-        super().__init__(master)
-        self.title(f"{position}  {os.path.basename(path)}".strip())
-        self.geometry("1280x820")
-        self.minsize(900, 600)
-        apply_theme(self)
-        self.configure(background=INK["bg"])
-        self._icon = _set_window_icon(self)
+class ReviewPanel(tk.Frame):
+    # The review UI, embedded in the batch window.  One frame for the whole
+    # task: a second window split one photograph across two frames and stole
+    # focus on every double-click.  Built once; `load` swaps the photograph
+    # into the same widgets.
+    def __init__(self, master):
+        super().__init__(master, background=INK["bg"])
+        self.container = ttk.Frame(self)
+        self.container.pack(fill="both", expand=True)
+        self.session = None
+        self.settings = None
+        self.dest_path = None
+        self.on_saved = None
+        # Fired however the review goes away -- saved, kept, or closed.  A
+        # queue that only advances on Save stalls forever on the first
+        # photograph someone skips.
+        self.on_closed = None
+        self._closed_sent = False
+        self._busy = False
+        self._before_scale = 1.0
+        self._show_hint()
+
+    def _show_hint(self):
+        for w in self.container.winfo_children():
+            w.destroy()
+        ttk.Label(self.container, style="Dim.TLabel",
+                  text="double-click a photograph to review it here").pack(expand=True)
+
+    def load(self, path, settings, dest_path, overwrite=False, on_saved=None,
+             on_closed=None, position=""):
         self.settings = settings
         self.dest_path = dest_path
         self.on_saved = on_saved
-        # Fired however the window goes away -- saved, kept, or closed by the
-        # window manager.  A queue that only advances on Save stalls forever on
-        # the first photograph someone closes with the X.
         self.on_closed = on_closed
         self._closed_sent = False
         self._busy = False
         self._before_scale = 1.0
-
+        for w in self.container.winfo_children():
+            w.destroy()
         try:
             self.session = ReviewSession(path, settings)
         except Exception as exc:
-            messagebox.showerror("Review", f"cannot open image:\n{exc}", parent=master)
+            ttk.Label(self.container, foreground="red", justify="left",
+                      text=f"cannot open image:\n{exc}").pack(expand=True)
             self._fire_closed()
-            self.destroy()
             return
-
+        app = self._app()
+        if app is not None:
+            app.title(f"{position}  {os.path.basename(path)}  |  Batch "
+                      f"Perspective Correction".strip())
         self._build()
         self.v_overwrite.set(bool(overwrite))
         self.v_alpha.set(self.session.mask_alpha)
@@ -359,7 +380,6 @@ class ReviewWindow(tk.Toplevel):
         # and undoable with "Reset crop" -- see `auto_crop_if_cheap`.
         if self.session.auto_crop_if_cheap():
             self._refresh_crop()
-        self.protocol("WM_DELETE_WINDOW", self._on_close)
         self.after(60, self._sync_from_session)
 
     def _fire_closed(self):
@@ -367,9 +387,10 @@ class ReviewWindow(tk.Toplevel):
             self._closed_sent = True
             self.on_closed()
 
-    def _on_close(self):
+    def _close(self):
+        # The old window's X button: fire the queue hook, then clear the panel.
         self._fire_closed()
-        self.destroy()
+        self._show_hint()
 
     def destroy(self):
         """Every way this window goes away drops its listener.
@@ -389,8 +410,9 @@ class ReviewWindow(tk.Toplevel):
 
     # -- layout ----------------------------------------------------------
     def _build(self):
-        _brand_header(self)
-        top = ttk.Frame(self, padding=6)
+        # No brand header here: the panel sits inside the batch window, which
+        # carries its own.
+        top = ttk.Frame(self.container, padding=6)
         top.pack(fill="both", expand=True)
 
         panes = ttk.Frame(top)
@@ -424,12 +446,20 @@ class ReviewWindow(tk.Toplevel):
                   text="click a line in the left image to strike it out, "
                        "or to bring it back").pack(anchor="w", pady=(4, 0))
 
-        self.status = tk.Text(top, height=4, wrap="word", relief="flat",
+        stat = ttk.Frame(top)
+        stat.pack(fill="x", pady=(6, 4))
+        self.status = tk.Text(stat, height=4, wrap="word", relief="flat",
                               borderwidth=0, highlightthickness=0, padx=10, pady=8,
                               background=INK["field"], foreground=INK["dim"],
                               font=("TkFixedFont",))
-        self.status.pack(fill="x", pady=(6, 4))
-        self.status.bind("<Key>", lambda e: "break")
+        self.status.pack(side="left", fill="both", expand=True)
+        # Read-only box, but copying must still work: the old blanket
+        # "<Key>" -> "break" swallowed Ctrl+C along with typing, so an error
+        # message could be selected but never copied.  Swallow typing only and
+        # let Ctrl+C fall through to the Text class binding (tk::TextCopy).
+        self.status.bind("<Key>", self._status_key)
+        ttk.Button(stat, text="copy", width=6, command=self._copy_status
+                   ).pack(side="right", fill="y", padx=(4, 0))
 
         ctl = ttk.Frame(top, padding=(0, 8, 0, 0))
         ctl.pack(fill="x")
@@ -532,6 +562,8 @@ class ReviewWindow(tk.Toplevel):
         self.v_overwrite = tk.BooleanVar(value=False)
         ttk.Checkbutton(btns, text="overwrite original",
                         variable=self.v_overwrite).pack(side="right", padx=8)
+        ttk.Button(btns, text="Close",
+                   command=self._close).pack(side="right", padx=(14, 6))
         ttk.Button(btns, text="Keep original",
                    command=self._keep).pack(side="right", padx=6)
 
@@ -649,7 +681,10 @@ class ReviewWindow(tk.Toplevel):
         app = self._app()
         if app is None:
             return
-        app._comfy_listeners.append(self._on_comfy_state)
+        # Idempotent: `load` rebuilds the widgets, and a second registration
+        # would deliver every state change twice.
+        if self._on_comfy_state not in app._comfy_listeners:
+            app._comfy_listeners.append(self._on_comfy_state)
         self._on_comfy_state(*app._comfy_state)
 
     def _unregister_comfy(self):
@@ -714,6 +749,7 @@ class ReviewWindow(tk.Toplevel):
         if not hexval:
             return
         self.session.settings = self.session.settings.replace(pad=hexval)
+        prefs.save(pad=hexval)          # an output preference, not a per-photograph decision
         self._sync_pad_swatch()
         self._schedule_redraw()
 
@@ -721,6 +757,7 @@ class ReviewWindow(tk.Toplevel):
         """Back to extending the border colour, which is the default and has no
         swatch to show."""
         self.session.settings = self.session.settings.replace(pad="edge")
+        prefs.save(pad="edge")
         self._sync_pad_swatch()
         self._schedule_redraw()
 
@@ -1022,7 +1059,15 @@ class ReviewWindow(tk.Toplevel):
             self._set_status(self.session.status_text())
             self._update_slider_labels()
         except Exception:
-            self._set_status("preview failed:\n" + traceback.format_exc(limit=2))
+            tb = traceback.format_exc()
+            try:
+                log = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                   "..", "..", "bpc_errors.log")
+                with open(log, "a", encoding="utf-8") as fh:
+                    fh.write(tb + "\n" + "=" * 60 + "\n")
+            except OSError:
+                pass
+            self._set_status("preview failed (full log: bpc_errors.log):\n" + tb)
 
     def _draw_marks(self):
         """Vertical control lines, over the preview.
@@ -1070,6 +1115,29 @@ class ReviewWindow(tk.Toplevel):
     def _set_status_extra(self, text):
         self.status.insert("end", "\n" + text)
 
+    def _status_key(self, event):
+        """Keep the status box read-only without killing copy.
+
+        A blanket ``<Key>`` -> ``"break"`` swallows every keypress, Ctrl+C
+        included, so an error message could be selected but never copied.  Let
+        Ctrl+C fall through (returning ``None`` hands the event to the next
+        bindtag, where the Text class binding runs ``tk::TextCopy``) and swallow
+        only actual typing.
+        """
+        if event.state & 0x4 and event.keysym.lower() == "c":   # 0x4 = Control
+            return None
+        return "break"
+
+    def _copy_status(self):
+        """Copy the status box to the clipboard -- the selection if there is
+        one, otherwise the whole thing."""
+        try:
+            text = self.status.get("sel.first", "sel.last")
+        except tk.TclError:
+            text = self.status.get("1.0", "end-1c")
+        self.clipboard_clear()
+        self.clipboard_append(text)
+
     # -- output ----------------------------------------------------------
     def _save(self):
         dst = self._target_path()
@@ -1091,7 +1159,6 @@ class ReviewWindow(tk.Toplevel):
         if self.on_saved:
             self.on_saved(self.session.path, dst)
         self._fire_closed()
-        self.destroy()
 
     def _keep(self):
         try:
@@ -1103,18 +1170,23 @@ class ReviewWindow(tk.Toplevel):
             messagebox.showerror("Save", str(exc), parent=self)
             return
         self._fire_closed()
-        self.destroy()
 
 
 # ==========================================================================
 # batch window
 # ==========================================================================
 class App(_ROOT_CLASS):
-    def __init__(self, initial=None):
+    def __init__(self, initial=None, start_maximized=True):
         super().__init__()
         self.title("Batch Perspective Correction")
-        self.geometry("1120x760")
-        self.minsize(880, 560)
+        # Standard desktop is 1920x1080 -- the most common resolution in the
+        # world (Statista 2025: 1080p first, 1536x864 and 1366x768 behind it).
+        # Clamp to smaller screens so a 1366x768 laptop still gets a window,
+        # then open maximized so larger monitors get the whole frame. F11
+        # toggles borderless fullscreen for the review work.
+        sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
+        self.geometry(f"{min(1920, sw)}x{min(1080, sh)}")
+        self.minsize(960, 640)
         apply_theme(self)
         self._icon = _set_window_icon(self)
         self.queue = queue.Queue()
@@ -1132,12 +1204,33 @@ class App(_ROOT_CLASS):
         # a remembered path is offered, never forced: the selector still says off
         if initial:
             self._add(list(initial))
+        self._fullscreen = False
+        self.bind("<F11>", lambda _e: self._toggle_fullscreen())
         self.after(120, self._pump)
+        if start_maximized:
+            self.after(50, self._maximize)
+
+    def _maximize(self):
+        try:
+            self.state("zoomed")
+        except tk.TclError:          # platforms without a zoomed state
+            pass
+
+    def _toggle_fullscreen(self):
+        """F11: borderless fullscreen and back.  Maximized keeps the title bar
+        and menu; this drops both, which is what a long review session wants."""
+        self._fullscreen = not self._fullscreen
+        try:
+            self.attributes("-fullscreen", self._fullscreen)
+        except tk.TclError:
+            pass
+        if hasattr(self, "v_fullscreen"):
+            self.v_fullscreen.set(self._fullscreen)
 
     def _build(self):
-        pad = dict(padx=6, pady=4)
+        pad = dict(padx=6, pady=2)
         _brand_header(self)
-        top = ttk.Frame(self, padding=8)
+        top = ttk.Frame(self, padding=6)
         top.pack(fill="x")
 
         self.v_output = tk.StringVar()
@@ -1146,7 +1239,7 @@ class App(_ROOT_CLASS):
         hint = ("Drop photographs or a folder"
                 if HAVE_DND else
                 "Click to add photographs or a folder")
-        self.drop = tk.Label(top, text=hint, borderwidth=0, height=4,
+        self.drop = tk.Label(top, text=hint, borderwidth=0, height=2,
                              background=INK["field"], foreground=INK["dim"],
                              cursor="hand2")
         self.drop.grid(row=0, column=0, columnspan=3, sticky="ew", **pad)
@@ -1166,7 +1259,7 @@ class App(_ROOT_CLASS):
         ttk.Button(row, text="Clear", command=self._clear).pack(side="left", padx=6)
         self.lbl_items = ttk.Label(row, text="nothing yet", style="Dim.TLabel")
         self.lbl_items.pack(side="left", padx=14)
-        ttk.Label(row, text="double-click a row to open it",
+        ttk.Label(row, text="click a row to preview its analysis; double-click opens the review",
                   style="Dim.TLabel").pack(side="right")
 
         # A visible, selectable list.  Without it "review one image" had to guess
@@ -1175,7 +1268,7 @@ class App(_ROOT_CLASS):
         listrow = ttk.Frame(top)
         listrow.grid(row=2, column=0, columnspan=3, sticky="ew", **pad)
         self._w_listrow = listrow
-        self.lst = tk.Listbox(listrow, height=4, activestyle="none",
+        self.lst = tk.Listbox(listrow, height=3, activestyle="none",
                               exportselection=False, borderwidth=0,
                               highlightthickness=0, background=INK["field"],
                               foreground=INK["text"],
@@ -1186,6 +1279,7 @@ class App(_ROOT_CLASS):
         sb.pack(side="right", fill="y")
         self.lst.configure(yscrollcommand=sb.set)
         self.lst.bind("<Double-1>", lambda e: self._review_single())
+        self.lst.bind("<<ListboxSelect>>", self._on_list_select)
 
         self._w_out = [
             ttk.Label(top, text="Output", style="Head.TLabel"),
@@ -1195,6 +1289,17 @@ class App(_ROOT_CLASS):
         self._w_out[1].grid(row=3, column=1, sticky="ew", **pad)
         self._w_out[2].grid(row=3, column=2, **pad)
         top.columnconfigure(1, weight=1)
+
+        # The review lives here, not in a second window: the photograph under
+        # the cursor is the one being reviewed, in the frame you are looking
+        # at.  A hint until the first double-click.  Review and results share
+        # the remaining height in a draggable split -- the review is where the
+        # eye is, so it starts with the larger share, and the sash means nobody
+        # is stuck with whatever ratio the code picked.
+        self._paned = ttk.PanedWindow(self, orient="vertical")
+        self._paned.pack(fill="both", expand=True, padx=8, pady=(0, 4))
+        self.review = ReviewPanel(self)
+        self._paned.add(self.review, weight=3)
 
         opt = ttk.Frame(self, padding=(14, 4, 14, 8))
         opt.pack(fill="x")
@@ -1293,19 +1398,22 @@ class App(_ROOT_CLASS):
         self.lbl_count = ttk.Label(bar, text="", style="Value.TLabel")
         self.lbl_count.pack(side="right")
 
+        self._w_tree = ttk.Frame(self)
         cols = ("status", "file", "roll", "pitch", "conf", "note")
-        self.tree = ttk.Treeview(self, columns=cols, show="headings", selectmode="browse")
+        self.tree = ttk.Treeview(self._w_tree, columns=cols, show="headings", selectmode="browse")
         for c, w in zip(cols, (80, 320, 70, 70, 60, 380)):
             self.tree.heading(c, text=c)
             self.tree.column(c, width=w, anchor="w")
-        self.tree.pack(fill="both", expand=True, padx=8, pady=(0, 8))
+        self.tree.pack(fill="both", expand=True)
+        self._paned.add(self._w_tree, weight=2)
         self.tree.bind("<Double-1>", lambda e: self._review_selected())
         for status, colour in STATUS_COLOUR.items():
             self.tree.tag_configure(status, foreground=colour)
 
-        # Last, and along the bottom: outside everything `_set_stage` hides, so
-        # the server can be configured before there is any work to do.
-        self._build_comfy_dock()
+        # Built once and kept withdrawn: the popup costs nothing on screen
+        # until it is opened, and the server can be configured before there
+        # is any work to do.
+        self._build_comfy_popup()
 
     def _spin(self, parent, r, c, label, var, lo, hi, step):
         ttk.Label(parent, text=label).grid(row=r, column=c, sticky="e", padx=4)
@@ -1315,6 +1423,10 @@ class App(_ROOT_CLASS):
     # -- settings --------------------------------------------------------
     def _settings(self):
         s = Settings()
+        # The pad colour is an output preference the review window remembers:
+        # picked once, it applies to every later photograph and batch.
+        if self._remembered.get("pad"):
+            s.pad = self._remembered["pad"]
         s.pitch_strength = s.roll_strength = float(self.v_strength.get())
         s.min_confidence = float(self.v_conf.get())
         s.max_pitch_deg = float(self.v_maxpitch.get())
@@ -1374,104 +1486,147 @@ class App(_ROOT_CLASS):
         bar = tk.Menu(self)
         setup = tk.Menu(bar, tearoff=0)
         setup.add_command(label="ComfyUI server...", command=self._open_comfy)
+        self._menu_dl = setup.add_command(
+            label="Download model files...", command=self._download_models)
         setup.add_separator()
         setup.add_command(label="Add images...", command=self._add_files)
         setup.add_command(label="Add folder...", command=self._add_folder)
         bar.add_cascade(label="Setup", menu=setup)
+        view = tk.Menu(bar, tearoff=0)
+        self.v_fullscreen = tk.BooleanVar(value=False)
+        view.add_checkbutton(label="Fullscreen (F11)", variable=self.v_fullscreen,
+                             command=self._toggle_fullscreen)
+        bar.add_cascade(label="View", menu=view)
         try:
             self.configure(menu=bar)
         except Exception:                     # a platform without menu bars
             pass
         self._menu = bar
 
-    # -- the ComfyUI dock ------------------------------------------------
-    def _build_comfy_dock(self):
-        """The ComfyUI controls, docked along the bottom of this window.
+    def _download_models(self):
+        """Fetch the DeepLSD weights (98 MB) into models/.
 
-        They were a Toplevel, and before that a row inside the options panel.
-        The panel is hidden until a folder is loaded, so the server could not be
-        configured *before* the work -- which is the only time anyone wants to.
-        A separate window fixed that and cost a second window.
-
-        Docking with ``side="bottom"`` gets both: it claims the bottom strip
-        once, outside everything `_set_stage` hides and re-packs, so it is there
-        on the empty window and stays put when the list fills. One window, and
-        the controls are always reachable.
+        The menu label is the progress bar: a download is the one thing a user
+        will not start twice, so the second click is refused and the label
+        carries the megabytes instead of a second widget.
         """
-        dock = ttk.Frame(self, padding=(8, 6))
-        dock.pack(side="bottom", fill="x")
-        self._w_comfy = dock
-        ttk.Separator(dock, orient="horizontal").pack(fill="x", pady=(0, 6))
+        if getattr(self, "_dl_busy", False):
+            return
+        from . import deeplsd as DL
+        self._dl_busy = True
+        item = self._menu_dl
 
-        addr = ttk.Frame(dock)
+        def finish(text, is_error):
+            item.configure(text="Download model files...")
+            self._dl_busy = False
+            (messagebox.showerror if is_error else messagebox.showinfo)(
+                "Download", text)
+
+        def work():
+            try:
+                DL.download_weights(
+                    lambda d, t: self.after(0, lambda d=d, t=t: item.configure(
+                        text=f"downloading… {d >> 20} MB"
+                             + (f" / {t >> 20} MB" if t else ""))))
+                self.after(0, lambda: finish("DeepLSD weights ready in models/", False))
+            except Exception as exc:
+                self.after(0, lambda: finish(str(exc), True))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    # -- the ComfyUI dock ------------------------------------------------
+    def _build_comfy_popup(self):
+        """The ComfyUI controls, in a small window that stays out of the way.
+
+        They were docked along the bottom of this window, which cost four
+        permanent rows for one of four fill modes -- visible to everyone who
+        never fills a band, and gone from no one.  Before that they were a
+        Toplevel, and before that a row inside the options panel; the panel is
+        hidden until a folder is loaded, so the server could not be configured
+        *before* the work -- which is the only time anyone wants to.
+
+        The answer is a Toplevel built once at startup and kept withdrawn: it
+        costs nothing on screen until opened, and closing hides rather than
+        destroys, so the verdict and the model lists survive a round trip.
+        The StringVars stay on the App, so `_comfy_open`, `_show_comfy_state`,
+        `_fill_model_lists` and the queue path are untouched.
+        """
+        win = tk.Toplevel(self)
+        win.title("ComfyUI settings")
+        win.transient(self)
+        win.protocol("WM_DELETE_WINDOW", win.withdraw)
+        self._w_comfy = win
+        body = ttk.Frame(win, padding=(10, 8))
+        body.pack(fill="both", expand=True)
+
+        addr = ttk.Frame(body)
         addr.pack(fill="x")
-        ttk.Label(addr, text="ComfyUI", width=9).pack(side="left")
-        self.ent_comfy_host = ttk.Entry(addr, textvariable=self.v_comfy_host, width=22)
-        self.ent_comfy_host.pack(side="left")
-        ttk.Label(addr, text=":").pack(side="left", padx=2)
+        ttk.Label(addr, text="server").pack(side="left")
+        self.ent_comfy_host = ttk.Entry(addr, textvariable=self.v_comfy_host, width=20)
+        self.ent_comfy_host.pack(side="left", padx=(6, 2))
         ttk.Entry(addr, textvariable=self.v_comfy_port, width=6).pack(side="left")
         self.btn_comfy_test = ttk.Button(addr, text="Test connection",
                                          command=self._test_comfy)
         self.btn_comfy_test.pack(side="left", padx=8)
-        self.lbl_comfy_state = tk.Label(addr, text="not checked", width=16,
+        self.lbl_comfy_state = tk.Label(body, text="not checked",
                                         background=INK["bg"], foreground=INK["dim"])
-        self.lbl_comfy_state.pack(side="left")
+        self.lbl_comfy_state.pack(anchor="w")
 
         # A list, not a browse button.  The graph decides what the fill *is*,
         # and the unset case silently took the inpainting one and ran an edit
         # model through it, at a green light, because every checkpoint it named
         # was installed.  Naming the choice is the fix; see `inpaint.SHIPPED`.
-        wfr = ttk.Frame(dock)
-        wfr.pack(fill="x", pady=(6, 0))
-        ttk.Label(wfr, text="workflow", width=9).pack(side="left")
+        wfr = ttk.Frame(body)
+        wfr.pack(fill="x", pady=(8, 0))
+        ttk.Label(wfr, text="workflow").pack(anchor="w")
         self.cb_comfy_wf = ttk.Combobox(wfr, textvariable=self.v_comfy_wf_pick,
-                                        width=44, state="readonly")
-        self.cb_comfy_wf.pack(side="left")
+                                        width=46, state="readonly")
+        self.cb_comfy_wf.pack(fill="x", pady=(2, 0))
         self.cb_comfy_wf.bind("<<ComboboxSelected>>",
                               lambda e: self._on_comfy_workflow_pick())
         self.lbl_comfy_wf = ttk.Label(wfr, text="", style="Dim.TLabel")
-        self.lbl_comfy_wf.pack(side="left", padx=8)
+        self.lbl_comfy_wf.pack(anchor="w")
 
         # The three files a workflow names, chosen from what the server has.
         # `resolve_models` guesses well enough when one candidate is obviously
         # the same file under another name, and not at all when a machine has
         # forty-six text encoders installed -- which is the normal case, and the
-        # reason these are a selector rather than a message.  On one row, since
-        # this is a strip along a window rather than a page of its own.
-        mrow = ttk.Frame(dock)
-        mrow.pack(fill="x", pady=(6, 0))
-        ttk.Label(mrow, text="models", width=9).pack(side="left")
+        # reason these are a selector rather than a message.  Stacked, because
+        # the popup is narrow where the dock was wide.
+        mrow = ttk.Frame(body)
+        mrow.pack(fill="x", pady=(8, 0))
         self.cb_comfy_models = {}
         for label, key in (("model", "comfy_unet"), ("clip", "comfy_clip"),
                            ("vae", "comfy_vae")):
-            ttk.Label(mrow, text=label, style="Dim.TLabel").pack(side="left",
-                                                                 padx=(0, 3))
-            box = ttk.Combobox(mrow, textvariable=self.v_comfy_models[key],
-                               width=24, state="readonly",
+            row = ttk.Frame(mrow)
+            row.pack(fill="x")
+            ttk.Label(row, text=label, width=6).pack(side="left")
+            box = ttk.Combobox(row, textvariable=self.v_comfy_models[key],
+                               width=40, state="readonly",
                                values=["(from the workflow)"])
-            box.pack(side="left", padx=(0, 10))
+            box.pack(side="left", fill="x", expand=True)
             self.cb_comfy_models[key] = box
 
-        self.lbl_comfy_detail = ttk.Label(dock, text="", style="Dim.TLabel",
-                                          wraplength=1180, justify="left")
-        self.lbl_comfy_detail.pack(fill="x", pady=(6, 0))
+        self.lbl_comfy_detail = ttk.Label(body, text="", style="Dim.TLabel",
+                                          wraplength=440, justify="left")
+        self.lbl_comfy_detail.pack(fill="x", pady=(8, 0))
 
         self._sync_comfy_workflow_label()
         self._fill_model_lists(self._comfy_models_cache)
         self._show_comfy_state(*self._comfy_state)
+        win.withdraw()
 
     def _open_comfy(self):
-        """Bring attention to the dock rather than opening anything.
+        """Open the ComfyUI settings window.
 
         Kept as a name because three callers mean "let them at the ComfyUI
         settings": the menu, the fill selector, and a review window's button.
-        Nothing to open now -- the controls are already on screen -- so this
-        raises the window and puts the cursor in the address, which is the field
-        anybody arriving here is most likely to change.
+        The window is built once and kept withdrawn, so this only shows it --
+        the verdict and model lists from the last test are still there.
         """
         try:
-            self.deiconify()
-            self.lift()
+            self._w_comfy.deiconify()
+            self._w_comfy.lift()
             self.ent_comfy_host.focus_set()
         except Exception:                     # a torn-down or headless window
             pass
@@ -1694,7 +1849,6 @@ class App(_ROOT_CLASS):
     def _add(self, paths):
         added = 0
         first_new = len(self.items)
-        was_empty = not self.items
         for p in paths:
             p = os.path.abspath(p)
             if not os.path.exists(p) or p in self.items:
@@ -1709,12 +1863,16 @@ class App(_ROOT_CLASS):
             self.lst.selection_clear(0, "end")
             self.lst.selection_set(first_new)
             self.lst.see(first_new)
-        # One photograph dropped on an empty window means "work on this one".
-        # Making that cost a second click, on a list of one, was the window
-        # asking a question it already had the answer to.  A folder, or several
-        # files, still lands in the list: there the question is real.
-        if was_empty and added == 1 and os.path.isfile(self.items[0]):
-            self.after(60, self._review_single)
+            # _refresh_items already previewed the last new row; this points
+            # the panel at the first one when several arrived at once.  Tk does
+            # not fire <<ListboxSelect>> for a programmatic selection (measured
+            # on Tk 8.6: only user clicks do), so the handler is called by hand;
+            # its guard keeps a repeat from re-detecting.
+            self._on_list_select()
+        # One photograph dropped on an empty window means "work on this one":
+        # the selection it just got loads its analysis into the review panel,
+        # so no second click is needed.  A folder, or several files, still
+        # lands in the list: there the question is real.
         return added
 
     def _add_files(self):
@@ -1769,14 +1927,19 @@ class App(_ROOT_CLASS):
         self.drop.configure(height=14 if not loaded else 3)
         for w in (self._w_listrow, *self._w_out):
             (w.grid() if loaded else w.grid_remove())
-        # Re-packed in order, because `pack` appends and the three of them must
-        # not end up above the frame they belong under.
-        for w in (self._w_opt, self._w_bar, self.tree):
+        # Re-packed in order, because `pack` appends and the two of them must
+        # not end up above the frame they belong under.  The tree lives in the
+        # paned split, so it is re-added there rather than re-packed.
+        for w in (self._w_opt, self._w_bar):
             w.pack_forget()
+        try:
+            self._paned.forget(self._w_tree)
+        except tk.TclError:
+            pass
         if loaded:
             self._w_opt.pack(fill="x")
             self._w_bar.pack(fill="x")
-            self.tree.pack(fill="both", expand=True, padx=8, pady=(0, 8))
+            self._paned.add(self._w_tree)
 
     def _refresh_items(self):
         keep = list(self.lst.curselection()) if hasattr(self, "lst") else []
@@ -1791,6 +1954,12 @@ class App(_ROOT_CLASS):
                 self.lst.selection_clear(0, "end")
                 self.lst.selection_set(idx)
                 self.lst.see(idx)
+                # Tk does not fire <<ListboxSelect>> for a programmatic
+                # selection (measured on Tk 8.6: only user clicks do), so the
+                # preview the binding promises has to be asked for by hand.
+                # The guard in _on_list_select makes a repeat a no-op, and this
+                # is what advances the panel to the next photograph after a save.
+                self._on_list_select()
         n_files = sum(1 for p in self.items if os.path.isfile(p))
         n_dirs = sum(1 for p in self.items if os.path.isdir(p))
         if not self.items:
@@ -1811,6 +1980,29 @@ class App(_ROOT_CLASS):
                     (f"  (+{len(self.items) - 1} more)" if len(self.items) > 1 else "")
         self.drop.configure(text=hint)
 
+    def _on_list_select(self, _e=None):
+        """One click previews. The list used to answer only to double-clicks,
+        so a photograph had to be clicked twice before anything about it was
+        visible -- and on a list of one the second click was the one nobody
+        made.  Selection now loads the analysis into the review panel; the
+        guard keeps a refresh that re-selects the same row from re-detecting."""
+        if not self.items:
+            return
+        sel = self.lst.curselection()
+        if not sel:
+            return
+        item = self.items[sel[0]]
+        if os.path.isdir(item):
+            inside = [f for f in self._expand(item) if os.path.isfile(f)]
+            if not inside:
+                return
+            item = inside[0]
+        if self.review.session is not None and self.review.session.path == item:
+            return
+        self.review.load(item, self._settings(), self._dest_corr(item),
+                         overwrite=self.v_overwrite.get(),
+                         on_saved=self._forget_saved)
+
     def _review_single(self):
         """Open the *selected* image in the review window.
 
@@ -1829,9 +2021,9 @@ class App(_ROOT_CLASS):
                 messagebox.showinfo("Review", "that folder has no readable images")
                 return
             item = inside[0]
-        ReviewWindow(self, item, self._settings(), self._dest_corr(item),
-                     overwrite=self.v_overwrite.get(),
-                     on_saved=self._forget_saved)
+        self.review.load(item, self._settings(), self._dest_corr(item),
+                         overwrite=self.v_overwrite.get(),
+                         on_saved=self._forget_saved)
 
     # -- one at a time ---------------------------------------------------
     def _dest_corr(self, src):
@@ -1887,14 +2079,14 @@ class App(_ROOT_CLASS):
             return
         src = queue_left.pop(0)
         done = self._review_total - len(queue_left)
-        ReviewWindow(self, src, self._settings(), self._dest_corr(src),
-                     overwrite=self.v_overwrite.get(),
-                     on_saved=self._forget_saved,
-                     # Deferred: `on_closed` fires while the old window is being
-                     # destroyed, and building a Toplevel inside that teardown is
-                     # asking for a half-dead parent.
-                     on_closed=lambda: self.after(50, self._open_next_review),
-                     position=f"[{done}/{self._review_total}]")
+        self.review.load(src, self._settings(), self._dest_corr(src),
+                         overwrite=self.v_overwrite.get(),
+                         on_saved=self._forget_saved,
+                         # Deferred: `on_closed` fires while the panel is being
+                         # rebuilt, and loading inside that rebuild is asking for
+                         # a half-dead parent.
+                         on_closed=lambda: self.after(50, self._open_next_review),
+                         position=f"[{done}/{self._review_total}]")
 
     def _pick_out(self):
         d = filedialog.askdirectory(title="output folder")
@@ -1935,10 +2127,91 @@ class App(_ROOT_CLASS):
         out_dir = self.v_output.get() or os.path.dirname(src)
         return os.path.join(out_dir, f"{stem}_corr{ext}")
 
+    def _ensure_birefnet_model(self):
+        """A batch with BiRefNet masking but no saved model would fail on every
+        photo with the same message; ask at the door instead.  The two answers
+        are the only two: point at a file, or fetch one into models/BiRefNet/."""
+        if self.v_mask.get() != "birefnet":
+            return True
+        path = self.v_maskpath.get() or self._remembered.get("birefnet_model", "")
+        if path and os.path.isfile(path):
+            return True
+        from . import birefnet as BN
+        ans = messagebox.askyesnocancel(
+            "Kein BiRefNet-Modell",
+            "Masking is set to BiRefNet, but no model file is saved.\n\n"
+            "Yes     download BiRefNet-HR into models/BiRefNet/ (~444 MB)\n"
+            "No      choose an existing .safetensors file\n"
+            "Cancel  stop")
+        if ans is None:
+            return False
+        if ans:
+            return self._download_birefnet()
+        p = filedialog.askopenfilename(
+            title="BiRefNet weights",
+            filetypes=[("BiRefNet weights", "*.safetensors *.pth *.pt"),
+                       ("all files", "*.*")])
+        if not p:
+            return False
+        self.v_maskpath.set(p)
+        prefs.save(birefnet_model=p)
+        self._remembered["birefnet_model"] = p
+        messagebox.showinfo("BiRefNet model", BN.describe(p))
+        return True
+
+    def _download_birefnet(self):
+        """Fetch the weights and architecture into models/BiRefNet/ and save
+        the path, so the next run starts with a working model.  Runs on the
+        main thread on purpose: the progress window is only alive while the
+        event loop turns, and `update()` inside the callback is what turns it."""
+        from . import birefnet as BN
+        if not BN.transformers_available():
+            ok = messagebox.askyesno(
+                "BiRefNet",
+                "This interpreter has no 'transformers' package, which the\n"
+                "BiRefNet architecture imports. A downloaded model would still\n"
+                "fail to load here.\n\n"
+                "Yes: download anyway (for another python, e.g. ComfyUI's\n"
+                "python_embeded)    No: cancel")
+            if not ok:
+                return False
+        win = tk.Toplevel(self)
+        win.title("Downloading BiRefNet-HR")
+        win.resizable(False, False)
+        win.transient(self)
+        lbl = tk.Label(win, text="starting...", justify="left", padx=12, pady=8)
+        lbl.pack()
+        bar = ttk.Progressbar(win, length=360, mode="determinate")
+        bar.pack(padx=12, pady=(0, 10))
+
+        def progress(name, done, total):
+            if total:
+                bar.configure(maximum=total, value=done)
+                lbl.configure(text=f"{name}: {done / 1e6:.0f} / {total / 1e6:.0f} MB")
+            else:
+                lbl.configure(text=name + " ...")
+            self.update()
+
+        try:
+            res = BN.download_weights(progress=progress)
+        except Exception as exc:
+            win.destroy()
+            messagebox.showerror("BiRefNet download", str(exc))
+            return False
+        win.destroy()
+        path = res["weights"]
+        self.v_maskpath.set(path)
+        prefs.save(birefnet_model=path)
+        self._remembered["birefnet_model"] = path
+        messagebox.showinfo("BiRefNet", BN.describe(path) + "\n\nSaved as the model path.")
+        return True
+
     def _start(self):
         files = self._files()
         if not files:
             messagebox.showinfo("Batch", "add some images or a folder first")
+            return
+        if not self._ensure_birefnet_model():
             return
         if self.v_overwrite.get() and not messagebox.askyesno(
                 "Overwrite", f"Replace {len(files)} original file(s)?"):
@@ -2017,10 +2290,10 @@ class App(_ROOT_CLASS):
         r = self.results.get(sel[0])
         if r is None:
             return
-        ReviewWindow(self, r.src, self._settings(), self._dest_corr(r.src),
-                     overwrite=self.v_overwrite.get(),
-                     on_saved=lambda s, d: (self._mark_manual(sel[0]),
-                                            self._forget_saved(s, d)))
+        self.review.load(r.src, self._settings(), self._dest_corr(r.src),
+                         overwrite=self.v_overwrite.get(),
+                         on_saved=lambda s, d: (self._mark_manual(sel[0]),
+                                                self._forget_saved(s, d)))
 
     def _mark_manual(self, iid):
         vals = list(self.tree.item(iid, "values"))

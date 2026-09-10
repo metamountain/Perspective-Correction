@@ -1,5 +1,21 @@
 # Batch Perspective Correction — working notes
 
+## How this file is maintained (standing rule)
+
+**Update this file after every successfully completed feature or problem fix.**
+Not "when there is time" — the update is part of the work, and a change that
+lands without its note here is not done. The note goes where the subject lives:
+the existing section on that topic, or a new one if there is none.
+
+**Wishes are added directly, the moment they are asked for.** A request —
+feature, fix, idea, complaint — gets an entry in "Feature requests, and where
+each stands" immediately, even while it is still open. The section is the source
+of truth; chat history is not, and a wish that exists only in the conversation
+is a wish that will be lost.
+
+Statuses used there: *done* (with a pointer to the section that records how),
+*half-wired*, *not started*, or a plain description of the current state.
+
 ## What this is actually for
 
 **Straightening converging verticals in architectural photographs, in batch.**
@@ -869,29 +885,29 @@ and its two users cannot drift apart.
 ## Going through a folder by hand, one photograph at a time
 
 `Review each...` is the other way through a selection: no unattended writing at
-all, one window per photograph, each becoming a file only when Save is pressed.
+all, one panel load per photograph, each becoming a file only when Save is pressed.
 A batch run decides; this asks. It cannot produce a single output nobody looked
 at, which makes it the right mode for a folder that matters and the wrong one
 for four hundred holiday snaps.
 
-**Chained, never looped.** Tk has one event loop, so a `for` around a modal
-window either blocks it or opens thirty windows at once. Each window's
-`on_closed` opens the next -- and it fires however the window went away, saved,
-kept, or closed with the X, because a queue that only advances on Save stalls
-forever on the first photograph someone dismisses. The next window is opened
+**Chained, never looped.** Tk has one event loop, so a `for` around a blocking
+load either stalls it or queues thirty photographs at once. Each load's
+`on_closed` opens the next -- and it fires however the review went away, saved,
+kept, or closed with Close, because a queue that only advances on Save stalls
+forever on the first photograph someone dismisses. The next load happens
 through `after(50, ...)` rather than inline, since `on_closed` runs while the
-old window is being torn down.
+panel is still being rebuilt.
 
 **A saved photograph leaves the list.** What is left is then exactly what is
 left to do, which is the only reading of a list that survives being interrupted.
 
 **Overwriting is decided per photograph and confirmed per photograph.** The
-batch checkbox seeds the review window's, but replacing an original is the one
+batch checkbox seeds the panel's, but replacing an original is the one
 action here nothing undoes, and in a queue of thirty the checkbox was ticked
-long before this particular picture came up. So the window asks, every time,
+long before this particular picture came up. So the panel asks, every time,
 naming the file. `_dest_corr` exists because `_dest` folds the overwrite
 decision into the path -- right for an unattended run, wrong where the choice
-is per image and the window needs both candidates.
+is per image and the panel needs both candidates.
 
 ## The window opens on one thing, because there is one thing to do
 
@@ -904,9 +920,19 @@ goes away again on "Clear".
 
 Nothing is destroyed and rebuilt: `_set_stage` only hides. The widgets keep
 their state, so an output folder chosen, a detector picked or a ComfyUI address
-typed survives emptying the list. The three packed sections have to be
-re-packed in order, because `pack` appends and they would otherwise surface
-above the frame they belong under.
+typed survives emptying the list. The two packed sections (options, bar) have
+to be re-packed in order, because `pack` appends and they would otherwise
+surface above the frame they belong under; the results tree is re-added to the
+paned split rather than re-packed.
+
+The review panel sits directly under the compact loader -- the photograph under
+the cursor is reviewed in the frame you are looking at, not in a second window.
+The window opens at 1920x1080, the most common desktop resolution (Statista
+2025), clamped to smaller screens, and maximized so a larger monitor gets the
+whole frame; F11 toggles borderless fullscreen for a long review session.
+Review and results share the remaining height in a draggable `PanedWindow`
+split (review starts with the larger share): the sash means nobody is stuck
+with whatever ratio the code picked.
 
 ## Known weakness, stated plainly
 
@@ -921,10 +947,94 @@ learning dependency. **`--focal-35mm` on a folder shot with one lens is exact
 and costs one flag**, and should be the first thing suggested to a user whose
 results look under-corrected.
 
+## Feature requests, and where each stands
+
+Recorded here because this file is the source of truth; chat history and any
+`debug.md` are not. Nine were asked for, in this order.
+
+**DeepLSD as a second front end -- done.** See "DeepLSD: judgement, not geometry"
+above. It is wired as `--detector deeplsd`, with the `deep-hybrid` / `deep-union`
+pair, a GUI dropdown, and a lazy torch import so the default path never pays for
+it. Nothing left to do.
+
+**Fill the band the rotation opens up -- done.** See "Generating the band the
+rotation opens up" above. The request was "when the corrected frame is bigger
+than the original, fill the empty corners"; the answer is `--fill` with
+`none / telea / lama / comfyui`, default `telea`. LaMa for a band a few percent
+wide, ComfyUI (differential diffusion) when it is wide or wants a plausible sky.
+Nothing left to do.
+
+**A dependency check before the run -- done.** The tool already degraded gracefully and named the missing piece per backend; what was missing was a *gate* that runs before any file is touched. `deps.py` provides it: a core check (numpy, cv2 and Pillow hard; piexif soft, because `imageio.py` already falls back to `default_focal_35mm` without it), a `--doctor` report that reuses each backend's existing `describe()`, and a pre-flight in `main()` that hard-fails only when a backend is *explicitly requested* but absent. Requested-but-missing fails loud before any file is opened; left at the default (`auto` / `none`) it stays graceful, so a batch still runs on a machine where the user never asked for the heavy backends. Six tests in `tests/test_deps.py`; `--doctor` exits 2 only when a required package is missing.
+
+**Frontal / planar correction -- not started.** Correcting converging verticals
+is one thing; a facade shot dead square needs a different answer, because there is
+no convergence to measure and the focal length is under-determined by lines alone
+(see "Known weakness" above). The request is to detect that case and produce a
+planar view. The steer on it: frontal correction should be manual-only -- an
+automatic planar guess on a strongly distorted frame usually makes things worse.
+Not yet scoped: it is greenfield, and it touches the same
+under-determination the learned-focal-prior idea would solve, so the two should be
+designed together rather than twice.
+
+**Horizontal (yaw) de-convergence -- half-wired.** The model estimates yaw from
+a single dominant horizontal vanishing point, gated on support and capped tighter
+than pitch (`correct_horizontal`, off by default; `model.py` and `warp.limit`).
+What is missing: no call site passes the yaw into `W.build`, so enabling the
+setting changes nothing yet, there is no CLI flag, and the review panel has no
+slider for it. The request was a horizontal de-distortion slider that only
+becomes active once horizontal correction is enabled -- build it together with
+the warp wiring, not before.
+
+**One window, not two -- done.** The review used to open as a `Toplevel` per
+photograph; it now lives embedded in the batch window as `ReviewPanel`, under
+the compact loader, and `load()` swaps the photograph into the same widgets.
+The old X button is a Close button; Save/Keep no longer destroy anything. The
+error status shows the full traceback and appends it to `bpc_errors.log` at the
+project root, because a Tk status box is not reliably copyable and a truncated
+traceback hides the frame that actually failed.
+
+**1080p standard, fullscreen, flex -- done.** The window opens at 1920x1080,
+clamped to smaller screens, maximized on start; F11 toggles borderless
+fullscreen (View menu). Review and results share a draggable `PanedWindow`
+split (3/2) instead of a fixed ratio. On a 768-px-tall screen the fixed rows
+(loader + options + bar) leave little for the split, so the review pane can
+squash to a sliver -- fine at 1080p and up, cramped on a small laptop; not yet
+addressed.
+
+**Download assistance -- done.** Setup > "Download model files..." fetches the
+DeepLSD weights (98 MB) into `models/` via `deeplsd.download_weights`; the menu
+label is the progress bar, a second click while busy is refused, and a complete
+file is returned as-is. M-LSD ships in `models/`; BiRefNet weights are chosen by
+hand, so there is nothing else to download.
+
+**UI skills doc -- done.** `skills/ui.md`: the INK palette as the single colour
+source, the one-window structure, review-panel rules, and the off-screen test
+pattern for GUI changes.
+
+**ComfyUI settings in a compact popup -- done.** The ComfyUI controls live in
+a small withdrawn `Toplevel` (`_build_comfy_popup`), built once at startup and
+hidden until opened; close hides rather than destroys, so the verdict and model
+lists survive a round trip. The StringVars stay on the App, so `_comfy_open`,
+`_show_comfy_state`, `_fill_model_lists` and the queue path are untouched.
+This work arrived tangled in a bad merge that left **two `class App`
+definitions** in `gui.py`: the second shadowed the first and called
+`_build_comfy_popup()`, a method only the first had, so the window died at
+startup with an `AttributeError`. The duplicate is gone -- one class, one popup.
+
+**Preview on selection -- done.** `self.lst` binds `<<ListboxSelect>>` to
+`_on_list_select`, which loads the selected photograph into `ReviewPanel`,
+guarded by `session.path` so a re-click never re-runs detection. One catch that
+took a probe to find: **Tk 8.6 does not fire `<<ListboxSelect>>` for a
+programmatic `selection_set`** -- only real user clicks do (verified with a
+minimal repro). So `_add` and `_refresh_items` call `_on_list_select()` by hand
+after their programmatic selections; the guard makes a repeat a no-op. Adding
+files previews the first new one, and saving a photograph advances to the next.
+
 ## Conventions that are correct as written
 
 - **`H = K R K^-1`, always.** A pure camera rotation: three degrees of freedom,
-  all physical, yaw deliberately zero. It *cannot* shear. The reference built a
+  all physical; yaw is estimated and gated but not yet fed into the warp (see the
+wishlist), so today's warps use roll and pitch only. It *cannot* shear. The reference built a
   general projective transform plus an affine fix-up — eight free parameters,
   nothing tying them to anything a camera could do, and a `clip_factor` hack to
   stop the output exploding. Asserted by
@@ -964,9 +1074,14 @@ file cannot become a second, hidden place where behaviour is configured.
 
 ## Testing
 
-`python tests/run_tests.py` -- 158 tests, standalone, no pytest. The modules are
-listed explicitly in `run_tests.py`, so a new test file that is not in `MODULES`
-runs nowhere and is worse than no test at all.
+`python tests/run_tests.py` -- 164 tests, standalone, no pytest (some skip at
+runtime depending on assets and backends). The modules are listed explicitly in
+`run_tests.py`, so a new test file that is not in `MODULES` runs nowhere and is
+worse than no test at all.
+
+Known red: `test_birefnet.test_every_asset_has_a_cached_mask_matched_by_stem` --
+`Aulendorf_Schloss_Fassade.jpg` has no cached mask in `tests/assets/masks/`. The
+fix is a `--mask-export` run (needs BiRefNet weights) or dropping the asset.
 
 Synthetic scenes (`tests/synth.py`) carry an **exactly known camera pose**. The
 high-frequency-mask notes warn that synthetic fixtures misled that project; the
