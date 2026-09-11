@@ -19,8 +19,15 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - name: install
+        # requirements.txt, not a hand-written list: the two drift otherwise,
+        # and the markers there are what pick headless OpenCV off Windows.
         run: |
           python -m pip install --upgrade pip
-          pip install numpy "opencv-python-headless>=4.8" Pillow piexif
+          pip install -r requirements.txt
+      - name: dependency check
+        # the same gate a user gets before any file is touched; exits 2 when a
+        # required package is missing, so a broken install fails here and not
+        # halfway through the suite
+        run: python rectify.py --doctor
       - name: run tests
         run: python tests/run_tests.py -v

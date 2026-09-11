@@ -119,3 +119,40 @@ def test_a_sharper_angular_prior_is_what_helps_on_bracing():
     assert soft[0] == loose[0] == 1.0
     assert np.all(soft[1:] < loose[1:]), "0.35 must down-weight leaning lines harder"
     assert soft[2] < 0.5, "a 20 deg brace must lose at least half its weight"
+
+
+def test_yaw_is_recovered_from_the_dominant_horizontal_vp():
+    """Yaw cannot be read off the vertical vanishing point -- a yaw is a
+    rotation about the world vertical and leaves it fixed -- so it comes from
+    the dominant horizontal one.  On a rendered facade with a known yaw the
+    estimator must recover it to well under the 8 deg cap."""
+    worst = 0.0
+    for f35 in (24, 28, 35):
+        for yaw in (-12, -6, 0, 5, 10):
+            sc = synth.Scene(focal_35mm=f35, pitch_deg=8, roll_deg=2,
+                             yaw_deg=yaw, seed=7)
+            m, _, _, _, _ = analyse(sc.img, Settings().replace(
+                correct_horizontal=True, focal_35mm=f35))
+            worst = max(worst, abs(math.degrees(m.yaw) - yaw))
+    assert worst < 1.0, f"yaw error {worst:.3f} deg"
+
+
+def test_yaw_stays_zero_when_the_feature_is_off():
+    """A run with the feature explicitly off over a scene with strong horizontal
+    evidence must not estimate any yaw at all -- an off feature must leave the
+    output exactly as it was."""
+    sc = synth.Scene(focal_35mm=28, pitch_deg=8, roll_deg=2, yaw_deg=10, seed=7)
+    m, _, _, _, _ = analyse(sc.img, Settings().replace(
+        focal_35mm=28, correct_horizontal=False))
+    assert m.yaw == 0.0
+    assert m.diagnostics.get("yaw_deg", 0.0) == 0.0
+
+
+def test_yaw_is_gated_on_horizontal_support():
+    """A single weak horizontal cluster is evidence about one window row, not
+    about the camera: an impossible support gate must hold the yaw at zero even
+    with the feature switched on."""
+    sc = synth.Scene(focal_35mm=28, pitch_deg=8, roll_deg=2, yaw_deg=10, seed=7)
+    m, _, _, _, _ = analyse(sc.img, Settings().replace(
+        correct_horizontal=True, focal_35mm=28, min_horizontal_support=1.01))
+    assert m.yaw == 0.0

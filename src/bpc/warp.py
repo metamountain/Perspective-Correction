@@ -23,8 +23,10 @@ _INTERP = {"lanczos": cv2.INTER_LANCZOS4, "cubic": cv2.INTER_CUBIC,
            "linear": cv2.INTER_LINEAR, "nearest": cv2.INTER_NEAREST}
 
 
-def limit(roll: float, pitch: float, settings, focal_is_a_guess: bool = False):
-    """Apply strengths, damping and hard caps.  Returns ``(roll, pitch, clamped)``.
+def limit(roll: float, pitch: float, settings, yaw: float = 0.0,
+          focal_is_a_guess: bool = False):
+    """Apply strengths, damping and hard caps.
+    Returns ``(roll, pitch, yaw, clamped)``.
 
     ``focal_is_a_guess`` damps the pitch, and only the pitch.  Pitch scales
     linearly with the assumed focal length while roll does not depend on it at
@@ -34,20 +36,31 @@ def limit(roll: float, pitch: float, settings, focal_is_a_guess: bool = False):
     while verticals splayed outwards at the top read as a mistake.  Measured on
     the 40 scene benchmark, damping by 0.85 cut over-corrections from 15 to 9
     with no loss of mean accuracy (2.23 deg -> 2.14 deg).
+
+    Yaw is gated on ``correct_horizontal`` and capped tighter than pitch: it is
+    estimated from one dominant horizontal vanishing point, so a wrong or weak
+    one shears the frame sideways -- which reads as a mistake faster than an
+    under-corrected vertical does.  A yaw past its cap clamps the whole
+    correction, exactly like roll or pitch, and the existing refuse-beyond-limit
+    path then decides whether that is a refusal.
     """
     r = roll * settings.roll_strength if settings.correct_roll else 0.0
     p = pitch * settings.pitch_strength if settings.correct_pitch else 0.0
+    y = yaw * settings.horizontal_strength if settings.correct_horizontal else 0.0
     if focal_is_a_guess:
         p *= settings.uncertain_pitch_damping
     rmax = math.radians(settings.max_roll_deg)
     pmax = math.radians(settings.max_pitch_deg)
-    clamped = abs(r) > rmax or abs(p) > pmax
-    return float(np.clip(r, -rmax, rmax)), float(np.clip(p, -pmax, pmax)), clamped
+    ymax = math.radians(settings.max_horizontal_deg)
+    clamped = abs(r) > rmax or abs(p) > pmax or abs(y) > ymax
+    return (float(np.clip(r, -rmax, rmax)), float(np.clip(p, -pmax, pmax)),
+            float(np.clip(y, -ymax, ymax)), clamped)
 
 
-def build(w: int, h: int, f: float, roll: float, pitch: float) -> np.ndarray:
+def build(w: int, h: int, f: float, roll: float, pitch: float,
+          yaw: float = 0.0) -> np.ndarray:
     K = G.intrinsics(f, w / 2.0, h / 2.0)
-    return G.homography(K, G.correction_rotation(roll, pitch))
+    return G.homography(K, G.correction_rotation(roll, pitch, yaw))
 
 
 def warped_quad(H: np.ndarray, w: int, h: int) -> np.ndarray:

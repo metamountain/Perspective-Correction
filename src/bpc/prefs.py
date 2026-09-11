@@ -5,7 +5,9 @@ folder, the last output folder. Correction parameters are not remembered,
 because a setting that silently persists between runs is a setting nobody can
 reason about -- the whole project turns on a batch being reproducible from its
 command line. A path is different: it is machine configuration, not a decision
-about the photographs.
+about the photographs. ``pad`` is the one deliberate exception to "paths only":
+it is an output preference the user sets by hand and expects to survive, not a
+per-photograph decision.
 
 Stored as JSON in the platform's usual place, and every failure is non-fatal.
 A tool that cannot start because its preferences file is corrupt would be worse
@@ -17,9 +19,10 @@ import json
 import os
 
 APP = "batch-perspective-correction"
-REMEMBERED = ("birefnet_model", "mask_file", "output", "focal_35mm",
+REMEMBERED = ("birefnet_model", "mask_file", "mask_mode", "output", "focal_35mm",
               "comfy_url", "comfy_workflow",
-              "comfy_unet", "comfy_clip", "comfy_vae")
+              "comfy_unet", "comfy_clip", "comfy_vae",
+              "pad")
 
 
 def path() -> str:

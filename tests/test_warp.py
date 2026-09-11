@@ -22,7 +22,7 @@ def test_plan_of_the_identity_keeps_the_whole_frame():
 
 def test_limits_clamp_and_report():
     s = Settings().replace(max_pitch_deg=10.0, max_roll_deg=5.0)
-    roll, pitch, clamped = W.limit(math.radians(20), math.radians(30), s)
+    roll, pitch, _yaw, clamped = W.limit(math.radians(20), math.radians(30), s)
     assert clamped
     assert abs(math.degrees(roll) - 5.0) < 1e-9
     assert abs(math.degrees(pitch) - 10.0) < 1e-9
@@ -30,14 +30,14 @@ def test_limits_clamp_and_report():
 
 def test_strength_scales_the_correction():
     s = Settings().replace(pitch_strength=0.5, roll_strength=0.25)
-    roll, pitch, _ = W.limit(math.radians(4), math.radians(8), s)
+    roll, pitch, _yaw, _ = W.limit(math.radians(4), math.radians(8), s)
     assert abs(math.degrees(roll) - 1.0) < 1e-9
     assert abs(math.degrees(pitch) - 4.0) < 1e-9
 
 
 def test_disabling_a_axis_zeroes_only_that_axis():
     s = Settings().replace(correct_roll=False)
-    roll, pitch, _ = W.limit(math.radians(4), math.radians(8), s)
+    roll, pitch, _yaw, _ = W.limit(math.radians(4), math.radians(8), s)
     assert roll == 0.0 and abs(math.degrees(pitch) - 8.0) < 1e-9
 
 
@@ -72,3 +72,42 @@ def test_pure_roll_is_a_rotation_of_the_frame():
     a = W.build(1000, 700, 500.0, math.radians(6), 0.0)
     b = W.build(1000, 700, 3000.0, math.radians(6), 0.0)
     assert np.allclose(a, b, atol=1e-9)
+
+
+def test_yaw_is_zero_when_horizontal_correction_is_off():
+    """The default run must be byte-identical to before yaw existed: with the
+    flag off, any requested yaw is forced to zero and nothing clamps."""
+    s = Settings()  # correct_horizontal=False by default
+    roll, pitch, yaw, clamped = W.limit(math.radians(4), math.radians(8), s,
+                                        yaw=math.radians(10))
+    assert yaw == 0.0
+    assert not clamped
+    assert abs(math.degrees(roll) - 4.0) < 1e-9
+    assert abs(math.degrees(pitch) - 8.0) < 1e-9
+
+
+def test_yaw_is_capped_tighter_and_reports_clamped():
+    s = Settings().replace(correct_horizontal=True, max_horizontal_deg=8.0)
+    roll, pitch, yaw, clamped = W.limit(0.0, 0.0, s, yaw=math.radians(15))
+    assert clamped
+    assert abs(math.degrees(yaw) - 8.0) < 1e-9
+
+
+def test_yaw_strength_scales_the_correction():
+    s = Settings().replace(correct_horizontal=True, horizontal_strength=0.5)
+    _, _, yaw, _ = W.limit(0.0, 0.0, s, yaw=math.radians(10))
+    assert abs(math.degrees(yaw) - 5.0) < 1e-9
+
+
+def test_zero_yaw_builds_the_same_homography_as_before():
+    """A zero yaw must reproduce the old two-angle homography exactly, so an
+    off-by-default feature cannot move a single output pixel."""
+    H_old = W.build(900, 600, 800.0, 0.1, 0.2)
+    H_new = W.build(900, 600, 800.0, 0.1, 0.2, 0.0)
+    assert np.allclose(H_old, H_new, atol=1e-12)
+
+
+def test_nonzero_yaw_changes_the_homography():
+    H0 = W.build(900, 600, 800.0, 0.1, 0.2, 0.0)
+    Hy = W.build(900, 600, 800.0, 0.1, 0.2, math.radians(5))
+    assert not np.allclose(H0, Hy)

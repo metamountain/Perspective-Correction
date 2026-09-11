@@ -1,5 +1,64 @@
 # Batch Perspective Correction — working notes
 
+Master / Worker
+
+You are the MASTER. Qwen3.8-27B is the WORKER.
+
+Use Qwen whenever a task can be implemented or investigated locally without requiring architectural decisions.
+
+MASTER responsibilities:
+
+architecture and overall strategy
+task decomposition
+interfaces and dependencies
+system-level debugging
+review and integration
+final validation
+
+WORKER responsibilities:
+
+implement small, clearly defined changes
+modify specific files/functions
+write tests
+fix localized bugs
+perform mechanical refactoring
+investigate specific errors
+
+TOKEN OPTIMIZATION:
+
+Never delegate the whole request.
+Break work into small, independent work packages.
+Give Qwen only the context and files needed for the current task.
+Do not make Qwen rediscover the project architecture.
+Keep worker responses concise.
+Do not delegate architectural decisions or complex cross-module debugging.
+Review each worker result before assigning the next task.
+Avoid overlapping worker tasks.
+
+For every delegation provide:
+
+GOAL – one concrete objective
+SCOPE – exact files/functions
+CONSTRAINTS – relevant restrictions
+VALIDATION – how to verify the result
+
+The MASTER owns the architecture and final result.
+The WORKER executes focused implementation tasks.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 ## How this file is maintained (standing rule)
 
 **Update this file after every successfully completed feature or problem fix.**
@@ -15,6 +74,12 @@ is a wish that will be lost.
 
 Statuses used there: *done* (with a pointer to the section that records how),
 *half-wired*, *not started*, or a plain description of the current state.
+
+**Work runs to completion without check-ins.** When told to go on until the
+project is done, keep implementing -- wiring, flags, UI, tests -- and report
+back only when the full test suite has passed *and* every open item in the
+feature list is either closed or blocked on a decision that only the user can
+make. A half-wired feature is not a reason to stop; it is the next step.
 
 ## What this is actually for
 
@@ -934,6 +999,97 @@ Review and results share the remaining height in a draggable `PanedWindow`
 split (review starts with the larger share): the sash means nobody is stuck
 with whatever ratio the code picked.
 
+## The split is not a ratio, because the two panes want different things
+
+"The layout is not optimized; the GUI should match the screen -- as big as
+useful." Measured on a maximized window at 2560x1440, the complaint was exact:
+
+| | px | share of window |
+|---|---|---|
+| chrome (header, loader, options 128, bar 47) | 424 | 31 % |
+| results tree | 267 | 20 % |
+| review controls (8 rows) | 436 | 32 % |
+| **the image canvas** | **265** | **20 %** |
+
+A fifth of a 1440p screen for the only thing anyone is looking at, and a
+results list showing *one row* given more height than the photograph.
+
+**The cause was a proportional split, and proportions are the wrong instrument
+here.** `weight=3`/`weight=2` divides a paned window by ratio -- so the tree's
+share grows with the monitor. But **a results list's need is absolute and a
+photograph's is not**: six visible rows is six visible rows at any resolution,
+while every pixel given to a picture being judged by eye is another pixel of
+usable detail. Splitting by ratio therefore gets steadily *worse* as the screen
+gets bigger, which is the opposite of "as big as useful".
+
+So `layout.py` gives the tree what its rows ask for -- bounded below at two
+rows and above at six, and never more than 32 % of the pane -- and hands the
+preview everything else. The pane weights say the same thing for resizes
+afterwards: review `weight=1`, tree `weight=0`, so extra height has nowhere to
+go but the picture. Measured, loaded, one file:
+
+| window (simulated, not maximized) | tree | canvas |
+|---|---|---|
+| 1366x768 | 76 px | 228 px |
+| 1920x1080 | 76 px | 265 px |
+| 2560x1440 | **76 px** | **411 px** |
+
+The tree is the *same* height on all three and every pixel the bigger screen
+adds reaches the image.
+
+**Mind which probe produced a number before quoting one against another.** An
+earlier draft of this table read "411 px (was 265)", which compares a window
+*simulated* at a full 2560x1440 against the earlier measurement of a genuinely
+*maximized* window -- 2560x1351, because the taskbar takes 89 px. Same machine,
+two different windows. The like-for-like maximized figures are **265 -> 361 px**
+of canvas (review pane 653 -> 845); the 228/265/411 row set is internally
+consistent but only among itself. It is a small instance of the shape this file
+keeps recording: a measurement that flatters the change is the one to re-check. That is the assertion, not the anecdote:
+`test_a_bigger_screen_goes_to_the_photograph` pins it as arithmetic and
+`test_the_results_list_keeps_its_rows_and_the_preview_takes_the_rest` pins it
+on the real widgets.
+
+**`weight` does not place the initial sash**, which is the part that cost the
+most time. It distributes *surplus* on resize; where the sash first lands comes
+from the panes' requested sizes, and nothing ever called `sashpos`. Setting it
+once from `after_idle` was not enough either -- `_set_stage` packs the options
+row and the bar *after* adding the tree, so the first measurement saw the empty
+stage's taller pane and put the sash past the loaded window's height, which
+collapsed the tree to **one pixel**. It follows `<Configure>` instead, so the
+split is right after the stage settles, after a resize, and after a move to
+another monitor -- and it stops permanently the moment the user drags the sash,
+because a window that keeps re-deciding a split someone just set by hand is
+worse than one that never helped.
+
+**The restore-down size follows the screen too.** It was a hardcoded
+1920x1080 -- too small on a 1440p or 4K monitor, and larger than the display in
+both directions on a 1366x768 laptop. `layout.initial_window` takes a share of
+the real screen and clamps it both ways.
+
+**What is still wrong, and was not touched.** The review panel's eight control
+rows take **436 px -- more than the image gets**, and the canvas is
+*height*-limited while roughly half its width goes unused (a 3:2 photograph in
+a 1263x361 box paints about 540 px wide). Height is the scarce resource in this
+window and the controls are where it is. Fixing that means restructuring the
+review panel, which `skills/ui.md` forbids on purpose ("add, don't
+restructure"), so it is recorded as the next move rather than taken: collapse
+or tab the control rows, or shrink the 84 px status box until something fails.
+
+**`layout.py` has no Tkinter import**, for the same reason `review.py` does
+not: a layout rule that can only be checked by looking at a screen is a layout
+rule nobody checks. Screen size in, pixels out, tested at five resolutions.
+
+**Windows DPI awareness is deliberately not done.** The process is DPI-unaware
+(`GetProcessDpiAwareness` -> 0), so at any display scaling other than 100 %
+Windows bitmap-stretches the whole window. This machine runs at 100 % -- Tk
+reports 2560x1440 at 96 dpi and `GetSystemMetrics` agrees -- so the change
+would be a **no-op here and unverified everywhere else**, which is exactly the
+kind of default-path edit the rest of this file argues against shipping
+unmeasured. It is also all-or-nothing: making the process aware means point
+sizes scale and raw pixels do not, so `rowheight=24` and every pixel pad would
+shrink against the text at 150 %. Half the change is worse than none. Re-open
+it on a machine that actually runs scaled.
+
 ## Known weakness, stated plainly
 
 **A flat-on facade with no EXIF.** One horizontal direction fixes one *point* on
@@ -966,24 +1122,137 @@ Nothing left to do.
 
 **A dependency check before the run -- done.** The tool already degraded gracefully and named the missing piece per backend; what was missing was a *gate* that runs before any file is touched. `deps.py` provides it: a core check (numpy, cv2 and Pillow hard; piexif soft, because `imageio.py` already falls back to `default_focal_35mm` without it), a `--doctor` report that reuses each backend's existing `describe()`, and a pre-flight in `main()` that hard-fails only when a backend is *explicitly requested* but absent. Requested-but-missing fails loud before any file is opened; left at the default (`auto` / `none`) it stays graceful, so a batch still runs on a machine where the user never asked for the heavy backends. Six tests in `tests/test_deps.py`; `--doctor` exits 2 only when a required package is missing.
 
-**Frontal / planar correction -- not started.** Correcting converging verticals
-is one thing; a facade shot dead square needs a different answer, because there is
-no convergence to measure and the focal length is under-determined by lines alone
-(see "Known weakness" above). The request is to detect that case and produce a
-planar view. The steer on it: frontal correction should be manual-only -- an
-automatic planar guess on a strongly distorted frame usually makes things worse.
-Not yet scoped: it is greenfield, and it touches the same
-under-determination the learned-focal-prior idea would solve, so the two should be
-designed together rather than twice.
+**Frontal / planar correction -- wired end to end, and it had never once
+worked.** This entry was wrong in *both* directions at the same time, and the
+pair is the lesson. It said "core done" while `planar.py` could not complete a
+single call -- `test_planar.py` was missing from `MODULES`, so nothing ever ran
+it, and `cv2.getPerspectiveTransform` rejected every float64 quad it was handed.
+It said "GUI shell not started" while `gui.py` in fact carried the whole shell:
+`v_planar`, `_on_planar_toggle`, `_on_planar_drag`, `_on_planar_release`, and
+`review.py` carried the pure layer beneath it -- `set_planar_point`,
+`pick_planar_corner`, `planar_homography`, `planar_rectified`, `save_planar`.
 
-**Horizontal (yaw) de-convergence -- half-wired.** The model estimates yaw from
-a single dominant horizontal vanishing point, gated on support and capped tighter
-than pitch (`correct_horizontal`, off by default; `model.py` and `warp.limit`).
-What is missing: no call site passes the yaw into `W.build`, so enabling the
-setting changes nothing yet, there is no CLI flag, and the review panel has no
-slider for it. The request was a horizontal de-distortion slider that only
-becomes active once horizontal correction is enabled -- build it together with
-the warp wiring, not before.
+So a user could tick the box, click four corners, and reach
+`planar_homography` -> `transform_for` -> an exception, on every photograph,
+for as long as the feature has existed. **Two stale claims cancelled out into a
+feature nobody noticed was broken**: the half that said "not started" explained
+away the absence of any working behaviour, and the half that said "core done"
+explained away the absence of a test. Neither was checked against the code.
+
+The dtype bug and a wrong assertion are fixed and the seven `test_planar` tests
+now run -- see "Testing". **What is still genuinely missing is coverage of the
+layer in between.** `test_planar.py` exercises `planar.py`'s math only; the
+seven `ReviewSession.planar_*` methods the GUI actually calls have no test at
+all, which is exactly the gap that let this survive. They are pure functions of
+state, like everything else in `review.py`, so they are headlessly testable and
+there is no excuse. That is the next job on this feature, ahead of any polish.
+
+The math
+lives in `planar.py`: a general homography (eight degrees of freedom) from four
+clicked corners -- exact for a planar correspondence, no focal length, no RANSAC,
+no guess. `target_size` follows the document-scanner convention (the longer of
+the top/bottom edges is the width), and `transform_for` raises on a degenerate
+quad rather than returning a homography that would warp the image into a sliver.
+The output canvas is exactly covered by the warped quad, so there is no fill
+band -- what separates planar rectification from the rotation path. Automatic
+routing was considered and dropped on purpose: a shot with strong perspective
+distortion is exactly the case where line geometry cannot decide for you (the
+focal length is under-determined by lines alone), so "this looks like an oblique
+facade" is not a reliable trigger, and guessing wrong warps a good photo into a
+sliver; when in doubt the rotation path stays in charge. There is still no CLI
+flag -- planar is a manual, one-photograph-at-a-time mode by design, so the
+review panel is the right and only home for it. The learned-focal-prior idea
+(see "Known weakness") still stands as the other half of the frontal case;
+planar is the manual answer to it.
+
+**Horizontal (yaw) de-convergence -- estimator done, policy wrong, needs a new
+approach. Off by default and staying off.**
+
+The geometry is right and is wired end to end. Yaw cannot be read off the
+vertical vanishing point -- a yaw is a rotation about the world vertical and
+leaves it fixed -- so it comes from the dominant horizontal one instead: level
+the frame with (roll, pitch), and the angle that remaining horizontal direction
+makes with the image x-axis is the yaw. Gated on `min_horizontal_support` (0.3)
+and folded to [-90, 90], because a line has no direction and the two antipodal
+readings differ by a half-turn. `warp.limit` scales it by `horizontal_strength`
+and caps it tighter than pitch (`max_horizontal_deg`, 8.0); past the cap the
+whole correction clamps into the existing refuse-beyond-limit path. CLI:
+`--horizontal` (off), `--horizontal-strength`, `--max-horizontal`. Review panel:
+a "horizontal (yaw)" checkbox plus a +/-15 deg slider, disabled unless enabled;
+toggling it on in AUTO mode calls `session.refit()`, because the estimator only
+computes a yaw when the flag was already on at estimation time. Recovery is
+under 1 deg worst over -12 to +10 deg synthetic scenes.
+
+**It was briefly switched on by default with the cap widened to 90 deg, and that
+is the mistake this file exists to prevent.** The argument in the config comment
+was that leaving the horizontals converging "reads as not corrected". Measured
+over the seventeen real assets with it on:
+
+| | yaw | conf |
+|---|---|---|
+| burgebrach scheune | **+57.7 deg** | 0.53 |
+| ulica Machcowskiego | **-67.5 deg** | 0.46 |
+| wilsdruff scheunen | **+70.1 deg** | 0.33 |
+| heilsbronn | +44.0 deg | 0.48 |
+| quaker barn | +27.7 deg | **0.75** |
+| camden (genuinely frontal) | -0.05 deg | 0.46 |
+
+Fourteen of seventeen asked for more than 25 deg of yaw, most of them at a
+confidence the 0.40 gate admits. One photograph -- the hospital -- then opened a
+band 43 % of the frame and failed the write outright, which is how it was found.
+
+**Those are not errors the estimator made.** Converging horizontals *are*
+correct perspective on an obliquely photographed facade; the estimator is
+faithfully measuring facade obliquity. Squaring it up is *frontalisation*, not
+levelling, which is precisely what the planar section rejects as an automatic
+route by name -- "guessing wrong warps a good photo into a sliver". So
+confidence cannot catch this and is not built to, exactly as with the Prague
+ceiling: every factor it scores measures how well the lines agree, never whether
+they are the right lines.
+
+**With the cap back at 8 deg, turning the flag on does *less* than leaving it
+off, and that is the first thing the next person will hit.** `warp.limit`
+returns one `clamped` flag for all three axes, and "beyond the limit means
+refuse, not trim" then drops the whole correction. Measured:
+
+```
+        bpc -n burgebrach-...jpg
+OK       roll=-0.08deg pitch=+6.27deg conf=0.53 keep=100%
+        bpc -n --horizontal burgebrach-...jpg
+SKIPPED  correction beyond the limit (roll -0.1, pitch +6.3, yaw +57.4; caps 12/20/8)
+```
+
+The good 6.3 deg of pitch is lost because of a yaw nobody needed. **Whether
+that is right is an open question and part of the redesign**, not something to
+patch: the refuse-beyond-limit rule was written for the Prague ceiling, where a
+huge *pitch* is evidence the estimator locked onto the wrong line bundle, so the
+whole fit is suspect. A huge *yaw* says only that the facade is oblique, which
+is no evidence at all about roll and pitch. So the two plausible answers are
+"refuse, as today" and "drop the yaw, keep the levelling" -- and picking the
+second needs the plane question below answered first, because a yaw that is
+silently dropped is a flag that appears to do nothing.
+
+**The open design problem is which plane, and who chooses it.** A photograph
+routinely shows two facades. Yaw makes *one* of them fronto-parallel and
+necessarily makes the other worse, so there is no answer the geometry can give
+on its own. Candidate routes, none decided:
+
+* pick the dominant horizontal cluster only, and refuse when the second cluster
+  is within some margin of the first -- cheap, and refuses the corner view
+  instead of guessing at it;
+* let the user say which facade, by dragging a band over it. **The seam for this
+  already exists and is half-wired**: `pipeline.analyse(..., roi_x=(x0, x1))`
+  and `review.set_roi_x / clear_roi_x` restrict the *horizontal* evidence to a
+  vertical strip in full-resolution pixels (verticals stay global, and a strip
+  holding no horizontals falls back to the full frame). There is no CLI flag and
+  no GUI drag to drive it -- the config comment claiming `--roi-x` exists was
+  wrong. `Result.roi_x` is carried into the log line;
+* or a mask, the same way `--mask` already names a region.
+
+Until one of those is measured, it stays off. It is a special case, not a
+default, and `test_yaw_is_zero_when_horizontal_correction_is_off` is what pins
+the default itself -- it builds a bare `Settings()`, so it is the test that
+fails if anyone flips it again. It is how this was caught.
 
 **One window, not two -- done.** The review used to open as a `Toplevel` per
 photograph; it now lives embedded in the batch window as `ReviewPanel`, under
@@ -993,13 +1262,10 @@ error status shows the full traceback and appends it to `bpc_errors.log` at the
 project root, because a Tk status box is not reliably copyable and a truncated
 traceback hides the frame that actually failed.
 
-**1080p standard, fullscreen, flex -- done.** The window opens at 1920x1080,
-clamped to smaller screens, maximized on start; F11 toggles borderless
-fullscreen (View menu). Review and results share a draggable `PanedWindow`
-split (3/2) instead of a fixed ratio. On a 768-px-tall screen the fixed rows
-(loader + options + bar) leave little for the split, so the review pane can
-squash to a sliver -- fine at 1080p and up, cramped on a small laptop; not yet
-addressed.
+**1080p standard, fullscreen, flex -- done, and the split is no longer a
+ratio.** The window opens maximized; F11 toggles borderless fullscreen (View
+menu). Review and results share a draggable `PanedWindow`, and what changed is
+how it is divided. See "The split is not a ratio" below.
 
 **Download assistance -- done.** Setup > "Download model files..." fetches the
 DeepLSD weights (98 MB) into `models/` via `deeplsd.download_weights`; the menu
@@ -1030,11 +1296,129 @@ minimal repro). So `_add` and `_refresh_items` call `_on_list_select()` by hand
 after their programmatic selections; the guard makes a repeat a no-op. Adding
 files previews the first new one, and saving a photograph advances to the next.
 
+**Clean up the repository, fix the structure, improve the setup -- done.**
+Recorded here because it was a wish like any other. What it came to:
+
+*Cleanup.* Fourteen scratch files sat in the working tree -- six `_probe_*.py`,
+`_gui_merge_test.py`, `_layout_test.py`, `_smoke_preview.py`, and five captured
+logs including `full_suite.log` and `tools/mask_bench.log`. They are **moved to
+`analysis/scratch/`, not deleted**: they were untracked, so git could not have
+brought them back, and everything they discovered is already written into this
+file (the Tk `<<ListboxSelect>>` finding among it). `.gitignore` now catches the
+shape at the root -- `/_*.py`, `/_*.log`, `/_*.txt`, `*.log` -- so the next
+probe cannot reach a commit.
+
+*`analysis/README.md` is now the one tracked file in that folder.* The rule was
+`analysis/`, and **git does not descend into an excluded directory**, so a
+`!analysis/README.md` negation under it does nothing at all. It takes
+`analysis/*` for the negation to be reachable. A fresh clone otherwise gets no
+explanation of a folder the docs tell people to write into.
+
+*Structure.* The `MODULES` guard above, and the dead `planar.py` it found.
+
+*Setup.* `pyproject.toml` grew `[project.optional-dependencies]` --
+`gui` / `mlsd` / `deeplsd` -- and the platform markers `requirements.txt`
+already carried (headless OpenCV off Windows), which its `dependencies` had
+silently dropped. CI installs `-r requirements.txt` instead of a hand-written
+pip list that could drift from it, and runs `--doctor` as a gate before the
+suite.
+
+**There is deliberately no `lama` extra, and a test enforces it.**
+`simple-lama-inpainting` must go in with `--no-deps`; an extra resolves
+dependencies normally, so `pip install .[lama]` would be a one-command way to
+do exactly the Pillow-9.5/numpy-1.26 damage the manual step exists to avoid --
+a regression that reads as a convenience, which is why it needs a test and not
+a comment. `test_no_extra_can_install_a_backend_that_breaks_the_core` also
+bans `ultralytics`, the other package with a history of moving a required one.
+`test_the_declared_dependencies_are_the_ones_the_core_check_requires` pins
+pyproject against `deps.core_status`, since those are two statements of one
+fact and drift between them is quiet in both directions.
+
+*Left untracked, but not scratch.* `tests/assets/Horizontal/` -- seven
+photographs, 3.6 MB -- **is a deliberate asset folder for testing horizontal
+(yaw) correction**, which is the open feature two entries above. It was
+initially mistaken here for stray files; it is not, and it should not be
+deleted.
+
+It is still **untracked**, for one reason that has nothing to do with its
+purpose: filenames like `017d2b2a-...-2008695636.jpg` and
+`Webseitentitel_1.080x675.png` carry no provenance, every other asset here
+arrived through `tools/fetch_commons_asset.py`, and the licensing section is
+explicit that this repo stays MIT-clean. Committing them is a licensing
+decision for the author to make, not a cleanup one.
+
+**Nothing reads the folder yet either way.** `test_assets` globs `assets/*`
+and filters by extension, so it never descends into a subfolder -- the photos
+sit there inert until the yaw work grows a test that opens them. When it does,
+that test is the natural home for the "which facade" question the
+plane-selection wish has to answer, because these are the photographs it will
+be answered on.
+
+**A transparent grid over the corrected pane -- asked for, not started.** The
+question a reviewer actually has is "is it straight *now*", and the eye is bad
+at judging verticality against nothing. A grid answers it directly, and it is
+the rare request here that **cannot ruin a photograph**: read-only, invents no
+pixel, changes no estimate, and is one toggle away from gone. That makes it the
+right thing to build first among the open wishes.
+
+Three things it has to get right, all of them already settled by existing
+decisions elsewhere in this file:
+
+* **It goes on the *after* pane.** A grid over the original shows only that the
+  original was crooked, which nobody doubted. The corrected pane is where the
+  claim is being made.
+* **It is a canvas overlay, not a composite into the image.** Same reason
+  `_refresh_crop` redraws the overlay only and never calls `_schedule_redraw`:
+  compositing would mean a re-warp and a live `telea` fill of a
+  pixel-identical frame on every toggle, which is its own kind of jump.
+* **It must never reach the saved file.** It is a measuring instrument, not a
+  correction. The crop rectangle already establishes the pattern -- shaded in
+  the preview, applied only in `save()`; the grid is the case that is applied
+  *nowhere*.
+
+Open: spacing (a fixed division of the frame is scale-independent and
+defensible; pixel spacing is not), and whether to offer thirds for composition
+as well as a dense grid for verticality. A centre cross costs nothing and is
+probably the most useful single line.
+
+**Manual selection of the horizontal plane -- asked for, and it settles an open
+design question rather than adding a feature.** The yaw entry above ends by
+naming three candidate routes for "which facade should be made
+fronto-parallel", and says none is decided. This request picks the second:
+**let the user say, by dragging a band over the facade they mean.**
+
+**The seam is already written and is half-wired.** `pipeline.analyse(...,
+roi_x=(x0, x1))` and `review.set_roi_x` / `clear_roi_x` restrict the
+*horizontal* evidence to a vertical strip in full-resolution pixels; verticals
+stay global, and a strip holding no horizontals falls back to the full frame.
+`Result.roi_x` is already carried into the log line. What is missing is a drag
+in the GUI to drive it -- and **a test, because `roi_x` currently has none at
+all**, which is precisely the state `planar.py` was in.
+
+**It cannot be built alone, and the ordering matters.** Turning `--horizontal`
+on today does *less* than leaving it off: `warp.limit` returns one `clamped`
+flag for all three axes, so a yaw past the 8 deg cap drops the whole correction
+through refuse-beyond-limit, losing a good 6.3 deg of pitch over a yaw nobody
+asked for. A band selector feeding a yaw that then gets the photograph refused
+is a control that appears to do nothing -- the exact failure the always-live
+crop section was written about. So the refuse-vs-drop-the-yaw question has to
+be answered first, and this file says picking "drop the yaw, keep the
+levelling" needs the plane question settled. **This wish is what settles it**,
+which is why the two are one job and not two:
+
+1. decide refuse-vs-drop-the-yaw, now that a person rather than the geometry
+   names the plane;
+2. test the `roi_x` seam headlessly;
+3. then the drag, and only then is `--horizontal` worth turning on for anyone.
+
 ## Conventions that are correct as written
 
 - **`H = K R K^-1`, always.** A pure camera rotation: three degrees of freedom,
-  all physical; yaw is estimated and gated but not yet fed into the warp (see the
-wishlist), so today's warps use roll and pitch only. It *cannot* shear. The reference built a
+  all physical. Yaw is now fed into the warp as the third angle
+  (`correction_rotation(roll, pitch, yaw)` = `Ry(-yaw) Rx(pitch) Rz(-roll)`), but
+  it is **off by default**, so an ordinary run is still the two-angle rotation
+  and reproduces the old homography exactly -- pinned by
+  `test_zero_yaw_builds_the_same_homography_as_before`. It *cannot* shear. The reference built a
   general projective transform plus an affine fix-up — eight free parameters,
   nothing tying them to anything a camera could do, and a `clip_factor` hack to
   stop the output exploding. Asserted by
@@ -1074,14 +1458,39 @@ file cannot become a second, hidden place where behaviour is configured.
 
 ## Testing
 
-`python tests/run_tests.py` -- 164 tests, standalone, no pytest (some skip at
-runtime depending on assets and backends). The modules are listed explicitly in
+`python tests/run_tests.py` -- 181 tests, standalone, no pytest (some skip at
+runtime depending on assets and backends), 113 s. The modules are listed explicitly in
 `run_tests.py`, so a new test file that is not in `MODULES` runs nowhere and is
 worse than no test at all.
 
-Known red: `test_birefnet.test_every_asset_has_a_cached_mask_matched_by_stem` --
-`Aulendorf_Schloss_Fassade.jpg` has no cached mask in `tests/assets/masks/`. The
-fix is a `--mask-export` run (needs BiRefNet weights) or dropping the asset.
+**That rule is now enforced rather than written down, and enforcing it found a
+dead module.** `_unlisted()` compares `test_*.py` on disk against `MODULES` and
+fails the run naming anything missing, because the old failure mode was silent
+in the worst way: the file exists, it reads as covered, and it has never once
+executed. `test_planar.py` was in exactly that state -- seven tests, never run,
+and **three of them failed the moment they were wired in**:
+
+* `cv2.getPerspectiveTransform` asserts `CV_32F` on its inputs and
+  `planar.homography_from_quad` passed float64, so *every* call raised. The
+  module was dead on arrival -- and the assertion is long-standing, so it had
+  most likely never worked on any OpenCV this project supports, while this file
+  recorded it as "core done". That is the MODULES lesson at full strength: not
+  a version that got stricter, but code that had never once executed. The shape check still
+  happens in float64 and only the call is narrowed -- the solve is double
+  internally, `H` comes back float64, and a pixel coordinate needs three of
+  float32's seven digits.
+* `test_full_coverage_no_fill_band` asserted the wrong algebra: it pushed the
+  *output* canvas corners through the forward `H` and expected them to land on
+  *source* quad corners, which holds only if `H` is its own inverse. It now
+  sends them through `H^-1`, which is how `warpPerspective` actually resamples.
+
+The lesson is the one this file keeps recording in other forms: a test that
+cannot run is worse than an absent one, because absence is visible.
+
+The former known red is fixed: `Aulendorf_Schloss_Fassade.png` now has a cached
+mask in `tests/assets/masks/`, so the mask-cache test passes. The standing skips
+are the documented ones -- M-LSD without a TFLite runtime, and the two
+`*_upright.*` / `*_skip.*` asset tests while those assets are absent.
 
 Synthetic scenes (`tests/synth.py`) carry an **exactly known camera pose**. The
 high-frequency-mask notes warn that synthetic fixtures misled that project; the
@@ -1104,6 +1513,27 @@ away.** There are twenty-one masks and seventeen photographs: `painted-hall`,
 both skip for want of assets -- including the Prague ceiling, which is the
 photograph the whole "beyond the limit means refuse" section is built on.
 `tools/fetch_commons_asset.py` is how the others arrived.
+
+**The suite was shortened by memoizing, not by deleting.** Two thirds of the
+runtime was the real-asset sweeps, and the largest single item in it was pure
+duplicate work: `test_a_known_rotation_is_recovered_on_real_photographs` and
+`test_every_photograph_it_is_confident_about_is_measured_accurately` both call
+`_round_trip_error(f)` over the same seventeen photographs with the same default
+arguments. `_round_trip_error` and `_load` now cache on their **full** argument
+tuple, and the second sweep went **20.3 s -> 2.8 s** (suite 129 s -> 113 s) with
+every assertion and threshold untouched.
+
+The key has to be the full tuple, and that is the whole trap.
+`test_the_border_guard_is_what_makes_the_measurement_honest` deliberately calls
+the same file twice, guarded and with `inner=0.0`, and asserts the second is
+three times worse. A cache keyed on the path alone would hand it the same number
+twice and the test would pass while measuring nothing -- the border artifact
+story in this file, repeated as a test bug. A cached `None` is also a real
+result, so the hit check is `key in cache`, never a truthiness test.
+
+The remaining big item, `test_every_asset_is_processed_without_error` at 26 s,
+is genuinely end to end (it writes files) and shares nothing with the round-trip
+path. It stays as it is.
 
 Optional backends are tested by *skipping* cleanly -- M-LSD without a TFLite
 runtime, DeepLSD without its checkout or weights, LaMa without its package. A
@@ -1151,9 +1581,15 @@ it is tested, and it prefers what *works* over what is largest.
 ## Environment
 
 Plain CPython, `pip install -r requirements.txt` -- numpy, OpenCV, Pillow,
-piexif, and nothing else. Tkinter is needed only for the GUI and ships with the
+piexif, and nothing else. `pip install -e .` does the same and adds the `bpc`
+command. Tkinter is needed only for the GUI and ships with the
 python.org Windows installer; the CLI runs without it. OpenCV's LSD was dropped
 in 4.1 and restored in 4.8, hence the detector fallback chain in `lines.py`.
+
+Three of the optional backends are also extras -- `pip install -e ".[gui]"`,
+`".[mlsd]"`, `".[deeplsd]"`. The other two are **not**, and must not become
+extras: `--fill lama` needs `--no-deps` (see the feature-list entry on the
+cleanup), and `--fill comfyui` needs no package at all, only a running server.
 
 Everything below is optional, imported lazily, and says what is missing instead
 of failing at import:

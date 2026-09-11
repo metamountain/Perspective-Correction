@@ -53,6 +53,20 @@ import threading
 import cv2
 import numpy as np
 
+# Triton's AMD backend probe runs subprocess.check_output(["rocm-sdk", ...])
+# during the torch import.  On some Windows boxes process creation fails with a
+# bare OSError (WinError 6) instead of FileNotFoundError; the driver only
+# catches (CalledProcessError, FileNotFoundError), so the import dies.  Convert
+# it to FileNotFoundError -- exactly what a healthy NVIDIA box produces anyway.
+import subprocess as _sp
+_sp_co = _sp.check_output
+def _sp_co_shim(*a, **k):
+    try:
+        return _sp_co(*a, **k)
+    except OSError as e:
+        raise FileNotFoundError(str(e)) from e
+_sp.check_output = _sp_co_shim
+
 _LOCK = threading.Lock()
 _CACHE = {}
 
@@ -89,6 +103,7 @@ def resolution_for(weights: str) -> int:
 # missing file looks like from the outside.
 WEIGHTS_FILE = "BiRefNet-HR.safetensors"
 WEIGHTS_REPO = "1038lab/BiRefNet"
+APP_NAME = "batch-perspective-correction"
 ARCH_FILES = ("birefnet.py", "BiRefNet_config.py")
 TARGET_DIR = os.path.join("ComfyUI", "models", "RMBG", "BiRefNet")
 
@@ -514,3 +529,100 @@ def export_masks(images, weights, out_dir, settings, log=print):
     log("# {} written, {} failed".format(written, failed))
     log('# now run anywhere:  --mask file --mask-file "' + out_dir + '"')
     return written, failed
+
+
+def transformers_available() -> bool:
+    """Whether *this* interpreter can load the architecture.
+
+    The weights are not the only half of it: ``birefnet.py`` there imports
+    ``transformers``, and a box can have torch without it -- measured on this
+    one, where the system python fails every BiRefNet pass with
+    ``No module named 'transformers'`` while the ComfyUI python loads it fine.
+    A download that leaves the reader one import short is a broken installer,
+    so the GUI asks before it offers the button.
+    """
+    try:
+        import transformers  # noqa: F401
+        return True
+    except ImportError:
+        return False
+
+
+def default_weights_dir() -> str:
+    """Where a downloaded model lives: ``models/BiRefNet/`` beside the code.
+
+    Next to DeepLSD and M-LSD, which already sit in ``models/``.  Deliberately
+    not inside the user's ComfyUI install -- that folder belongs to ComfyUI,
+    and a machine-independent location is what makes the path savable and the
+    download testable.
+    """
+    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    return os.path.join(root, "models", "BiRefNet")
+
+
+def download_weights(out_dir: str = "", progress=None) -> dict:
+    """Fetch the weights and the architecture into one folder, idempotently.
+
+    ``progress(file, done_bytes, total_bytes_or_None)`` is called as the file
+    arrives; a GUI passes a label updater, a script passes nothing.  Existing
+    files are skipped, so re-running after an interrupted download resumes
+    where it stopped instead of refetching what is already there.
+
+    ``huggingface_hub`` is used when importable because it knows how to talk
+    to the hub; otherwise a plain streaming GET at the resolve URL, which is
+    all these files need.  Either way the result is the same three files.
+    """
+    out_dir = out_dir or default_weights_dir()
+    os.makedirs(out_dir, exist_ok=True)
+    names = (WEIGHTS_FILE,) + ARCH_FILES
+    got, skipped = [], []
+    for name in names:
+        dest = os.path.join(out_dir, name)
+        if os.path.isfile(dest) and os.path.getsize(dest) > 0:
+            skipped.append(name)
+            continue
+        try:
+            _download_one(WEIGHTS_REPO, name, dest, progress)
+            got.append(name)
+        except Exception as exc:          # one file failing must not hide the others
+            raise BiRefNetUnavailable(
+                "could not download " + name + " from " + WEIGHTS_REPO + ": "
+                + str(exc)) from exc
+    return {"dir": out_dir, "weights": os.path.join(out_dir, WEIGHTS_FILE),
+            "downloaded": got, "skipped": skipped}
+
+
+def _download_one(repo: str, name: str, dest: str, progress) -> None:
+    try:
+        from huggingface_hub import hf_hub_download
+        # the hub client handles resume and auth; it has no byte callback,
+        # so progress is reported once, before and after
+        if progress:
+            progress(name, 0, None)
+        path = hf_hub_download(repo, name, local_dir=os.path.dirname(dest))
+        if os.path.abspath(path) != os.path.abspath(dest):
+            tmp = dest + ".part"
+            os.replace(path, tmp)
+            os.replace(tmp, dest)
+        if progress:
+            progress(name, 1, 1)
+        return
+    except ImportError:
+        pass
+    url = "https://huggingface.co/" + repo + "/resolve/main/" + name
+    import urllib.request
+    tmp = dest + ".part"
+    req = urllib.request.Request(url, headers={"User-Agent": APP_NAME})
+    with urllib.request.urlopen(req) as resp, open(tmp, "wb") as fh:
+        total = resp.headers.get("Content-Length")
+        total = int(total) if total else None
+        done = 0
+        while True:
+            chunk = resp.read(1 << 20)
+            if not chunk:
+                break
+            fh.write(chunk)
+            done += len(chunk)
+            if progress:
+                progress(name, done, total)
+    os.replace(tmp, dest)

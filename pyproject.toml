@@ -15,7 +15,40 @@ classifiers = [
   "Programming Language :: Python :: 3",
   "Topic :: Multimedia :: Graphics :: Graphics Conversion",
 ]
-dependencies = ["numpy>=1.24", "opencv-python>=4.8", "Pillow>=10.0", "piexif>=1.1.3"]
+dependencies = [
+  "numpy>=1.24",
+  "opencv-python-headless>=4.8; platform_system != 'Windows'",
+  "opencv-python>=4.8; platform_system == 'Windows'",
+  "Pillow>=10.0",
+  "piexif>=1.1.3",
+]
+
+# Optional backends. Every one of these is imported lazily and reports what is
+# missing rather than failing at import, so none of them is needed to run the
+# tool -- see `--doctor`.
+#
+# There is deliberately no `lama` extra. `simple-lama-inpainting` must be
+# installed with `--no-deps` (its stale pins downgrade Pillow to 9.5 and numpy
+# to 1.26, which breaks OpenCV in the same interpreter), and an extra resolves
+# dependencies normally -- so `pip install .[lama]` would be a one-command way
+# to break the install. It stays a documented manual step:
+#
+#     pip install --no-deps simple-lama-inpainting
+#
+# The same caution applies to anything pulling in `ultralytics`.
+[project.optional-dependencies]
+gui = ["tkinterdnd2>=0.4"]           # drag-and-drop only; Tkinter itself ships with Python
+mlsd = ["ai-edge-litert>=1.0"]       # the M-LSD model is vendored in models/
+deeplsd = [                          # also wants a cvg/DeepLSD checkout in tools/ and
+  "torch>=2.0",                      # models/deeplsd_md.tar (98 MB); pytlsd builds from
+  "omegaconf>=2.3",                  # source, so cmake and a C++ compiler are needed too
+  "scikit-image>=0.21",
+  "pytlsd>=0.0.3",
+]
+
+[project.urls]
+Homepage = "https://github.com/metamountain/Batch-Perspective-Correction"
+Source = "https://github.com/metamountain/Batch-Perspective-Correction"
 
 [project.scripts]
 bpc = "bpc.cli:main"

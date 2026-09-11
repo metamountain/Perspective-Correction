@@ -34,7 +34,7 @@ from .optimize import nelder_mead
 
 
 class Model:
-    __slots__ = ("roll", "pitch", "f", "f_source", "confidence", "vp", "up",
+    __slots__ = ("roll", "pitch", "yaw", "f", "f_source", "confidence", "vp", "up",
                  "vert_inliers", "horiz_vps", "horizon_support", "diagnostics",
                  "detect_info")
 
@@ -49,6 +49,10 @@ class Model:
     @property
     def pitch_deg(self):
         return math.degrees(self.pitch)
+
+    @property
+    def yaw_deg(self):
+        return math.degrees(self.yaw)
 
 
 # --------------------------------------------------------------------------
@@ -304,7 +308,8 @@ def estimate(vert, horiz, w: int, h: int, settings, exif_focal_px=None) -> Model
 
     if len(vert) < settings.min_vertical_lines:
         return Model(roll=0.0, pitch=0.0, f=None, f_source="none", confidence=0.0,
-                     vp=None, up=G.UP.copy(), vert_inliers=np.zeros(len(vert), bool),
+                     yaw=0.0, vp=None, up=G.UP.copy(),
+                     vert_inliers=np.zeros(len(vert), bool),
                      horiz_vps=[], horizon_support=0.0,
                      diagnostics=dict(diag, reason="too few vertical lines"))
 
@@ -314,7 +319,8 @@ def estimate(vert, horiz, w: int, h: int, settings, exif_focal_px=None) -> Model
         hyps.append(par)
     if not hyps:
         return Model(roll=0.0, pitch=0.0, f=None, f_source="none", confidence=0.0,
-                     vp=None, up=G.UP.copy(), vert_inliers=np.zeros(len(vert), bool),
+                     yaw=0.0, vp=None, up=G.UP.copy(),
+                     vert_inliers=np.zeros(len(vert), bool),
                      horiz_vps=[], horizon_support=0.0,
                      diagnostics=dict(diag, reason="no vertical vanishing point"))
 
@@ -407,13 +413,33 @@ def estimate(vert, horiz, w: int, h: int, settings, exif_focal_px=None) -> Model
                 f_src = "refined"
         u = G.up_from_roll_pitch(roll, pitch)
 
+    # ---- horizontal (yaw) de-convergence ------------------------------
+    # The third camera angle.  It cannot be read off the vertical vanishing
+    # point -- a yaw is a rotation about the world vertical and leaves it
+    # fixed -- so it comes from the dominant horizontal one instead: level the
+    # frame with (roll, pitch), and the angle that remaining horizontal
+    # direction makes with the image x-axis is the yaw.  Gated on support,
+    # because a single weak horizontal cluster is evidence about one window
+    # row, not about the camera; and folded to [-90, 90], because a line has
+    # no direction and the two antipodal readings differ by a half-turn.
+    yaw = 0.0
+    if settings.correct_horizontal and horiz_hyps:
+        dom = horiz_hyps[0]
+        if dom.support >= settings.min_horizontal_support:
+            b = G.bearings(np.array([dom.vp]), G.intrinsics(f_use, cx, cy))[0]
+            wv = G.rot_x(pitch) @ G.rot_z(-roll) @ b
+            yaw = math.atan2(-wv[2], wv[0])
+            yaw = (yaw + math.pi / 2.0) % math.pi - math.pi / 2.0
+
     conf, cdiag = _confidence(vert, hy, support, f_src, f_quality, roll, pitch,
                               f_use, cx, cy, w, h, settings, hv, hw)
     diag.update(cdiag)
     diag["hypotheses"] = len(hyps)
     diag["horizontal_vps"] = len(horiz_hyps)
+    diag["yaw_deg"] = round(math.degrees(yaw), 3)
 
-    return Model(roll=roll, pitch=pitch, f=f_use, f_source=f_src, confidence=conf,
+    return Model(roll=roll, pitch=pitch, yaw=yaw, f=f_use, f_source=f_src,
+                 confidence=conf,
                  vp=G.normalize_vp(G.intrinsics(f_use, cx, cy) @ u), up=u,
                  vert_inliers=hy.inliers, horiz_vps=[x.vp for x in horiz_hyps],
                  horizon_support=support, diagnostics=diag)

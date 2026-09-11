@@ -39,6 +39,7 @@ import cv2
 import numpy as np
 from PIL import Image, ImageTk
 
+from . import layout
 from . import prefs
 from .config import Settings
 from .imageio import READABLE
@@ -342,6 +343,7 @@ class ReviewPanel(tk.Frame):
         self._closed_sent = False
         self._busy = False
         self._before_scale = 1.0
+        self._redraw_tries = 0
         self._show_hint()
 
     def _show_hint(self):
@@ -359,6 +361,7 @@ class ReviewPanel(tk.Frame):
         self._closed_sent = False
         self._busy = False
         self._before_scale = 1.0
+        self._redraw_tries = 0
         for w in self.container.winfo_children():
             w.destroy()
         try:
@@ -416,7 +419,10 @@ class ReviewPanel(tk.Frame):
         top.pack(fill="both", expand=True)
 
         panes = ttk.Frame(top)
-        panes.pack(fill="both", expand=True)
+        # Packed *last*, at the bottom of this method: `pack` serves its
+        # children in call order and gives what is left to the expanding one,
+        # so whatever is packed before the canvases is what survives a short
+        # window.  See the assembly block below.
         # `uniform` is what actually splits these evenly: weight only shares out
         # surplus space, so the long heading in column 0 set that column's
         # minimum and squeezed the corrected image to a sliver on a narrow
@@ -428,26 +434,36 @@ class ReviewPanel(tk.Frame):
         ttk.Label(panes, text="before").grid(row=0, column=0, sticky="w")
         ttk.Label(panes, text="after").grid(row=0, column=1, sticky="w")
 
-        self.c_before = tk.Canvas(panes, bg=INK["field"], highlightthickness=0)
+        # width/height 1: a tk.Canvas asks for 378x265 by default, and that
+        # request is what pushed the Save row off the bottom of a 1080p window
+        # -- the picture claimed a size it had not earned while the buttons
+        # took what was left.  The canvases expand into the leftover instead.
+        self.c_before = tk.Canvas(panes, bg=INK["field"], highlightthickness=0,
+                                  width=1, height=1)
         self.c_before.grid(row=1, column=0, sticky="nsew", padx=(0, 3))
-        self.c_after = tk.Canvas(panes, bg=INK["field"], highlightthickness=0)
+        self.c_after = tk.Canvas(panes, bg=INK["field"], highlightthickness=0,
+                                 width=1, height=1)
         self.c_after.grid(row=1, column=1, sticky="nsew", padx=(3, 0))
         self._pending_mark = None
         self._after_off = (0, 0)
         self._crop_drag_start = None
+        self._planar_drag = None      # corner index being dragged, or None
+        self._loupe = None            # magnifying-glass Toplevel, or None
         self.c_before.bind("<Button-1>", self._on_click_before)
+        self.c_before.bind("<Motion>", self._on_before_motion)
+        self.c_before.bind("<B1-Motion>", self._on_planar_drag)
+        self.c_before.bind("<ButtonRelease-1>", self._on_planar_release)
         self.c_after.bind("<ButtonPress-1>", self._on_crop_press)
         self.c_after.bind("<B1-Motion>", self._on_crop_drag)
         self.c_after.bind("<ButtonRelease-1>", self._on_crop_release)
         for c in (self.c_before, self.c_after):
             c.bind("<Configure>", lambda e: self._schedule_redraw())
 
-        ttk.Label(top, style="Dim.TLabel",
-                  text="click a line in the left image to strike it out, "
-                       "or to bring it back").pack(anchor="w", pady=(4, 0))
+        hint = ttk.Label(top, style="Dim.TLabel",
+                         text="click a line in the left image to strike it out, "
+                              "or to bring it back")
 
         stat = ttk.Frame(top)
-        stat.pack(fill="x", pady=(6, 4))
         self.status = tk.Text(stat, height=4, wrap="word", relief="flat",
                               borderwidth=0, highlightthickness=0, padx=10, pady=8,
                               background=INK["field"], foreground=INK["dim"],
@@ -460,8 +476,42 @@ class ReviewPanel(tk.Frame):
         self.status.bind("<Key>", self._status_key)
         ttk.Button(stat, text="copy", width=6, command=self._copy_status
                    ).pack(side="right", fill="y", padx=(4, 0))
+        # The four control rows below cost ~280 px of height that the two image
+        # canvases want back.  Collapsing them is one click.  The toggle rides
+        # in this row instead of a row of its own, because a new row would cost
+        # height in the default (expanded) state -- which is the state this is
+        # trying to improve.  The state lives on the panel, not the widget:
+        # `load` destroys every child and rebuilds, and a collapse that
+        # re-opened itself on the next photograph of a queue is worse than no
+        # collapse at all.
+        # The default is the height's to decide, not the code's: with the rows
+        # open a 1080p review pane leaves the picture ~90 px, which is not a
+        # preview.  A choice already made outranks it -- `_adj_open` exists the
+        # moment anyone touches the toggle, and then it holds for the session
+        # and for every `load` of a review queue.
+        if hasattr(self, "_adj_open"):
+            start_open = self._adj_open
+        else:
+            start_open = layout.adjustments_start_open(self.winfo_height())
+        self.v_adjust = tk.BooleanVar(value=start_open)
+        ttk.Checkbutton(stat, text="Adjustments", variable=self.v_adjust,
+                        command=self._toggle_adjust).pack(side="right", padx=(8, 0))
 
-        ctl = ttk.Frame(top, padding=(0, 8, 0, 0))
+        adj = ttk.Frame(top)
+        self._adj = adj
+        # Two columns instead of four stacked rows: the two image canvases on
+        # top want the height back, and a cross (images over controls) reads as
+        # one surface rather than a long scroll.  Left is what the correction
+        # does -- the angles plus which detector feeds it; right is where it
+        # looks and how the opened band is handled -- mask plus fill.  Each
+        # column is about half the old block, so opening the controls costs the
+        # picture ~140 px instead of ~282.
+        leftcol = ttk.Frame(adj)
+        leftcol.pack(side="left", fill="both", expand=True, padx=(0, 6))
+        rightcol = ttk.Frame(adj)
+        rightcol.pack(side="left", fill="both", expand=True, padx=(6, 0))
+
+        ctl = ttk.Frame(leftcol, padding=(0, 8, 0, 0))
         ctl.pack(fill="x")
         self.v_roll = tk.DoubleVar(value=0.0)
         self.v_pitch = tk.DoubleVar(value=0.0)
@@ -469,11 +519,30 @@ class ReviewPanel(tk.Frame):
         self._slider(ctl, 0, "roll (level)", self.v_roll, -20, 20, "deg")
         self._slider(ctl, 1, "pitch (verticals)", self.v_pitch, -30, 30, "deg")
         self._slider(ctl, 2, "focal length", self.v_focal, 8, 200, "mm eq")
+        # Yaw slider: disabled until the checkbox is ticked.  The checkbox and
+        # the slider share a row so the relationship is visible at a glance.
+        self.v_correct_horizontal = tk.BooleanVar(value=self.settings.correct_horizontal)
+        self.v_yaw = tk.DoubleVar(value=0.0)
+        # The label names the limitation, because the checkbox cannot: yaw
+        # squares the camera onto ONE horizontal direction, so on a corner view
+        # with two facades it necessarily makes the second one worse.  See the
+        # yaw entry in CLAUDE.md -- this is a special case, not a default.
+        ttk.Checkbutton(ctl, text="horizontal (yaw) - one facade only",
+                        variable=self.v_correct_horizontal,
+                        command=self._on_horizontal_toggle).grid(row=3, column=0, sticky="w")
+        self._yaw_scale = ttk.Scale(ctl, from_=-15, to=15, variable=self.v_yaw,
+                                    orient="horizontal", command=lambda _v: self._on_slider())
+        self._yaw_scale.grid(row=3, column=1, sticky="ew", padx=6)
+        if not self.settings.correct_horizontal:
+            self._yaw_scale.configure(state="disabled")
+        lbl_yaw = ttk.Label(ctl, width=12)
+        lbl_yaw.grid(row=3, column=2, sticky="e")
+        self._lbl_3 = (lbl_yaw, self.v_yaw, "deg")
 
         # The detector belongs beside the mask, not in the batch panel only:
         # both change what the estimator is looking at rather than what it does
         # with it, and both can only be judged against the lines on screen.
-        det = ttk.Frame(top, padding=(0, 8, 0, 0))
+        det = ttk.Frame(leftcol, padding=(0, 8, 0, 0))
         det.pack(fill="x")
         self.v_detector = tk.StringVar(value=self.settings.detector)
         ttk.Label(det, text="line detector", width=18).grid(row=0, column=0, sticky="w")
@@ -483,7 +552,7 @@ class ReviewPanel(tk.Frame):
         dbox.bind("<<ComboboxSelected>>", lambda e: self._apply_detector())
         det.columnconfigure(2, weight=1)
 
-        msk = ttk.Frame(top, padding=(0, 8, 0, 0))
+        msk = ttk.Frame(rightcol, padding=(0, 8, 0, 0))
         msk.pack(fill="x")
         self.v_maskmode = tk.StringVar(value=self.settings.mask_mode)
         ttk.Label(msk, text="source", width=18).grid(row=0, column=0, sticky="w")
@@ -508,7 +577,7 @@ class ReviewPanel(tk.Frame):
                                                             sticky="ew", padx=6)
         msk.columnconfigure(3, weight=1)
 
-        fill_row = ttk.Frame(top, padding=(0, 8, 0, 0))
+        fill_row = ttk.Frame(rightcol, padding=(0, 8, 0, 0))
         fill_row.pack(fill="x")
         self.v_fill = tk.StringVar(value=self.session.settings.fill or "none")
         ttk.Label(fill_row, text="fill band", width=18).grid(row=0, column=0, sticky="w")
@@ -537,14 +606,20 @@ class ReviewPanel(tk.Frame):
         self._sync_pad_swatch()
         self._register_comfy()
 
+        # Save / Keep / Close stay outside the collapsible: a queue advances on
+        # Save, so a Save button that can be hidden is a behaviour change.
         btns = ttk.Frame(top, padding=(0, 8))
-        btns.pack(fill="x")
+        self._btns = btns
         ttk.Button(btns, text="Auto", command=self._use_auto).pack(side="left")
         ttk.Button(btns, text="Reset", command=self._reset).pack(side="left", padx=6)
         self.v_mark = tk.BooleanVar(value=False)
         ttk.Checkbutton(btns, text="Mark vertical",
                         variable=self.v_mark, command=self._on_mark_toggle
                         ).pack(side="left", padx=(12, 0))
+        self.v_planar = tk.BooleanVar(value=False)
+        ttk.Checkbutton(btns, text="Planar",
+                        variable=self.v_planar, command=self._on_planar_toggle
+                        ).pack(side="left", padx=(6, 0))
         ttk.Button(btns, text="Clear marks",
                    command=self._clear_marks).pack(side="left", padx=6)
         ttk.Button(btns, text="Strike slanted",
@@ -557,6 +632,19 @@ class ReviewPanel(tk.Frame):
                          variable=self._mk_show()).pack(side="left")
         ttk.Checkbutton(btns, text="Mask", command=self._toggle_mask,
                          variable=self._mk_mask()).pack(side="left", padx=6)
+        # Control grid: a soft overlay for checking corrections by eye.  A true
+        # vertical in the corrected frame should run along a grid line; the
+        # spacing is either fixed pixels or camera-style divisions.
+        self.v_grid = tk.BooleanVar(value=False)
+        ttk.Checkbutton(btns, text="Grid", command=self._schedule_redraw,
+                         variable=self.v_grid).pack(side="left")
+        self.v_grid_step = tk.StringVar(value="50 px")
+        grid_cb = ttk.Combobox(btns, textvariable=self.v_grid_step, width=8,
+                               state="readonly",
+                               values=["25 px", "50 px", "100 px",
+                                       "thirds", "quarters", "sixths"])
+        grid_cb.pack(side="left", padx=(4, 6))
+        grid_cb.bind("<<ComboboxSelected>>", lambda e: self._schedule_redraw())
         ttk.Button(btns, text="Save", command=self._save,
                    style="Accent.TButton").pack(side="right")
         self.v_overwrite = tk.BooleanVar(value=False)
@@ -566,6 +654,69 @@ class ReviewPanel(tk.Frame):
                    command=self._close).pack(side="right", padx=(14, 6))
         ttk.Button(btns, text="Keep original",
                    command=self._keep).pack(side="right", padx=6)
+
+        # -- assembly: who gives up height first ---------------------------
+        # `pack` hands each child its requested height in call order and gives
+        # the cavity that is left to the expanding one, so the pack order *is*
+        # the priority order.  Packed bottom-up, so this reads as the reverse
+        # of what is on screen: the action row claims its strip first and the
+        # picture takes whatever survives.  At 1920x1080 -- the commonest
+        # desktop there is -- Save, Keep original and Close were simply not
+        # mapped before this, in the one mode that exists to be driven by hand.
+        # Same pattern as the ComfyUI dock's `side="bottom"`.
+        btns.pack(side="bottom", fill="x")
+        if self.v_adjust.get():
+            adj.pack(side="bottom", fill="x")
+        stat.pack(side="bottom", fill="x", pady=(6, 4))
+        hint.pack(side="bottom", anchor="w", pady=(4, 0))
+        panes.pack(side="top", fill="both", expand=True)
+        # `_build` runs before this panel has a height, and a decision taken on
+        # `winfo_height() == 1` is no decision.  Worse, one `after_idle` is not
+        # enough either: the options row and the sash land afterwards, and the
+        # panel measured 732 px at idle where it settles at 574.  So the
+        # verdict follows `<Configure>` until the user takes the choice away --
+        # the same arrangement, and for the same reason, as `_apply_sash`.
+        self.bind("<Configure>", lambda _e: self._adapt_adjust_default())
+        self.after_idle(self._adapt_adjust_default)
+
+    def _adapt_adjust_default(self):
+        """Apply the height's verdict, while the choice is still the code's.
+
+        It stands down permanently the moment the user touches the toggle, and
+        it never records a choice of its own: `_adj_open` stays absent, so the
+        next photograph is judged on its own geometry rather than on this
+        guess. Returning early when nothing changes is what keeps it off the
+        hot path -- `<Configure>` fires continuously during a window drag.
+        """
+        if hasattr(self, "_adj_open") or not self.winfo_exists():
+            return
+        adj = getattr(self, "_adj", None)
+        if adj is None or not adj.winfo_exists():
+            return
+        want = layout.adjustments_start_open(self.winfo_height())
+        if want == bool(self.v_adjust.get()):
+            return
+        self.v_adjust.set(want)
+        if want:
+            adj.pack(side="bottom", fill="x", after=self._btns)
+        else:
+            adj.pack_forget()
+
+    def _toggle_adjust(self):
+        """Hide or show the four control rows; the picture gets the height.
+
+        `pack` appends, so the re-expand has to name where the frame goes back
+        or the controls surface *below* the Save row -- the same trap as
+        `_set_stage`."""
+        self._adj_open = bool(self.v_adjust.get())
+        if self._adj_open:
+            # `after`, not `before`: these rows are packed with side="bottom",
+            # so the packing order runs upwards from the action row and the
+            # slot above it is the one *after* it in that order.  Getting this
+            # backwards puts the controls below Save.
+            self._adj.pack(side="bottom", fill="x", after=self._btns)
+        else:
+            self._adj.pack_forget()
 
     def _mk_show(self):
         self.v_show_lines = tk.BooleanVar(value=True)
@@ -794,7 +945,7 @@ class ReviewPanel(tk.Frame):
         setattr(self, f"_lbl_{row}", (lbl, var, unit))
 
     def _update_slider_labels(self):
-        for row in range(3):
+        for row in range(4):
             lbl, var, unit = getattr(self, f"_lbl_{row}")
             lbl.configure(text=f"{var.get():+.2f} {unit}" if unit == "deg"
                           else f"{var.get():.0f} {unit}")
@@ -802,16 +953,32 @@ class ReviewPanel(tk.Frame):
     # -- state -----------------------------------------------------------
     def _sync_from_session(self):
         roll, pitch, f, _ = self.session.current_angles()
+        yaw = self.session.current_yaw()
         from .model import focal_35mm_from_px
         self.v_roll.set(round(math.degrees(roll), 2))
         self.v_pitch.set(round(math.degrees(pitch), 2))
+        self.v_yaw.set(round(math.degrees(yaw), 2))
         if f:
             self.v_focal.set(round(focal_35mm_from_px(f, self.session.w, self.session.h), 0))
         self._redraw()
 
+    def _on_horizontal_toggle(self):
+        on = self.v_correct_horizontal.get()
+        self.session.settings = self.session.settings.replace(correct_horizontal=on)
+        self._yaw_scale.configure(state="normal" if on else "disabled")
+        if on and self.session.mode == AUTO:
+            # the estimator only computes a yaw when the flag was already on
+            # at estimation time, so switching it on must re-fit -- cheap, it
+            # re-runs the fit over the existing lines, not the detector
+            self.session.refit()
+            self._sync_from_session()
+        elif not on and self.session.mode == AUTO:
+            self.v_yaw.set(0.0)
+            self._schedule_redraw()
+
     def _on_slider(self):
         self.session.set_manual(roll_deg=self.v_roll.get(), pitch_deg=self.v_pitch.get(),
-                                focal_35mm=self.v_focal.get())
+                                focal_35mm=self.v_focal.get(), yaw_deg=self.v_yaw.get())
         self._schedule_redraw()
 
     def _strike_slanted(self):
@@ -843,6 +1010,81 @@ class ReviewPanel(tk.Frame):
         self._pending_mark = None
         self._set_status(self.session.status_text())
         self._redraw()
+
+    # -- planar (four-corner) correction ---------------------------------
+    _PLANAR_NAMES = ("top-left", "top-right", "bottom-right", "bottom-left")
+
+    def _on_planar_toggle(self):
+        on = self.v_planar.get()
+        if on:
+            self._pending_mark = None
+            n = len(self.session.planar_quad)
+            nxt = (self._PLANAR_NAMES[n] + " corner"
+                   if n < 4 else "all four corners are set -- drag one to move it")
+            self._set_status("planar: " + nxt)
+            self._loupe_show()
+        else:
+            self._planar_drag = None
+            self._loupe_hide()
+            self._set_status(self.session.status_text())
+        self._redraw()
+
+    def _on_planar_click(self, x, y):
+        """Click on a placed corner grabs it; anywhere else places the next
+        corner.  The quad is ordered TL, TR, BR, BL -- the order the user
+        clicks is the order the corners are named, so the status says which
+        one to click next rather than trusting the guess."""
+        hit = self.session.pick_planar_corner(x, y, display_scale=self._before_scale)
+        if hit is not None:
+            self._planar_drag = hit
+            return
+        i = len(self.session.planar_quad)
+        if i >= 4:
+            self._set_status("all four corners are set -- drag one to move it, "
+                             "or click 'Planar' off to leave the mode")
+            return
+        # screen -> full-resolution pixels
+        fx = x / self._before_scale
+        fy = y / self._before_scale
+        self.session.set_planar_point(i, fx, fy)
+        nxt = (self._PLANAR_NAMES[i + 1] + " corner next"
+               if i + 1 < 4 else "four corners set -- the right pane is the rectified view")
+        self._set_status(f"planar: {i + 1}/4, click the {nxt}")
+        self._redraw()
+
+    def _on_planar_drag(self, event):
+        if self._planar_drag is None:
+            return
+        x = event.x - self._before_off[0]
+        y = event.y - self._before_off[1]
+        self.session.set_planar_point(
+            self._planar_drag, x / self._before_scale, y / self._before_scale)
+        self._schedule_redraw()
+
+    def _on_planar_release(self, event):
+        self._planar_drag = None
+
+    def _on_before_motion(self, event):
+        if getattr(self, "_loupe", None) is not None:
+            self._loupe_move(event)
+
+    def _draw_planar_quad(self):
+        """The quad and its numbered corners, over the before preview.
+
+        Canvas-drawn like the control lines: interaction state, visible the
+        instant a click lands, without waiting for a re-render."""
+        ox, oy = self._before_off
+        q = self.session.planar_quad
+        pts = [(ox + px / self._before_scale, oy + py / self._before_scale)
+               for px, py in q]
+        if len(pts) >= 2:
+            self.c_before.create_line(
+                *[c for pt in pts for c in pt], fill="#ff5fa2", width=2)
+        for i, (sx, sy) in enumerate(pts):
+            col = "#ff5fa2" if i < len(q) else "#7fd4ff"
+            self.c_before.create_oval(sx - 7, sy - 7, sx + 7, sy + 7,
+                                      outline=col, width=2)
+            self.c_before.create_text(sx, sy - 16, text=str(i + 1), fill=col)
 
     def _clear_marks(self):
         if self.session.clear_control_lines():
@@ -975,6 +1217,9 @@ class ReviewPanel(tk.Frame):
     def _on_click_before(self, event):
         x = event.x - self._before_off[0]
         y = event.y - self._before_off[1]
+        if getattr(self, "v_planar", None) is not None and self.v_planar.get():
+            self._on_planar_click(x, y)
+            return
         if getattr(self, "v_mark", None) is not None and self.v_mark.get():
             self._click_mark(x, y)
             return
@@ -1029,15 +1274,38 @@ class ReviewPanel(tk.Frame):
         try:
             box_b = (self.c_before.winfo_width(), self.c_before.winfo_height())
             box_a = (self.c_after.winfo_width(), self.c_after.winfo_height())
-            if min(box_b) < 20 or min(box_a) < 20:
-                self.after(120, self._redraw)
+            # An unmapped canvas is starved as well, and its winfo_* values are
+            # stale -- the last size it had, not zero -- so the <20 test alone
+            # misses it and would "draw" into a widget with no place on screen.
+            starved = (not self.c_before.winfo_ismapped()
+                       or not self.c_after.winfo_ismapped()
+                       or min(box_b) < 20 or min(box_a) < 20)
+            if starved:
+                # Waiting for the first layout, not polling: on a window too
+                # short to give the canvas 20 px this used to reschedule
+                # itself forever at 8 Hz.  A handful of tries, then leave the
+                # canvas blank and stop -- the next <Configure> brings the
+                # picture back, because a successful redraw resets the count.
+                if self._redraw_tries < 6:
+                    self._redraw_tries += 1
+                    self.after(120, self._redraw)
                 return
-            before = self.session.render_before(max_edge=max(box_b), 
+            self._redraw_tries = 0
+            planar_on = (getattr(self, "v_planar", None) is not None
+                         and self.v_planar.get())
+            before = self.session.render_before(max_edge=max(box_b),
                                                 show_lines=self.v_show_lines.get())
             # Un-cropped on purpose: `_draw_crop_persistent` shades what the
             # crop discards, so the picture keeps one size and one scale for
             # the whole session instead of leaping every time a corner moves.
-            after = self.session.render_after(max_edge=max(box_a), apply_crop=False)
+            after = None
+            if planar_on and len(self.session.planar_quad) >= 4:
+                try:
+                    after = self.session.planar_rectified(max_edge=max(box_a))
+                except ValueError as exc:   # degenerate quad: keep the rotation view
+                    self._set_status(str(exc))
+            if after is None:
+                after = self.session.render_after(max_edge=max(box_a), apply_crop=False)
             ph_b, s_b = _to_photo(before, box_b)
             ph_a, _ = _to_photo(after, box_a)
             # scale from the *original* image to what is on screen
@@ -1048,14 +1316,24 @@ class ReviewPanel(tk.Frame):
             self.c_before.create_image(self._before_off[0], self._before_off[1],
                                        anchor="nw", image=ph_b)
             self._ph_b = ph_b
-            self._draw_marks()
+            self._draw_grid(self.c_before, *self._before_off,
+                            self._ph_b.width(), self._ph_b.height())
+            if planar_on:
+                self._draw_planar_quad()
+            else:
+                self._draw_marks()
             aox = (box_a[0] - ph_a.width()) // 2
             aoy = (box_a[1] - ph_a.height()) // 2
             self._after_off = (aox, aoy)
             self.c_after.delete("all")
             self.c_after.create_image(aox, aoy, anchor="nw", image=ph_a)
             self._ph_a = ph_a
-            self._draw_crop_persistent()
+            self._draw_grid(self.c_after, *self._after_off,
+                            self._ph_a.width(), self._ph_a.height())
+            if planar_on:
+                self.c_after.delete("crop_overlay")
+            else:
+                self._draw_crop_persistent()
             self._set_status(self.session.status_text())
             self._update_slider_labels()
         except Exception:
@@ -1068,6 +1346,43 @@ class ReviewPanel(tk.Frame):
             except OSError:
                 pass
             self._set_status("preview failed (full log: bpc_errors.log):\n" + tb)
+
+    def _grid_step(self):
+        """Grid spacing from the dropdown: pixels per cell, or a division count."""
+        v = self.v_grid_step.get().strip().lower()
+        if v.endswith("px"):
+            return max(10, int(v[:-2])), 0
+        n = {"thirds": 3, "quarters": 4, "sixths": 6}.get(v, 4)
+        return 0, n
+
+    def _draw_grid(self, canvas, ox, oy, iw, ih):
+        """Soft reference grid over the preview, for checking corrections.
+
+        Canvas-drawn rather than burnt into the render: it is a measuring
+        instrument, not part of the photograph, and `stipple` gives the
+        transparency Tk has no alpha for.  Aligned to the image's top-left
+        corner so the cells track the picture, not the window; in the
+        corrected frame a true vertical should run along a grid line.
+        """
+        if not self.v_grid.get():
+            return
+        step, n = self._grid_step()
+        kw = dict(fill="#9fd8ff", width=2, stipple="gray50")
+        if step:
+            x = ox
+            while x <= ox + iw:
+                canvas.create_line(x, oy, x, oy + ih, **kw)
+                x += step
+            y = oy
+            while y <= oy + ih:
+                canvas.create_line(ox, y, ox + iw, y, **kw)
+                y += step
+        else:
+            for i in range(1, n):
+                x = ox + i * iw / n
+                canvas.create_line(x, oy, x, oy + ih, **kw)
+                y = oy + i * ih / n
+                canvas.create_line(ox, y, ox + iw, y, **kw)
 
     def _draw_marks(self):
         """Vertical control lines, over the preview.
@@ -1179,13 +1494,16 @@ class App(_ROOT_CLASS):
     def __init__(self, initial=None, start_maximized=True):
         super().__init__()
         self.title("Batch Perspective Correction")
-        # Standard desktop is 1920x1080 -- the most common resolution in the
-        # world (Statista 2025: 1080p first, 1536x864 and 1366x768 behind it).
-        # Clamp to smaller screens so a 1366x768 laptop still gets a window,
-        # then open maximized so larger monitors get the whole frame. F11
-        # toggles borderless fullscreen for the review work.
+        # The window opens maximized, so this is the size it *restores* to.
+        # It used to be a hardcoded 1920x1080, which is too small on a 1440p or
+        # 4K monitor and larger than the screen in both directions on a
+        # 1366x768 laptop. `layout.initial_window` takes a share of the real
+        # screen instead and clamps it both ways; it is pure arithmetic and
+        # tested at five resolutions in tests/test_layout.py. F11 toggles
+        # borderless fullscreen for the review work.
         sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
-        self.geometry(f"{min(1920, sw)}x{min(1080, sh)}")
+        gw, gh = layout.initial_window(sw, sh)
+        self.geometry(f"{gw}x{gh}")
         self.minsize(960, 640)
         apply_theme(self)
         self._icon = _set_window_icon(self)
@@ -1200,6 +1518,16 @@ class App(_ROOT_CLASS):
         self._build_menu()
         if self._remembered.get("output"):
             self.v_output.set(self._remembered["output"])
+        # The mask setup is machine configuration like the model path: a mode
+        # picked once and a path typed once must survive a restart, or both are
+        # re-picked on every launch.  (The output folder stays offered, not
+        # forced -- writing somewhere new is a decision; masking with a saved
+        # mask is not.)
+        if self._remembered.get("mask_mode") in ("off", "file", "birefnet"):
+            self.v_mask.set(self._remembered["mask_mode"])
+        key = "birefnet_model" if self.v_mask.get() == "birefnet" else "mask_file"
+        if self._remembered.get(key):
+            self.v_maskpath.set(self._remembered[key])
         self._refresh_items()          # opens on the drop stage, not the work one
         # a remembered path is offered, never forced: the selector still says off
         if initial:
@@ -1298,8 +1626,15 @@ class App(_ROOT_CLASS):
         # is stuck with whatever ratio the code picked.
         self._paned = ttk.PanedWindow(self, orient="vertical")
         self._paned.pack(fill="both", expand=True, padx=8, pady=(0, 4))
+        self._sash_by_hand = False
+        self._paned.bind("<Configure>", self._on_paned_configure)
+        self._paned.bind("<ButtonRelease-1>", self._on_sash_release)
         self.review = ReviewPanel(self)
-        self._paned.add(self.review, weight=3)
+        # weight 1 against the tree's 0: on any resize the *preview* takes the
+        # extra height and the results list keeps the size its rows need. That
+        # is the same rule layout.sash_position applies to the initial split --
+        # the tree's need is absolute, the photograph's is not.
+        self._paned.add(self.review, weight=1)
 
         opt = ttk.Frame(self, padding=(14, 4, 14, 8))
         opt.pack(fill="x")
@@ -1316,8 +1651,11 @@ class App(_ROOT_CLASS):
         self._spin(opt, 1, 0, "max pitch (deg)", self.v_maxpitch, 0.0, 45.0, 1.0)
         ttk.Label(opt, text="mask").grid(row=0, column=6, sticky="e", padx=4)
         self.v_mask = tk.StringVar(value=Settings.mask_mode)
-        ttk.Combobox(opt, textvariable=self.v_mask, values=["off", "file", "birefnet"],
-                     width=6, state="readonly").grid(row=0, column=7, sticky="w")
+        mask_cb = ttk.Combobox(opt, textvariable=self.v_mask,
+                               values=["off", "file", "birefnet"],
+                               width=6, state="readonly")
+        mask_cb.grid(row=0, column=7, sticky="w")
+        mask_cb.bind("<<ComboboxSelected>>", self._on_mask_mode)
         self.v_maskpath = tk.StringVar(value="")
         ttk.Button(opt, text="mask source...", command=self._pick_mask_source
                    ).grid(row=0, column=8, sticky="w", padx=(6, 0))
@@ -1405,7 +1743,7 @@ class App(_ROOT_CLASS):
             self.tree.heading(c, text=c)
             self.tree.column(c, width=w, anchor="w")
         self.tree.pack(fill="both", expand=True)
-        self._paned.add(self._w_tree, weight=2)
+        self._paned.add(self._w_tree, weight=0)
         self.tree.bind("<Double-1>", lambda e: self._review_selected())
         for status, colour in STATUS_COLOUR.items():
             self.tree.tag_configure(status, foreground=colour)
@@ -1448,6 +1786,16 @@ class App(_ROOT_CLASS):
         elif s.mask_mode == "birefnet":
             s.birefnet_model = path
         return s
+
+    def _on_mask_mode(self, _e=None):
+        """The mode is setup, not a per-run decision: store it together with
+        its path, so a restart finds the same mask the user left behind.  The
+        path field keeps whichever path belongs to the newly chosen mode."""
+        prefs.save(mask_mode=self.v_mask.get())
+        key = "birefnet_model" if self.v_mask.get() == "birefnet" else "mask_file"
+        remembered = self._remembered.get(key, "")
+        if remembered:
+            self.v_maskpath.set(remembered)
 
     def _check_fill(self):
         """Report the fill backend now, not once per photograph.
@@ -1939,7 +2287,57 @@ class App(_ROOT_CLASS):
         if loaded:
             self._w_opt.pack(fill="x")
             self._w_bar.pack(fill="x")
-            self._paned.add(self._w_tree)
+            self._paned.add(self._w_tree, weight=0)
+            self.after_idle(self._apply_sash)
+
+    def _apply_sash(self):
+        """Put the review/results sash where `layout` says, once per stage change.
+
+        ttk's `weight` governs how *extra* space is handed out on a resize, not
+        where the sash first lands -- that comes from the panes' requested
+        sizes, which is how a 1440p screen ended up giving 267 px to a results
+        list showing one row and 265 px to the image canvas beside it. So the
+        initial position is set explicitly, from the same rule the weights
+        express afterwards.
+
+        Deferred to `after_idle` because it needs the paned window's real
+        height, which is not known until the stage's widgets have been packed.
+        Silent on TclError: the sash does not exist until both panes are in,
+        and a layout nicety must never be able to break the window.
+        """
+        if getattr(self, "_sash_by_hand", False):
+            return                                  # the user has said otherwise
+        try:
+            available = self._paned.winfo_height()
+            if available <= 1:                      # not laid out yet; try later
+                self.after(60, self._apply_sash)
+                return
+            n = len(self.results) or len(self.items)
+            want = layout.sash_position(available, n)
+            if abs(self._paned.sashpos(0) - want) > 2:
+                self._paned.sashpos(0, want)
+        except tk.TclError:
+            pass
+
+    def _on_paned_configure(self, _e=None):
+        """Re-apply the split whenever the pane's height changes.
+
+        One `after_idle` is not enough: `_set_stage` packs the options row and
+        the start/stop bar *after* the tree is added, so the first attempt
+        measures the empty stage's taller pane and leaves the sash past the
+        window's real height -- which collapsed the results list to one pixel.
+        Following the configure event instead means the split is right after
+        the stage settles, after a resize, and after a move to another monitor.
+
+        It stops the moment the user drags the sash: a window that keeps
+        re-deciding a split someone has just set by hand is worse than one that
+        never helped.
+        """
+        self._apply_sash()
+
+    def _on_sash_release(self, _e=None):
+        """A drag on the sash is a decision; stop moving it afterwards."""
+        self._sash_by_hand = True
 
     def _refresh_items(self):
         keep = list(self.lst.curselection()) if hasattr(self, "lst") else []

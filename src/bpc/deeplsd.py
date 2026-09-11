@@ -95,7 +95,37 @@ def resolve_model(path: str = "") -> str:
         return cand
     raise DeepLSDUnavailable(
         f"DeepLSD weights not found: {path or DEFAULT_MODEL}. They are not "
-        f"bundled (98 MB):\n    curl -L -o models/{DEFAULT_MODEL} {WEIGHTS_URL}")
+        f"bundled (98 MB) -- use Setup > Download model files..., or:\n"
+        f"    curl -L -o models/{DEFAULT_MODEL} {WEIGHTS_URL}")
+
+
+def download_weights(progress_cb=None) -> str:
+    """Fetch the DeepLSD weights into ``models/`` and return the path.
+
+    Runs on the caller's thread; ``progress_cb(done_bytes, total_bytes)`` is
+    called as chunks arrive, so a UI can show a percentage without polling.
+    A complete file already there is returned as-is -- the download is an
+    acquisition step, not a per-run one.
+    """
+    import urllib.request
+    dest = os.path.join(BUNDLED, DEFAULT_MODEL)
+    if os.path.isfile(dest) and os.path.getsize(dest) > 10_000_000:
+        return dest
+    os.makedirs(BUNDLED, exist_ok=True)
+    tmp = dest + ".part"
+    with urllib.request.urlopen(WEIGHTS_URL, timeout=60) as r, open(tmp, "wb") as fh:
+        total = int(r.headers.get("Content-Length", 0))
+        done = 0
+        while True:
+            chunk = r.read(1 << 20)
+            if not chunk:
+                break
+            fh.write(chunk)
+            done += len(chunk)
+            if progress_cb:
+                progress_cb(done, total)
+    os.replace(tmp, dest)
+    return dest
 
 
 def _pick_device(device: str = ""):

@@ -11,8 +11,19 @@ debug/
 tests/_out/
 bpc-run-*/
 
-# local-only diagnostic folder -- nothing here is committed or pushed
-analysis/
+# local-only diagnostic folder -- nothing here is committed or pushed, except
+# the README that explains what the folder is for (a fresh clone gets an empty
+# directory otherwise, and no way to know why it exists)
+analysis/*
+!analysis/README.md
+
+# scratch: one-off probes, smoke scripts and captured run output. These belong
+# in analysis/scratch/, not at the root -- but they land at the root first, so
+# ignore them there rather than let a stray _probe_*.py reach a commit.
+/_*.py
+/_*.log
+/_*.txt
+*.log
 
 # a vendored third-party checkout (MIT), kept local, never committed
 tools/DeepLSD/
