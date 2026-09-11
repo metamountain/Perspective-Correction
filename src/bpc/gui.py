@@ -489,10 +489,15 @@ class ReviewPanel(tk.Frame):
         # preview.  A choice already made outranks it -- `_adj_open` exists the
         # moment anyone touches the toggle, and then it holds for the session
         # and for every `load` of a review queue.
+        # The control columns default to visible -- one persistent layout, no
+        # height-based auto-collapse (that is what kept them out of sight).  A
+        # manual choice already made outranks the default: `_adj_open` exists
+        # the moment anyone touches the toggle and must survive `load`, which
+        # destroys every child and rebuilds.
         if hasattr(self, "_adj_open"):
             start_open = self._adj_open
         else:
-            start_open = layout.adjustments_start_open(self.winfo_height())
+            start_open = True
         self.v_adjust = tk.BooleanVar(value=start_open)
         ttk.Checkbutton(stat, text="Adjustments", variable=self.v_adjust,
                         command=self._toggle_adjust).pack(side="right", padx=(8, 0))
@@ -670,14 +675,9 @@ class ReviewPanel(tk.Frame):
         stat.pack(side="bottom", fill="x", pady=(6, 4))
         hint.pack(side="bottom", anchor="w", pady=(4, 0))
         panes.pack(side="top", fill="both", expand=True)
-        # `_build` runs before this panel has a height, and a decision taken on
-        # `winfo_height() == 1` is no decision.  Worse, one `after_idle` is not
-        # enough either: the options row and the sash land afterwards, and the
-        # panel measured 732 px at idle where it settles at 574.  So the
-        # verdict follows `<Configure>` until the user takes the choice away --
-        # the same arrangement, and for the same reason, as `_apply_sash`.
-        self.bind("<Configure>", lambda _e: self._adapt_adjust_default())
-        self.after_idle(self._adapt_adjust_default)
+        # The control columns stay visible; there is no height-based verdict to
+        # apply on resize.  (The old adaptive default collapsed them at short
+        # windows, which is why the two-panel layout was never seen.)
 
     def _adapt_adjust_default(self):
         """Apply the height's verdict, while the choice is still the code's.
@@ -2271,24 +2271,24 @@ class App(_ROOT_CLASS):
         widgets keep their state, so a folder chosen, a detector picked or a
         ComfyUI address typed survives emptying the list.
         """
-        loaded = bool(self.items)
-        self.drop.configure(height=14 if not loaded else 3)
+        # One persistent layout: the work UI -- options, start bar, results
+        # list, output row and review -- is always on screen. There is no
+        # separate "empty" landing screen; an empty window shows the same
+        # controls with nothing in them, so the layout never changes shape when
+        # a folder arrives. The drop target stays as a thin strip up top.
+        self.drop.configure(height=3)
         for w in (self._w_listrow, *self._w_out):
-            (w.grid() if loaded else w.grid_remove())
-        # Re-packed in order, because `pack` appends and the two of them must
-        # not end up above the frame they belong under.  The tree lives in the
-        # paned split, so it is re-added there rather than re-packed.
+            if not w.winfo_ismapped():
+                w.grid()
         for w in (self._w_opt, self._w_bar):
-            w.pack_forget()
+            if not w.winfo_ismapped():
+                w.pack(fill="x")
         try:
             self._paned.forget(self._w_tree)
         except tk.TclError:
             pass
-        if loaded:
-            self._w_opt.pack(fill="x")
-            self._w_bar.pack(fill="x")
-            self._paned.add(self._w_tree, weight=0)
-            self.after_idle(self._apply_sash)
+        self._paned.add(self._w_tree, weight=0)
+        self.after_idle(self._apply_sash)
 
     def _apply_sash(self):
         """Put the review/results sash where `layout` says, once per stage change.

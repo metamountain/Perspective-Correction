@@ -192,34 +192,26 @@ def test_the_save_button_is_reachable_at_every_window_size():
 
 
 def test_the_panel_default_keeps_both_the_buttons_and_a_usable_picture():
-    """The whole point, in one assertion, at three real resolutions.
+    """The whole point, at three real resolutions.
 
-    Save reachable *and* a picture worth looking at, in the state the panel
-    opens in. Neither alone is enough: the action row was unmapped at 1080p
-    before the repack, and bottom-packing it alone left the preview 90 px.
-    Where the pane is too short for both even with the controls shut -- a
-    1280x800 window can spare about 140 px in total -- what is asserted is
-    that the controls are the half that gave way.
+    The control columns are always on now -- one persistent layout, no
+    auto-collapse -- so what must hold is that Save stays reachable and the
+    picture is still mapped, even if it is small on a short window. A usable
+    size floor is only asserted where the window genuinely has the height for
+    it: a 1280x800 pane cannot give both two control columns and a big picture.
     """
-    from bpc import layout
-    for w, h in ((1280, 800), (1920, 1080), (2560, 1440)):
+    floors = {(1280, 800): 20, (1920, 1080): 260, (2560, 1440): 260}
+    for w, h in floors:
         app = _app()
         try:
             _loaded(app, w, h)
             r = app.review
             canvas = r.c_before.winfo_height()
-            afford = r.winfo_height() - layout.PANEL_FIXED_H
             assert r._btns.winfo_ismapped(), f"{w}x{h}: Save is not on screen"
-            if afford >= layout.MIN_USEFUL_CANVAS:
-                assert canvas >= layout.MIN_USEFUL_CANVAS, (
-                    f"{w}x{h}: the preview opened at {canvas} px with "
-                    f"{afford} px available")
-            else:
-                assert r.v_adjust.get() is False, (
-                    f"{w}x{h}: only {afford} px to give and the controls kept "
-                    f"theirs")
-                assert canvas >= afford - layout.ADJUST_ROWS_H // 2, (
-                    f"{w}x{h}: the preview got {canvas} of {afford} px")
+            assert r.v_adjust.get() is True, (
+                f"{w}x{h}: the control columns collapsed on their own")
+            assert canvas >= floors[(w, h)], (
+                f"{w}x{h}: the preview opened at {canvas} px")
         finally:
             app.destroy()
 
@@ -233,7 +225,9 @@ def test_the_preview_gives_up_retrying_instead_of_spinning_forever():
     """
     app = _app()
     try:
-        _loaded(app, 1280, 800)
+        # Small enough that the two control columns leave the canvas unmapped --
+        # 1280x800 no longer does that once the columns are on by default.
+        _loaded(app, 1100, 650)
         r = app.review
         r.v_adjust.set(True); r._toggle_adjust(); _settle(app, 20)
         assert (not r.c_before.winfo_ismapped()
