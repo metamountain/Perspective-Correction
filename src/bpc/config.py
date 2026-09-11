@@ -76,6 +76,25 @@ class Settings:
     min_correction_deg: float = 0.15    # below this: nothing worth doing
     correct_roll: bool = True
     correct_pitch: bool = True
+    # Horizontal (yaw) de-convergence -- the third camera angle, and a
+    # SPECIAL CASE that is off by default.  It is not a levelling operation:
+    # yaw squares the camera onto one horizontal direction, i.e. it makes one
+    # facade fronto-parallel.  That is only meaningful when the photograph has
+    # exactly one facade plane, and architectural photographs routinely have
+    # two.  Measured over the seventeen assets with it switched on, fourteen
+    # asked for more than 25 deg of yaw at a confidence the gate admits
+    # (burgebrach +57.7 at 0.53, ulica -67.5 at 0.46, quaker +27.7 at 0.75);
+    # only the one genuinely frontal frame came back near zero.  Those are not
+    # errors the estimator made -- converging horizontals ARE correct
+    # perspective on an oblique facade -- so confidence cannot catch them and
+    # is not built to.  The cap is therefore back at 8 deg, which is what
+    # `warp.limit` needs to keep a weak or wrong horizontal VP from shearing
+    # the frame sideways.  See "Horizontal (yaw) de-convergence" in CLAUDE.md
+    # for the open design question (which plane, and who chooses it).
+    correct_horizontal: bool = False
+    horizontal_strength: float = 1.0
+    max_horizontal_deg: float = 8.0
+    min_horizontal_support: float = 0.3
 
     # ---- gating ----
     min_confidence: float = 0.40

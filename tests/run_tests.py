@@ -16,16 +16,37 @@ ROOT = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(ROOT, "src"))
 sys.path.insert(0, HERE)
 
-MODULES = ["test_geometry", "test_lines", "test_warp", "test_estimation",
+MODULES = ["test_geometry", "test_lines", "test_layout", "test_warp", "test_estimation",
            "test_pipeline", "test_review", "test_masks", "test_birefnet", "test_prefs",
            "test_inpaint",
            "test_detectors",
+           "test_planar",
            "test_reference",
-           "test_assets"]
+           "test_assets",
+           "test_gui",
+           "test_deps"]
+
+
+def _unlisted():
+    """Test files on disk that ``MODULES`` does not name.
+
+    A test module that is not listed here runs nowhere, so it passes silently
+    and forever -- worse than no test at all, because it reads as covered. The
+    list stays explicit (ordering is deliberate: the fast modules first), so
+    the cost of that choice is paid here rather than by whoever adds the next
+    file and never sees it run.
+    """
+    import glob
+    found = {os.path.splitext(os.path.basename(f))[0]
+             for f in glob.glob(os.path.join(HERE, "test_*.py"))}
+    return sorted(found - set(MODULES))
 
 
 def main(argv):
     verbose = "-v" in argv
+    stray = _unlisted()
+    if stray:
+        print("!! not in MODULES, so never run: " + ", ".join(stray))
     picks = [a for a in argv if not a.startswith("-")]
     total = failed = skipped = 0
     t0 = time.time()
@@ -69,7 +90,7 @@ def main(argv):
         print(f"\n{'=' * 70}\n{name}.{t}\n{'-' * 70}\n{tb}")
     print(f"\n{total} test(s), {failed} failed, {skipped} skipped, "
           f"{time.time() - t0:.1f}s")
-    return 1 if failed else 0
+    return 1 if (failed or stray) else 0
 
 
 class _Skip(Exception):

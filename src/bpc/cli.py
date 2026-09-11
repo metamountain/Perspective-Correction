@@ -92,6 +92,15 @@ def build_parser():
                    help="below this the photo counts as already upright, degrees")
     g.add_argument("--no-roll", action="store_true", help="never level, only fix verticals")
     g.add_argument("--no-pitch", action="store_true", help="only level, never fix verticals")
+    g.add_argument("--horizontal", action="store_true",
+                   help="also de-converge the dominant horizontal vanishing point "
+                        "(yaw). Off by default: a wrong or weak horizontal VP shears "
+                        "the frame sideways, which reads as a mistake faster than a "
+                        "slightly under-corrected vertical")
+    g.add_argument("--horizontal-strength", type=float,
+                   help="scale the horizontal (yaw) correction (0 = none, 1 = full)")
+    g.add_argument("--max-horizontal", type=float, default=Settings.max_horizontal_deg,
+                   help="cap on the horizontal (yaw) correction, degrees")
 
     g = p.add_argument_group("decision")
     g.add_argument("--min-confidence", type=float, default=Settings.min_confidence,
@@ -133,6 +142,10 @@ def build_parser():
                         "recommends it off for night, fog and blur")
     g.add_argument("--detector-info", action="store_true",
                    help="what this Python can run as a line detector, and exit")
+    g.add_argument("--doctor", "--check-deps", action="store_true",
+                   help="report the core packages and every optional backend this "
+                        "interpreter can run, and exit. Exits 2 if a required "
+                        "package is missing")
     g.add_argument("--mask", choices=["off", "file", "birefnet"],
                    default=Settings.mask_mode,
                    help="'file' a painted PNG or a folder of them, 'birefnet' segment "
@@ -288,6 +301,10 @@ def settings_from(args) -> Settings:
     s.min_correction_deg = args.min_correction
     s.correct_roll = not args.no_roll
     s.correct_pitch = not args.no_pitch
+    s.correct_horizontal = args.horizontal
+    s.horizontal_strength = (args.strength if args.horizontal_strength is None
+                             else args.horizontal_strength)
+    s.max_horizontal_deg = args.max_horizontal
     s.min_confidence = args.min_confidence
     s.max_area_ratio = args.max_area
     s.crop = args.crop
@@ -360,7 +377,9 @@ def diagnostics_text(args, settings) -> str:
     interesting = ("detector", "deeplsd_model", "mask_mode", "mask_file", "birefnet_model",
                    "birefnet_threshold", "focal_35mm", "default_focal_35mm",
                    "focal_estimate", "min_confidence", "max_pitch_deg",
-                   "max_roll_deg", "pitch_strength", "roll_strength", "crop",
+                   "max_roll_deg", "max_horizontal_deg",
+                   "pitch_strength", "roll_strength", "horizontal_strength",
+                   "correct_horizontal", "crop",
                    "max_crop_loss", "pad",
                    "detect_max_edge", "inlier_threshold_deg", "angular_softness",
                    "uncertain_pitch_damping", "seed")
@@ -452,6 +471,17 @@ def apply_prefs(args, parser):
 def main(argv=None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
+    from . import deps
+    if args.doctor:
+        return deps.doctor()
+    errs = deps.core_errors()
+    if errs:
+        print("missing required package(s):", file=sys.stderr)
+        for e in errs:
+            print("  - " + e, file=sys.stderr)
+        print("install them (pip install -r requirements.txt), then re-run; "
+              "--doctor shows the full picture", file=sys.stderr)
+        return 2
     from . import prefs
     if args.forget:
         print("forgot remembered defaults" if prefs.forget() else "nothing was remembered")
@@ -545,6 +575,13 @@ def main(argv=None) -> int:
             return 1
 
     settings = settings_from(args)
+    pre_errs = deps.preflight(settings)
+    if pre_errs:
+        print("cannot run -- the requested backends are not available:", file=sys.stderr)
+        for e in pre_errs:
+            print("  - " + e, file=sys.stderr)
+        print("run --doctor for the full dependency picture", file=sys.stderr)
+        return 2
     roots = [os.path.abspath(i) for i in args.inputs if os.path.isdir(i)]
     log = _Log(args.log_file, args.quiet)
     if args.diagnostics:

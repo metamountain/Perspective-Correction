@@ -31,6 +31,7 @@ from . import geometry as G
 from . import imageio as IO
 from . import lines as L
 from . import model as M
+from . import planar as P
 from . import preview as PV
 from . import warp as W
 
@@ -64,6 +65,7 @@ class ReviewSession:
         self.mask_alpha = 0.28
         self.manual_roll = 0.0
         self.manual_pitch = 0.0
+        self.manual_yaw = 0.0
         self.manual_focal_35mm = 0.0
         # Hugin-style vertical control lines, in analysis-image coordinates.
         # (N, 4) of x0, y0, x1, y1.
@@ -80,6 +82,21 @@ class ReviewSession:
             "right":  (False, 0.0),
         }
         self.model = None
+        # Planar (four-point) correction: the quad in FULL-resolution image
+        # coordinates, ordered top-left, top-right, bottom-right, bottom-left.
+        # Fewer than four points means "still being placed".  It is a separate
+        # answer from the rotation path -- a general homography with shear and
+        # scale, for the surface a person has pointed at (see planar.py).
+        self.planar_quad = []
+        self.planar_active = False
+        # Horizontal-evidence region: a vertical strip (x0, x1) in ANALYSIS-
+        # image pixels, or None.  In a corner view the two facades have two
+        # horizontal vanishing points and the estimator takes whichever has
+        # more support -- not necessarily the facade you mean to straighten.
+        # The strip says "the yaw comes from the horizontals in here"; the
+        # verticals stay global on purpose, because both facades share the
+        # world-vertical VP and restricting them would only burn evidence.
+        self.roi_x = None
         self.refit()
 
     # -- detection -------------------------------------------------------
@@ -159,9 +176,17 @@ class ReviewSession:
             settings = settings.replace(min_vertical_lines=2)
         else:
             vert = self.vert.subset(self.enabled)
+        horiz = self.horiz
+        if self.roi_x is not None:
+            keep = L.in_xband(self.horiz.seg, *self.roi_x)
+            if keep.any():
+                horiz = self.horiz.subset(keep)
+            # else: the strip holds no horizontal evidence; fall back to the
+            # full frame rather than fitting nothing -- a selection that
+            # selects nothing must not silently zero the yaw
         exif_px = IO.focal_px_from_exif(self.src, self.w, self.h) \
             if self.settings.use_exif_focal else None
-        m = M.estimate(vert, self.horiz, gw, gh, settings,
+        m = M.estimate(vert, horiz, gw, gh, settings,
                        exif_px * self.scale if exif_px else None)
         if m.f:
             m.f = m.f / self.scale
@@ -175,17 +200,20 @@ class ReviewSession:
         m.vert_inliers = full
         self.model = m
         if self.mode == AUTO:
-            self.manual_roll, self.manual_pitch = m.roll, m.pitch
+            self.manual_roll, self.manual_pitch, self.manual_yaw = m.roll, m.pitch, m.yaw
             self.manual_focal_35mm = M.focal_35mm_from_px(m.f, self.w, self.h) if m.f else 0.0
         return m
 
     # -- manual controls -------------------------------------------------
-    def set_manual(self, roll_deg=None, pitch_deg=None, focal_35mm=None):
+    def set_manual(self, roll_deg=None, pitch_deg=None, yaw_deg=None,
+                   focal_35mm=None):
         self.mode = MANUAL
         if roll_deg is not None:
             self.manual_roll = math.radians(roll_deg)
         if pitch_deg is not None:
             self.manual_pitch = math.radians(pitch_deg)
+        if yaw_deg is not None:
+            self.manual_yaw = math.radians(yaw_deg)
         if focal_35mm is not None:
             self.manual_focal_35mm = float(focal_35mm)
 
@@ -200,7 +228,8 @@ class ReviewSession:
         """
         self.mode = AUTO
         if self.model is not None:
-            self.manual_roll, self.manual_pitch = self.model.roll, self.model.pitch
+            self.manual_roll, self.manual_pitch, self.manual_yaw = (
+                self.model.roll, self.model.pitch, self.model.yaw)
             self.manual_focal_35mm = (M.focal_35mm_from_px(self.model.f, self.w, self.h)
                                       if self.model.f else 0.0)
         return self.model
@@ -210,6 +239,7 @@ class ReviewSession:
         self.enabled[:] = True
         self.control_lines = np.zeros((0, 4))
         self._crop_edges = {k: (False, 0.0) for k in self._crop_edges}
+        self.roi_x = None
         self.refit()
 
     @property
@@ -290,9 +320,10 @@ class ReviewSession:
         -- an uncorrected photograph, or one the plan already cropped.
         """
         roll, pitch, f, _ = self.current_angles()
-        if abs(roll) < 1e-9 and abs(pitch) < 1e-9:
+        yaw = self.current_yaw()
+        if abs(roll) < 1e-9 and abs(pitch) < 1e-9 and abs(yaw) < 1e-9:
             return False
-        H = W.build(self.w, self.h, f, roll, pitch)
+        H = W.build(self.w, self.h, f, roll, pitch, yaw)
         planned = W.plan(self.w, self.h, H, self.settings)
         if planned is None:
             return False
@@ -511,9 +542,24 @@ class ReviewSession:
             return 0.0, 0.0, M.focal_px_from_35mm(self.settings.default_focal_35mm,
                                                   self.w, self.h), False
         guessed = self.model.f_source in ("default", "prior", "none", "refined")
-        roll, pitch, clamped = W.limit(self.model.roll, self.model.pitch,
-                                       self.settings, guessed)
+        roll, pitch, _yaw, clamped = W.limit(self.model.roll, self.model.pitch,
+                                             self.settings,
+                                             focal_is_a_guess=guessed)
         return roll, pitch, self.model.f, clamped
+
+    def current_yaw(self):
+        """Yaw in radians actually in force, 0 when horizontal correction is off.
+
+        In manual mode this is the slider value as-is, exactly like roll and
+        pitch; in auto mode it is the model's yaw through the same limits,
+        which is where ``correct_horizontal`` gates it to zero."""
+        if self.mode == MANUAL:
+            return self.manual_yaw
+        if self.model is None or not self.model.f:
+            return 0.0
+        guessed = self.model.f_source in ("default", "prior", "none", "refined")
+        return W.limit(self.model.roll, self.model.pitch, self.settings,
+                       yaw=self.model.yaw, focal_is_a_guess=guessed)[2]
 
     def would_skip(self):
         """``None`` if the image would be corrected, else the reason it would not.
@@ -536,7 +582,8 @@ class ReviewSession:
                     f" (conf={self.model.confidence:.2f}" +
                     (f"; weakest: {weakest})" if weakest else ")"))
         roll, pitch, _, _ = self.current_angles()
-        if math.degrees(math.hypot(roll, pitch)) < self.settings.min_correction_deg:
+        yaw = self.current_yaw()
+        if math.degrees(math.hypot(roll, pitch, yaw)) < self.settings.min_correction_deg:
             return "already upright"
         return None
 
@@ -583,8 +630,9 @@ class ReviewSession:
         part instead keeps one coordinate system for the whole session.
         """
         roll, pitch, f, _ = self.current_angles()
+        yaw = self.current_yaw()
         crop = self._apply_crop if apply_crop else (lambda img: img)
-        if abs(roll) < 1e-9 and abs(pitch) < 1e-9:
+        if abs(roll) < 1e-9 and abs(pitch) < 1e-9 and abs(yaw) < 1e-9:
             return _fit(crop(self.bgr), max_edge)
         # render the preview from a reduced copy: a 24 MP warp per slider tick
         # is unusable, and the geometry is scale invariant apart from f
@@ -592,7 +640,7 @@ class ReviewSession:
         small = cv2.resize(self.bgr, (max(1, int(self.w * s)), max(1, int(self.h * s))),
                            interpolation=cv2.INTER_AREA) if s < 1.0 else self.bgr
         sh, sw = small.shape[:2]
-        H = W.build(sw, sh, f * s, roll, pitch)
+        H = W.build(sw, sh, f * s, roll, pitch, yaw)
         planned = W.plan(sw, sh, H, self.settings)
         if planned is None:
             return _fit(self.bgr, max_edge)
@@ -655,7 +703,9 @@ class ReviewSession:
             mask_note = f"mask: {self.settings.mask_mode} produced nothing"
         conf_note = (f"conf={conf:.2f}" if not self.control_active
                      else "conf=n/a (you stated the verticals)")
-        parts = [f"{head}  roll={math.degrees(roll):+.2f}deg  pitch={math.degrees(pitch):+.2f}deg",
+        yaw_note = (f"  yaw={math.degrees(self.current_yaw()):+.2f}deg"
+                    if abs(self.current_yaw()) > 1e-9 else "")
+        parts = [f"{head}  roll={math.degrees(roll):+.2f}deg  pitch={math.degrees(pitch):+.2f}deg{yaw_note}",
                  f"f={f35:.0f}mm ({src if self.mode == AUTO else 'manual'})  {conf_note}  "
                  f"lines={int(self.enabled.sum())}/{len(self.vert)}"]
         parts.append(mask_note)
@@ -681,6 +731,11 @@ class ReviewSession:
             if fill_mode not in ("", "none"):
                 parts.append("fill and crop are two answers to the same band; "
                              "the crop discards what the fill invents")
+        if self.roi_x is not None:
+            n_in = int(L.in_xband(self.horiz.seg, *self.roi_x).sum())
+            parts.append(f"region: horizontal evidence restricted to the "
+                         f"selected strip ({n_in} of {len(self.horiz)} lines) -- "
+                         f"the yaw is taken from that facade only")
         if clamped:
             parts.append("correction hit the configured limit")
         if skip:
@@ -688,19 +743,108 @@ class ReviewSession:
         return "\n".join(parts)
 
     # -- output ----------------------------------------------------------
+    # -- horizontal-evidence region (x-band) -----------------------------
+    def set_roi_x(self, x0, x1, display_scale: float = 1.0) -> bool:
+        """Restrict the *horizontal* line evidence to a vertical strip.
+
+        ``x0``/``x1`` are displayed-image pixels; the band is stored in
+        analysis-image coordinates (like the control lines).  A strip narrower
+        than 5 % of the frame is refused -- a mis-drag that selects almost
+        nothing should not pass as a deliberate choice."""
+        inv = self.scale / max(display_scale, 1e-9)
+        gh, gw = self.gray.shape[:2]
+        ax0, ax1 = sorted((float(x0) * inv, float(x1) * inv))
+        ax0, ax1 = max(0.0, ax0), min(float(gw), ax1)
+        if (ax1 - ax0) < 0.05 * gw:
+            return False
+        self.roi_x = (ax0, ax1)
+        self.refit()
+        return True
+
+    def clear_roi_x(self) -> bool:
+        had = self.roi_x is not None
+        self.roi_x = None
+        if had:
+            self.refit()
+        return had
+
+    # -- planar (four-point) correction ---------------------------------
+    def set_planar_point(self, i: int, x: float, y: float) -> None:
+        """Place or move corner ``i`` of the quad (full-resolution pixels)."""
+        while len(self.planar_quad) <= i:
+            self.planar_quad.append((0.0, 0.0))
+        self.planar_quad[i] = (float(x), float(y))
+
+    def pick_planar_corner(self, x: float, y: float, display_scale: float):
+        """Index of the corner under a full-resolution point, or None.
+
+        The radius is a constant number of *screen* pixels, so the target size
+        does not depend on how far the photograph is zoomed."""
+        r = 14.0 / max(display_scale, 1e-9)
+        for i, (px, py) in enumerate(self.planar_quad):
+            if math.hypot(px - x, py - y) <= r:
+                return i
+        return None
+
+    def clear_planar(self) -> None:
+        self.planar_quad = []
+
+    def planar_homography(self):
+        """``(H, w, h)`` for the current quad, or None until four corners exist.
+
+        Raises on a degenerate quad rather than returning a homography that
+        would flatten the photograph into a sliver."""
+        if len(self.planar_quad) < 4:
+            return None
+        return P.transform_for(np.array(self.planar_quad))
+
+    def planar_rectified(self, max_edge=None):
+        """The rectified frame from the four corners.
+
+        ``max_edge`` renders from a reduced copy -- a full-resolution warp per
+        corner drag is unusable on a 24 MP frame, and the homography scales
+        with the image, so warping small and calling it a preview is exact up
+        to the preview's own resolution.  Saving passes nothing and gets the
+        full-size result."""
+        t = self.planar_homography()
+        if t is None:
+            return None
+        H, w, h = t
+        if max_edge and max(w, h) > max_edge:
+            s = float(max_edge) / max(w, h)
+            M = np.array([[s, 0.0, 0.0], [0.0, s, 0.0], [0.0, 0.0, 1.0]])
+            img = cv2.resize(self.bgr,
+                             (max(1, int(self.w * s)), max(1, int(self.h * s))),
+                             interpolation=cv2.INTER_AREA)
+            return cv2.warpPerspective(img, H @ M,
+                                       (max(1, int(w * s)), max(1, int(h * s))))
+        return cv2.warpPerspective(self.bgr, H, (w, h))
+
+    def save_planar(self, dst_path: str) -> str:
+        """Write the rectified view.  No fill band exists to fill: the output
+        is exactly the warped quad."""
+        out = self.planar_rectified()
+        if out is None:
+            raise ValueError("planar correction needs four corners")
+        os.makedirs(os.path.dirname(os.path.abspath(dst_path)) or ".", exist_ok=True)
+        IO.save(dst_path, out, self.src, self.settings)
+        return dst_path
+
     def save(self, dst_path: str):
         """Write the corrected image using whatever is currently in force."""
         roll, pitch, f, _ = self.current_angles()
-        if abs(roll) < 1e-12 and abs(pitch) < 1e-12 and self.crop_rect is None:
+        yaw = self.current_yaw()
+        if (abs(roll) < 1e-12 and abs(pitch) < 1e-12 and abs(yaw) < 1e-12
+                and self.crop_rect is None):
             IO.copy_through(self.path, dst_path)
             return dst_path
-        if abs(roll) < 1e-12 and abs(pitch) < 1e-12:
+        if abs(roll) < 1e-12 and abs(pitch) < 1e-12 and abs(yaw) < 1e-12:
             # nothing to straighten, but the user cropped by hand
             out = self._apply_crop(self.bgr)
             os.makedirs(os.path.dirname(os.path.abspath(dst_path)) or ".", exist_ok=True)
             IO.save(dst_path, out, self.src, self.settings)
             return dst_path
-        H = W.build(self.w, self.h, f, roll, pitch)
+        H = W.build(self.w, self.h, f, roll, pitch, yaw)
         planned = W.plan(self.w, self.h, H, self.settings)
         if planned is None:
             IO.copy_through(self.path, dst_path)

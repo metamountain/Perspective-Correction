@@ -18,9 +18,9 @@ OK, SKIPPED, ERROR = "OK", "SKIPPED", "ERROR"
 
 class Result:
     __slots__ = ("status", "reason", "src", "dst", "roll_deg", "pitch_deg",
-                 "confidence", "focal_35mm", "focal_source", "coverage",
-                 "n_lines", "n_inliers", "seconds", "detector", "clamped",
-                 "out_size", "diagnostics", "fill")
+                 "yaw_deg", "confidence", "focal_35mm", "focal_source",
+                 "coverage", "n_lines", "n_inliers", "seconds", "detector",
+                 "clamped", "out_size", "diagnostics", "fill", "roi_x")
 
     def __init__(self, **kw):
         for k in self.__slots__:
@@ -39,11 +39,14 @@ class Result:
         elif d.get("mask_note"):
             mask = (f" mask={d.get('mask_share', 0.0) * 100:.0f}%"
                     f"(-{d.get('evidence_lost', 0.0) * 100:.0f}% lines)")
-        return (f"OK      {name}  roll={self.roll_deg:+.2f}deg pitch={self.pitch_deg:+.2f}deg "
+        yaw = (f" yaw={self.yaw_deg:+.2f}deg" if abs(self.yaw_deg or 0.0) > 1e-9 else "")
+        roi = (f" roi=x[{self.roi_x[0]:.0f}-{self.roi_x[1]:.0f}]"
+               if self.roi_x else "")
+        return (f"OK      {name}  roll={self.roll_deg:+.2f}deg pitch={self.pitch_deg:+.2f}deg{yaw} "
                 f"conf={self.confidence:.2f} f={self.focal_35mm:.0f}mm({self.focal_source}) "
                 f"keep={self.coverage * 100:.0f}%{mask} {self.out_size[0]}x{self.out_size[1]} "
                 f"{self.seconds:.2f}s" + (f"  [{self.fill}]" if self.fill else "")
-                + ("  [clamped]" if self.clamped else ""))
+                + ("  [clamped]" if self.clamped else "") + roi)
 
     def as_dict(self):
         return {k: getattr(self, k) for k in self.__slots__ if k != "diagnostics"}
@@ -57,13 +60,21 @@ def _match_scale(bgr, gray):
     return cv2.resize(bgr, (gray.shape[1], gray.shape[0]), interpolation=cv2.INTER_AREA)
 
 
-def analyse(bgr, settings, exif_focal_px=None, image_path=""):
+def analyse(bgr, settings, exif_focal_px=None, image_path="", roi_x=None):
     """Detection + model for an already loaded image.  Returns
     ``(model, vert, horiz, scale, detector)`` with the focal length in
-    full-resolution pixels."""
+    full-resolution pixels.
+
+    ``roi_x`` is a vertical strip ``(x0, x1)`` in FULL-resolution pixels that
+    restricts the horizontal evidence to one facade (corner views); verticals
+    stay global.  A strip holding no horizontals falls back to the full frame."""
     gray, scale = io.analysis_gray(bgr, settings.detect_max_edge)
     small = _match_scale(bgr, gray)
     _, vert, horiz, detector, info = L.prepare(gray, settings, small, image_path)
+    if roi_x is not None:
+        keep = L.in_xband(horiz.seg, roi_x[0] * scale, roi_x[1] * scale)
+        if keep.any():
+            horiz = horiz.subset(keep)
     gh, gw = gray.shape[:2]
     exif_small = exif_focal_px * scale if exif_focal_px else None
     m = M.estimate(vert, horiz, gw, gh, settings, exif_small)
@@ -73,12 +84,14 @@ def analyse(bgr, settings, exif_focal_px=None, image_path=""):
     return m, vert, horiz, scale, detector
 
 
-def process(src_path, dst_path, settings, debug_dir=None, dry_run=False):
+def process(src_path, dst_path, settings, debug_dir=None, dry_run=False,
+            roi_x=None):
     t0 = time.time()
     base = dict(src=src_path, dst=dst_path, roll_deg=0.0, pitch_deg=0.0,
-                confidence=0.0, focal_35mm=0.0, focal_source="none", coverage=1.0,
-                n_lines=0, n_inliers=0, detector="-", clamped=False,
-                out_size=(0, 0), diagnostics={})
+                yaw_deg=0.0, confidence=0.0, focal_35mm=0.0, focal_source="none",
+                coverage=1.0, n_lines=0, n_inliers=0, detector="-", clamped=False,
+                out_size=(0, 0), diagnostics={},
+                roi_x=tuple(float(v) for v in roi_x) if roi_x else None)
     try:
         src = io.load(src_path)
     except Exception as exc:
@@ -90,7 +103,8 @@ def process(src_path, dst_path, settings, debug_dir=None, dry_run=False):
     base["out_size"] = (w, h)
     try:
         exif_f = io.focal_px_from_exif(src, w, h) if settings.use_exif_focal else None
-        m, vert, horiz, scale, detector = analyse(bgr, settings, exif_f, src_path)
+        m, vert, horiz, scale, detector = analyse(bgr, settings, exif_f, src_path,
+                                                  roi_x=base["roi_x"])
         info = m.detect_info
     except Exception as exc:
         return Result(status=ERROR, reason=f"analysis failed ({exc})",
@@ -127,7 +141,12 @@ def process(src_path, dst_path, settings, debug_dir=None, dry_run=False):
                            f"{settings.min_confidence:.2f}{detail})")
 
     guessed = m.f_source in ("default", "prior", "none", "refined")
-    roll, pitch, clamped = W.limit(m.roll, m.pitch, settings, guessed)
+    # The model's yaw must go through the same limits as roll and pitch --
+    # without it every batch run warped with zero horizontal correction, no
+    # matter what --horizontal said: the estimate existed, the refusal message
+    # even quoted it, and the warp silently dropped it.
+    roll, pitch, yaw, clamped = W.limit(m.roll, m.pitch, settings,
+                                        yaw=m.yaw, focal_is_a_guess=guessed)
     base["clamped"] = clamped
     if clamped and settings.refuse_beyond_limit:
         # A correction that runs past the configured limit is not a correction
@@ -146,19 +165,28 @@ def process(src_path, dst_path, settings, debug_dir=None, dry_run=False):
         # report the values that actually breached -- after strength and the
         # uncertain-focal damping -- not the raw estimate, or the numbers will
         # not explain the decision they caused
-        want_r, want_p = W.limit(m.roll, m.pitch, settings.replace(
-            max_roll_deg=1e6, max_pitch_deg=1e6), guessed)[:2]
+        want_r, want_p, want_y = W.limit(m.roll, m.pitch, settings.replace(
+            max_roll_deg=1e6, max_pitch_deg=1e6, max_horizontal_deg=1e6),
+            yaw=m.yaw, focal_is_a_guess=guessed)[:3]
+        # report the horizontal angle only when the feature is on, so a default
+        # run's refusal message is byte-identical to before the yaw existed
+        yaw_part = (f", yaw {math.degrees(want_y):+.1f}deg"
+                    if settings.correct_horizontal else "")
+        cap_part = (f"/{settings.max_horizontal_deg:.0f}"
+                    if settings.correct_horizontal else "")
         return finish_skip(
             f"correction beyond the limit (roll {math.degrees(want_r):+.1f}deg, "
-            f"pitch {math.degrees(want_p):+.1f}deg; caps are "
-            f"{settings.max_roll_deg:.0f}/{settings.max_pitch_deg:.0f}deg)")
-    total_deg = math.degrees(math.hypot(roll, pitch))
-    base.update(roll_deg=math.degrees(roll), pitch_deg=math.degrees(pitch))
+            f"pitch {math.degrees(want_p):+.1f}deg{yaw_part}; caps are "
+            f"{settings.max_roll_deg:.0f}/{settings.max_pitch_deg:.0f}{cap_part}deg)")
+    # yaw is 0.0 when the feature is off, so this is hypot(roll, pitch) then
+    total_deg = math.degrees(math.sqrt(roll * roll + pitch * pitch + yaw * yaw))
+    base.update(roll_deg=math.degrees(roll), pitch_deg=math.degrees(pitch),
+                yaw_deg=math.degrees(yaw))
     if total_deg < settings.min_correction_deg:
         return finish_skip(f"already upright ({total_deg:.2f}deg < "
                            f"{settings.min_correction_deg:.2f}deg)")
 
-    H = W.build(w, h, m.f, roll, pitch)
+    H = W.build(w, h, m.f, roll, pitch, yaw)
     planned = W.plan(w, h, H, settings)
     if planned is None:
         return finish_skip("crop would be degenerate")
@@ -194,7 +222,8 @@ def process(src_path, dst_path, settings, debug_dir=None, dry_run=False):
 
 
 def _label(base, total_deg):
-    return (f"OK  roll={base['roll_deg']:+.2f} pitch={base['pitch_deg']:+.2f} "
+    yaw = (f" yaw={base['yaw_deg']:+.2f}" if abs(base.get("yaw_deg", 0.0)) > 1e-9 else "")
+    return (f"OK  roll={base['roll_deg']:+.2f} pitch={base['pitch_deg']:+.2f}{yaw} "
             f"(total {total_deg:.2f}deg)\nconf={base['confidence']:.2f}  "
             f"f={base['focal_35mm']:.0f}mm ({base['focal_source']})  "
             f"lines={base['n_inliers']}/{base['n_lines']}")
