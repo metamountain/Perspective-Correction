@@ -344,13 +344,30 @@ class ReviewPanel(tk.Frame):
         self._busy = False
         self._before_scale = 1.0
         self._redraw_tries = 0
+        # Re-assert the review/results split whenever this pane's size changes.
+        # Loading a photograph grows the cross, which makes the paned window
+        # redistribute the sash -- but its own height does not change, so no
+        # <Configure> fires on the paned to pull it back.  This pane's resize
+        # does fire here; `_apply_sash` only moves when off by >2px, so this
+        # settles after one pass.
+        self.bind("<Configure>", self._on_review_configure)
         self._show_hint()
 
+    def _on_review_configure(self, _event=None):
+        app = self._app()
+        if app is not None:
+            app.after_idle(app._apply_sash)
+
     def _show_hint(self):
+        # The cross is shown from the first frame, not after the first load:
+        # two empty image slots and both control columns, so the window has one
+        # shape whether or not a photograph is in it.  A default Settings gives
+        # the controls their values; `load` rebuilds with the real ones.
         for w in self.container.winfo_children():
             w.destroy()
-        ttk.Label(self.container, style="Dim.TLabel",
-                  text="double-click a photograph to review it here").pack(expand=True)
+        self.session = None
+        self.settings = Settings()
+        self._build()
 
     def load(self, path, settings, dest_path, overwrite=False, on_saved=None,
              on_closed=None, position=""):
@@ -458,6 +475,12 @@ class ReviewPanel(tk.Frame):
         self.c_after.bind("<ButtonRelease-1>", self._on_crop_release)
         for c in (self.c_before, self.c_after):
             c.bind("<Configure>", lambda e: self._schedule_redraw())
+        # The before slot is a drop target too, so a file can land on the picture
+        # area as well as the strip above it.  Guarded: under a test root there
+        # is no batch window to receive the drop.
+        if HAVE_DND and self._app() is not None:
+            self.c_before.drop_target_register(DND_FILES)
+            self.c_before.dnd_bind("<<Drop>>", self._app()._on_drop)
 
         hint = ttk.Label(top, style="Dim.TLabel",
                          text="click a line in the left image to strike it out, "
@@ -584,7 +607,7 @@ class ReviewPanel(tk.Frame):
 
         fill_row = ttk.Frame(rightcol, padding=(0, 8, 0, 0))
         fill_row.pack(fill="x")
-        self.v_fill = tk.StringVar(value=self.session.settings.fill or "none")
+        self.v_fill = tk.StringVar(value=self._cfg().fill or "none")
         ttk.Label(fill_row, text="fill band", width=18).grid(row=0, column=0, sticky="w")
         fbox = ttk.Combobox(fill_row, textvariable=self.v_fill, width=11,
                             state="readonly", values=["none", "telea", "lama", "comfyui"])
@@ -820,6 +843,14 @@ class ReviewPanel(tk.Frame):
         app = self.master
         return app if hasattr(app, "_open_comfy") else None
 
+    def _cfg(self):
+        """The settings in force, whether or not a session is loaded yet.
+
+        The cross is built at construction time with no session, so any read of
+        ``self.session.settings`` during that build would raise; this falls back
+        to the panel's own copy, which `_show_hint` sets to a default."""
+        return self.session.settings if self.session is not None else self.settings
+
     def _register_comfy(self):
         """Listen for the App's verdict rather than polling for it.
 
@@ -830,7 +861,9 @@ class ReviewPanel(tk.Frame):
         than none.
         """
         app = self._app()
-        if app is None:
+        # The cross is built at construction time, before the batch window has
+        # finished wiring its ComfyUI state; `load` rebuilds and registers then.
+        if app is None or not hasattr(app, "_comfy_listeners"):
             return
         # Idempotent: `load` rebuilds the widgets, and a second registration
         # would deliver every state change twice.
@@ -915,7 +948,7 @@ class ReviewPanel(tk.Frame):
     def _sync_pad_swatch(self):
         """The swatch must report what ``pad`` actually is.  It defaults to
         ``edge``, which is not a colour, so a black square would be a lie."""
-        pad = self.session.settings.pad
+        pad = self._cfg().pad
         if pad.startswith("#"):
             self.lbl_pad_colour.configure(bg=pad, text="")
         else:
@@ -1215,6 +1248,14 @@ class ReviewPanel(tk.Frame):
                                           width=1, tags=tag)
 
     def _on_click_before(self, event):
+        # Empty cross: the before slot doubles as the pick target.  Returning
+        # "break" stops this handler chain -- with no session there is nothing
+        # else to click, and `_before_off` was never laid out.
+        if self.session is None:
+            app = self._app()
+            if app is not None:
+                app._add_files()
+            return "break"
         x = event.x - self._before_off[0]
         y = event.y - self._before_off[1]
         if getattr(self, "v_planar", None) is not None and self.v_planar.get():
@@ -1269,8 +1310,29 @@ class ReviewPanel(tk.Frame):
         self._busy = True
         self.after(60, self._redraw)
 
+    def _draw_empty(self):
+        """The startup cross has no session: show a drop prompt, draw nothing
+        else.  Runs instead of the real render so an empty canvas never reaches
+        `self.session.*` and spams the error log on every <Configure>."""
+        if not hasattr(self, "c_before"):
+            return
+        for c in (self.c_before, self.c_after):
+            if not c.winfo_ismapped():
+                return
+            c.delete("all")
+        b = (self.c_before.winfo_width(), self.c_before.winfo_height())
+        if min(b) >= 20:
+            self.c_before.create_text(
+                b[0] // 2, b[1] // 2, anchor="center",
+                text="Drop a photograph here\nor click the + to pick one",
+                fill=INK["dim"], font=("Segoe UI", 13))
+        self._set_status("no photograph loaded")
+
     def _redraw(self):
         self._busy = False
+        if self.session is None:
+            self._draw_empty()
+            return
         try:
             box_b = (self.c_before.winfo_width(), self.c_before.winfo_height())
             box_a = (self.c_after.winfo_width(), self.c_after.winfo_height())
@@ -1564,13 +1626,27 @@ class App(_ROOT_CLASS):
         self.v_output = tk.StringVar()
         self.items = []                       # files and/or folders, in order
 
+        # "+" icon, top-left: the primary add trigger -- images or folder.  A
+        # menu rather than two buttons keeps the corner to one glyph.
+        self.add_btn = tk.Button(top, text="+", font=("Segoe UI", 16, "bold"),
+                                 width=2, relief="flat", bd=0,
+                                 background=INK["field"], foreground=INK["accent"],
+                                 activebackground=INK["line"],
+                                 activeforeground=INK["text"], cursor="hand2")
+        self.add_btn.grid(row=0, column=0, sticky="w", **pad)
+        self._add_menu = tk.Menu(self.add_btn, tearoff=0)
+        self._add_menu.add_command(label="Add images…", command=self._add_files)
+        self._add_menu.add_command(label="Add folder…", command=self._add_folder)
+        self.add_btn.bind("<Button-1>",
+                          lambda e: self._add_menu.tk_popup(e.x_root, e.y_root))
+
         hint = ("Drop photographs or a folder"
                 if HAVE_DND else
                 "Click to add photographs or a folder")
         self.drop = tk.Label(top, text=hint, borderwidth=0, height=2,
                              background=INK["field"], foreground=INK["dim"],
                              cursor="hand2")
-        self.drop.grid(row=0, column=0, columnspan=3, sticky="ew", **pad)
+        self.drop.grid(row=0, column=1, columnspan=2, sticky="ew", **pad)
         # one drop, one photograph, straight into it -- see _add
         self.drop.bind("<Enter>", lambda e: self.drop.configure(foreground=INK["accent"]))
         self.drop.bind("<Leave>", lambda e: self.drop.configure(foreground=INK["dim"]))
@@ -1581,8 +1657,6 @@ class App(_ROOT_CLASS):
 
         row = ttk.Frame(top)
         row.grid(row=1, column=0, columnspan=3, sticky="ew", **pad)
-        ttk.Button(row, text="Images", command=self._add_files).pack(side="left")
-        ttk.Button(row, text="Folder", command=self._add_folder).pack(side="left", padx=6)
         ttk.Button(row, text="Remove", command=self._remove_selected).pack(side="left")
         ttk.Button(row, text="Clear", command=self._clear).pack(side="left", padx=6)
         self.lbl_items = ttk.Label(row, text="nothing yet", style="Dim.TLabel")
