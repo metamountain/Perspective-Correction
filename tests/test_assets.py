@@ -97,9 +97,21 @@ def test_manual_review_opens_on_every_asset():
         assert s.would_skip() is None
 
 
+_LOAD_CACHE = {}
+
+
 def _load(path):
+    """Decode ``path`` once per file and hand out a fresh copy each time.
+
+    The copy is the point: callers keep exactly today's contract -- an array
+    they own and may mutate -- while the decode (PIL open, EXIF transpose,
+    colour conversion) happens only once per asset instead of once per test.
+    """
     from bpc.imageio import load
-    return load(path).bgr
+    arr = _LOAD_CACHE.get((path,))
+    if arr is None:
+        arr = _LOAD_CACHE[(path,)] = load(path).bgr
+    return arr.copy()
 
 
 def known_focal_35mm(path):
@@ -135,6 +147,9 @@ _DELTAS = [(2.0, 0.0), (-3.0, 0.0), (0.0, 4.0), (0.0, -5.0), (2.5, 3.5), (-1.5, 
 _BORDER_GUARD = 0.08
 
 
+_RT_CACHE = {}
+
+
 def _round_trip_error(path, focal_35mm=24.0, edge=1600, inner=_BORDER_GUARD):
     """Real error in degrees, without knowing the true camera pose.
 
@@ -167,7 +182,17 @@ def _round_trip_error(path, focal_35mm=24.0, edge=1600, inner=_BORDER_GUARD):
 
     Across the assets, as shipped vs. guarded: mean 1.71 -> **0.66 deg**, worst
     6.08 -> **1.68**.
+
+    The result is memoized on the *full* argument tuple. Two of the tests below
+    sweep every asset with identical defaults, so without this the second sweep
+    recomputes ~1.2 s per photograph for nothing. ``inner`` must stay in the
+    key: ``test_the_border_guard_is_what_makes_the_measurement_honest`` calls
+    the same file once guarded and once with ``inner=0.0`` and relies on the
+    two values differing -- a path-only cache would silently break it.
     """
+    key = (path, focal_35mm, edge, inner)
+    if key in _RT_CACHE:
+        return _RT_CACHE[key]
     import cv2
     import numpy as np
     from bpc import geometry as G
@@ -184,6 +209,7 @@ def _round_trip_error(path, focal_35mm=24.0, edge=1600, inner=_BORDER_GUARD):
     st = Settings().replace(focal_35mm=focal_35mm)
     m0, _, _, _, _ = analyse(full[m:fh - m, m:fw - m], st)
     if m0.f is None:
+        _RT_CACHE[key] = None
         return None
     # K describes the *uncropped* frame, because that is what is being rotated
     K = G.intrinsics(M.focal_px_from_35mm(focal_35mm, fw, fh), fw / 2.0, fh / 2.0)
@@ -200,7 +226,9 @@ def _round_trip_error(path, focal_35mm=24.0, edge=1600, inner=_BORDER_GUARD):
         expect /= np.linalg.norm(expect)
         got = m1.up / np.linalg.norm(m1.up)
         errs.append(math.degrees(math.acos(min(1.0, abs(float(got @ expect))))))
-    return float(np.mean(errs)) if errs else None
+    result = float(np.mean(errs)) if errs else None
+    _RT_CACHE[key] = result
+    return result
 
 
 def test_a_known_rotation_is_recovered_on_real_photographs():

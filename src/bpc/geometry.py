@@ -132,6 +132,11 @@ def rot_z(a: float) -> np.ndarray:
     return np.array([[c, -s, 0], [s, c, 0], [0, 0, 1]])
 
 
+def rot_y(a: float) -> np.ndarray:
+    c, s = np.cos(a), np.sin(a)
+    return np.array([[c, 0, s], [0, 1, 0], [-s, 0, c]])
+
+
 def up_vector(vp: np.ndarray, K: np.ndarray) -> np.ndarray:
     """World-vertical direction in camera coordinates, as a unit vector that
     points *up* in the image."""
@@ -164,14 +169,24 @@ def up_from_roll_pitch(roll: float, pitch: float) -> np.ndarray:
     return rot_z(roll) @ rot_x(-pitch) @ UP
 
 
-def correction_rotation(roll: float, pitch: float) -> np.ndarray:
-    """Rotation that removes ``roll`` then ``pitch``.
+def correction_rotation(roll: float, pitch: float, yaw: float = 0.0) -> np.ndarray:
+    """Rotation that removes ``roll``, then ``pitch``, then ``yaw``.
 
-    ``correction_rotation(*roll_pitch_from_up(u)) @ u == (0, -1, 0)``.  It has
-    no yaw component, which is exactly the requirement "straighten the verticals
-    without needlessly changing the horizontal perspective".
+    For the world vertical ``u`` that produced ``(roll, pitch)``,
+    ``correction_rotation(roll, pitch, yaw) @ u == (0, -1, 0)`` for any ``yaw``:
+    a yaw is a rotation about the world vertical and leaves it fixed, which is
+    why ``(roll, pitch)`` can be read off ``u`` alone and yaw has to come from a
+    horizontal vanishing point instead.  With ``yaw`` chosen from that point the
+    same rotation also sends the dominant horizontal direction onto the image
+    x-axis -- the facade becomes fronto-parallel.
+
+    The default ``yaw == 0`` is exactly the old two-angle rotation, which has no
+    yaw component and so "straightens the verticals without needlessly changing
+    the horizontal perspective".  Yaw is the one case where changing the
+    horizontal perspective is the point; it is gated and capped in
+    ``warp.limit``, not here.
     """
-    return rot_x(pitch) @ rot_z(-roll)
+    return rot_y(-yaw) @ rot_x(pitch) @ rot_z(-roll)
 
 
 def homography(K: np.ndarray, R: np.ndarray) -> np.ndarray:

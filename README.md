@@ -16,11 +16,30 @@ taken from either.
 
 ## Install
 
-    pip install -r requirements.txt
+    pip install -r requirements.txt        run it from this folder
+    pip install -e .                       or install it, and get the `bpc` command
 
-Python 3.9+. numpy, OpenCV, Pillow, piexif. The GUI additionally needs Tkinter,
-which ships with the python.org Windows installer (`apt install python3-tk` on
-Debian/Ubuntu). The CLI works without it.
+Python 3.9+. numpy, OpenCV, Pillow, piexif -- and nothing else. The GUI
+additionally needs Tkinter, which ships with the python.org Windows installer
+(`apt install python3-tk` on Debian/Ubuntu). The CLI works without it.
+
+Everything beyond that is optional, imported lazily, and reports what is missing
+instead of failing at import. **`python rectify.py --doctor` says what is
+present** before any file is touched:
+
+    pip install -e ".[gui]"        drag-and-drop onto the batch window
+    pip install -e ".[mlsd]"       the M-LSD detector (the model is vendored)
+    pip install -e ".[deeplsd]"    the DeepLSD detector (also wants a checkout and 98 MB of weights)
+
+Two backends are deliberately **not** extras, because installing them the
+ordinary way damages the install:
+
+    pip install --no-deps simple-lama-inpainting     `--fill lama`
+
+Its stale pins downgrade Pillow to 9.5 and numpy to 1.26, and OpenCV in the same
+interpreter then stops importing. `--fill comfyui` needs no package at all --
+only a running ComfyUI and an API-format workflow. BiRefNet masking
+(`--mask birefnet`) needs torch and a checkpoint; `--mask-info` finds them.
 
 ## Use
 

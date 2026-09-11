@@ -284,6 +284,21 @@ class LineSet:
         return out
 
 
+def in_xband(seg: np.ndarray, x0: float, x1: float) -> np.ndarray:
+    """Boolean mask: segments whose midpoint lies inside the vertical strip
+    ``[x0, x1]`` (image pixels).
+
+    Used to restrict the *horizontal* evidence to one facade in a corner view.
+    The two facades are separated by the building's vertical edge, so what
+    distinguishes them is where in x, not where in y -- a strip is the right
+    shape, and it cannot clip the top or bottom of the facade you want."""
+    if seg is None or len(seg) == 0:
+        return np.zeros(0, dtype=bool)
+    midx = (seg[:, 0] + seg[:, 2]) / 2.0
+    lo, hi = min(float(x0), float(x1)), max(float(x0), float(x1))
+    return (midx >= lo) & (midx <= hi)
+
+
 def angular_prior(angle: np.ndarray, window: float, softness: float = 0.35) -> np.ndarray:
     """Down-weight lines the further they lean away from the expected axis.
 
