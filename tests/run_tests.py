@@ -33,7 +33,8 @@ MODULES = ["test_geometry", "test_lines", "test_layout", "test_warp", "test_esti
            "test_reference",
            "test_assets",
            "test_gui",
-           "test_deps"]
+           "test_deps",
+           "test_distortion"]
 
 MAX_WORKERS = 8
 

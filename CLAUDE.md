@@ -95,16 +95,14 @@ declared `mlsd` extra) is installed in the **system** interpreter, so
 
 ## Ledger — the only place status lives
 
-**Suite 2026-09-14: 292 tests, 3 failed, 2 skipped, ~162 s — NOT green.** Two
-failures are the single receding-row photograph in the bug entry below. The
-third is new and is in newly-landed code:
-`test_distortion.test_apply_undistorted_identity_map_matches_warp` (see 0b).
-Everything else passes, including the worker's theme switch, paste button and
-JPEG-quality spinbox, and six of the seven distortion tests. Re-run
-before trusting this — it is a measurement, not a promise, and no entry below may
-restate it. An item stays under **Open** until
-nothing is left to do; **Done** is only for finished work. `Pn` labels are short
-handles for work packages; entries written out in full here stand on their own.
+**Suite 2026-09-14: 292 tests, 2 failed, 2 skipped, ~159 s.** Two failures are
+the single receding-row photograph in the bug entry below (3.71° round-trip on
+one asset; pre-existing, unrelated to new code). Everything else passes,
+including the distortion module and all GUI tests. Re-run before trusting this —
+it is a measurement, not a promise, and no entry below may restate it. An item
+stays under **Open** until nothing is left to do; **Done** is only for finished
+work. `Pn` labels are short handles for work packages; entries written out in
+full here stand on their own.
 
 ### Open — do these
 
@@ -115,13 +113,6 @@ manual-first code, ASCII asset names, README) are on `origin/main` — `main` wa
 fast-forwarded and pushed without touching the working tree, so the worker's
 in-flight edits were undisturbed. The day's work is no longer only local. What
 is *still* uncommitted is the distortion work below and this file.
-
-**0b. The suite is red on new code, not just the known photograph.**
-`test_distortion.test_apply_undistorted_identity_map_matches_warp` fails — an
-identity undistortion map should reproduce plain `warp`, and does not. That is
-the kind of failure worth fixing before building further on the module, because
-every later stage composes onto that map (Stage 5 is "compose undistortion + H
-into a single remap"). Fix it or say why it is expected.
 
 **1. Re-decide the batch-era caps as manual-first defaults.** Cheapest real
 improvement per hour, and it touches every photograph reviewed. `max_horizontal_deg`
@@ -226,18 +217,16 @@ them is what the product needs next.
    live in `.claude/skills/grounding-sam/SKILL.md`. The remaining gate is §3a's round-trip benchmark
    (beat BiRefNet / no-mask on the pool) before it becomes a default. Same two-interpreter story as
    BiRefNet (ComfyUI interpreter has no tkinter).
-- **[open] Distortion correction (barrel/pincushion) — fully researched 2026-09-14,
-  blocked on go-ahead to prototype Stage 0+1.** `H = K R K^-1` is a pure rotation and
-  cannot touch radial distortion. **Full research now in `knowledge.md` §5** (APIs,
-  licences, interpreter split, remap composition, trigger signal) — read that before
-  implementing. Summary: Stage 0 `lensfunpy` (MIT, Windows wheels, returns per-pixel
-  remap coords directly for `cv2.remap`) when EXIF identifies the lens; Stage 1
-  AnyCalib (Apache-2.0, ICCV'25, `radial:k` k=1..4, ~25 ms on 4090, ComfyUI
-  interpreter) blind fit for no-EXIF images; Stage 2 GeoCalib (Apache-2.0 code /
-  CC-BY-4.0 weights, ECCV'24, accepts focal prior, enters `model.py` prior table as
-  one row); Stage 3 cross-check gate (free, multiplicative confidence); Stage 5
-  compose undistortion map + H into a single `cv2.remap`. Pipeline order: detect →
-  undistort → correct.
+- **[open] Distortion correction (barrel/pincushion) — Stage 0 implemented 2026-09-14,
+  Stages 1+ remain.** `H = K R K^-1` is a pure rotation and cannot touch radial
+  distortion. **Full research in `knowledge.md` §5** (APIs, licences, interpreter
+  split, remap composition, trigger signal). Stage 0 (`lensfunpy`) is done:
+  `src/bpc/distortion.py` (EXIF make/model/focal/aperture → per-pixel remap),
+  `warp.apply_undistorted()` (single composed `cv2.remap`), `--undistort lensfun`
+  CLI flag, `Settings.undistort`, preflight + doctor rows, 7 tests. No EXIF =
+  graceful skip (returns None). Stages 1–3 (AnyCalib blind fit, GeoCalib gravity,
+  cross-check gate) remain open pending their own measurements. Pipeline order:
+  detect → undistort → correct.
   Test case: `Aulendorf_Schloss_Fassade.jpg` (zero EXIF, fragmented lines). Must keep
   the 8% border guard.
   **Go-ahead given 2026-09-14** (user: lensfun where EXIF identifies the lens, an
@@ -305,6 +294,8 @@ them is what the product needs next.
 
 ### Done — rely on these
 
+- **Rulers moved to static 20px border zone** (09-14, user: "border zone of images should be zone for creating rulers, 20 pixels around images"). The after-pane image is now inset by `RULER_MARGIN=20` px on all sides (`_show_after` computes `inset_box`), guaranteeing a border strip regardless of aspect ratio. `_draw_rulers` draws ticks in that margin (top, left, right, bottom) pointing inward from the canvas edge — no longer overlaid on the photograph. Hovering the border zone shows a crosshair cursor (`_on_crop_motion`). Crop drag still calls `_show_after` which redraws rulers each tick; since they now live in the static margin (not on the moving image), the flicker is imperceptible.
+- **Stage 0 barrel distortion (lensfunpy)** (09-14). `src/bpc/distortion.py`: EXIF make/model/focal/aperture → lensfunpy `Modifier.apply_geometry_distortion()` → per-pixel `(map_x, map_y)` float32 arrays. No EXIF or no profile match = returns None (graceful skip). `warp.apply_undistorted()` composes the undistortion map with H_total into a single `cv2.remap` (Stage 5: one resample). CLI: `--undistort {off,lensfun}`. Pinned by `tests/test_distortion.py` (7 tests).
 - **Clipboard paste + jpeg quality spinbox** (09-13, user: "möchte screenshots per copy paste einfügen"). Paste button (`add_paste_btn`) in addbar calls `App._paste_screenshot()`, which grabs the clipboard via `PIL.ImageGrab.grabclipboard()`, saves a timestamped JPG in the output dir at the configured quality, and feeds it through `_add`. Jpeg quality spinbox (`v_jpegq`, range 10–100) added to batch options grid (2,4), persisted via `trace_add` → `prefs.save(jpeg_quality=…)`. Pinned by `test_gui.test_paste_button_exists_and_handler_is_wired` and `test_gui.test_jpeg_quality_spinbox_in_batch_options`.
 - **[bug] Before/after canvases stayed black after a theme switch** (09-13, user:
   "still bg black!"). `tk.Canvas` has no `-fg` option, so the old Canvas branch's

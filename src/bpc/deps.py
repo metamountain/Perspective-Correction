@@ -140,6 +140,11 @@ def preflight(settings):
             from . import birefnet as BN
             if not BN.available(settings.birefnet_model):
                 errs.append(f"--mask gdino: BiRefNet weights do not load ({settings.birefnet_model})")
+
+    if settings.undistort == "lensfun":
+        from . import distortion as DIST
+        if not DIST.available():
+            errs.append("--undistort lensfun needs lensfunpy (pip install lensfunpy)")
     return errs
 
 
@@ -218,6 +223,9 @@ def doctor() -> int:
                      + ("ready (transformers + Grounding DINO model present)" if gok
                         else "needs transformers (pip install transformers timm einops) "
                              "+ a Grounding DINO model dir"))
+        from . import distortion as DIST
+        dok = DIST.available()
+        lines.append(f"  [{'yes' if dok else 'no ':>3}]  undistort lensfun            {DIST.describe()}")
     else:
         lines += ["", "optional backends: cannot check -- cv2 or numpy missing (see core above)"]
 
