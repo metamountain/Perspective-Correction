@@ -5,7 +5,7 @@ most is ``test_a_bigger_screen_goes_to_the_photograph``: it is the whole reason
 the module exists, and it is the thing a future "let's just use weights again"
 would break.
 """
-from bpc import layout as L
+from pc import layout as L
 
 # width x height, and what they are
 SCREENS = [

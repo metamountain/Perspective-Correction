@@ -6,9 +6,9 @@ import cv2
 import numpy as np
 
 import synth
-from bpc import masks as MK
-from bpc.config import Settings
-from bpc.pipeline import analyse
+from pc import masks as MK
+from pc.config import Settings
+from pc.pipeline import analyse
 
 
 def test_drop_masked_removes_lines_that_lie_mostly_inside():
@@ -132,7 +132,7 @@ def test_the_endpoint_rule_is_a_no_op_without_a_mask():
 def test_the_shrink_scales_with_the_image_not_the_pixel_count():
     """The same photograph at two analysis sizes must lose the same *relative*
     amount of silhouette, or the correction changes with --detect-max-edge."""
-    from bpc import birefnet as BN
+    from pc import birefnet as BN
     small = BN.shrink_px_for((1071, 1600), 0.008)
     big = BN.shrink_px_for((2142, 3200), 0.008)
     assert small == 15, f"the default of a 1600 px frame should be ~15 px, got {small}"
@@ -201,7 +201,7 @@ def test_gdino_mask_crops_mattes_and_composes():
     """The whole gdino path with the two torch calls stubbed out: the box is
     padded, BiRefNet mattes only the crop, and the result is pasted back into a
     full-frame ignore mask that ignores everything outside the box."""
-    from bpc import birefnet as BN
+    from pc import birefnet as BN
     h, w = 100, 200
     bgr = np.zeros((h, w, 3), np.uint8)
     orig_box, orig_fg = MK.gdino_box, BN.foreground
@@ -233,7 +233,7 @@ def test_gdino_mask_crops_mattes_and_composes():
 def test_gdino_mask_refuses_a_box_too_small_to_matte():
     """A detection so small that padding cannot make it matte-able is refused,
     not run through BiRefNet at a size the network was never trained on."""
-    from bpc import birefnet as BN
+    from pc import birefnet as BN
     orig_box = MK.gdino_box
     try:
         MK.gdino_box = lambda img, prompt, d: ((0, 0, 3, 3), 0.9)

@@ -9,20 +9,20 @@ import math
 import numpy as np
 
 import synth
-from bpc import lines as L
-from bpc.config import Settings
-from bpc.pipeline import analyse
+from pc import lines as L
+from pc.config import Settings
+from pc.pipeline import analyse
 
 
 def _mlsd_or_skip():
-    from bpc import mlsd
+    from pc import mlsd
     if not mlsd.available():
         raise SkipTest("no TFLite runtime or model")     # noqa: F821
     return mlsd
 
 
 def _deeplsd_or_skip():
-    from bpc import deeplsd
+    from pc import deeplsd
     if not deeplsd.available():
         raise SkipTest("no DeepLSD checkout, torch or weights")   # noqa: F821
     return deeplsd
@@ -95,7 +95,7 @@ def test_the_deep_hybrid_never_gates_the_evidence_away_entirely():
 
 
 def test_every_detector_produces_a_usable_estimate():
-    from bpc import deeplsd, mlsd
+    from pc import deeplsd, mlsd
     sc = synth.Scene(w=1200, h=800, focal_35mm=28, pitch_deg=9, roll_deg=-2, seed=43)
     tr, tp = sc.true_roll_pitch()
     names = ["lsd"] + (["mlsd", "hybrid", "union"] if mlsd.available() else [])
@@ -108,7 +108,7 @@ def test_every_detector_produces_a_usable_estimate():
 
 
 def _grids(scene, settings):
-    from bpc import imageio as IO
+    from pc import imageio as IO
     gray, _ = IO.analysis_gray(scene.img, settings.detect_max_edge)
     import cv2
     small = cv2.resize(scene.img, (gray.shape[1], gray.shape[0]),

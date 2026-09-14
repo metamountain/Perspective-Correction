@@ -10,9 +10,9 @@ The LaMa and ComfyUI tests skip when their optional pieces are absent.
 """
 import numpy as np
 
-from bpc import inpaint as F
-from bpc import warp as W
-from bpc.config import Settings
+from pc import inpaint as F
+from pc import warp as W
+from pc.config import Settings
 
 
 def _hole(h=80, w=120):
@@ -120,8 +120,8 @@ def test_a_masked_workflow_still_gets_its_mask():
     """
     import json
     import numpy as np
-    from bpc.config import Settings
-    from bpc import inpaint as FILL
+    from pc.config import Settings
+    from pc import inpaint as FILL
 
     wf = {"1": {"class_type": "LoadImage", "inputs": {"image": ""},
                 "_meta": {"title": FILL.TITLE_IMAGE}},
@@ -189,7 +189,7 @@ def test_the_hole_the_warp_reports_is_the_one_the_fill_gets():
     pixels with no source behind them, and those are what `fill` may touch."""
     import math
 
-    from bpc import geometry as G
+    from pc import geometry as G
     w, h, f = 400, 300, 600.0
     H = W.build(w, h, f, math.radians(3.0), math.radians(6.0))
     plan = W.plan(w, h, H, Settings().replace(crop="none"))
@@ -239,7 +239,7 @@ def test_comfyui_gets_a_primed_band_not_a_padded_one():
     """
     import cv2
     import numpy as np
-    from bpc import inpaint as FILL
+    from pc import inpaint as FILL
 
     rng = np.random.default_rng(3)
     img = cv2.GaussianBlur((rng.random((200, 300, 3)) * 255).astype(np.uint8), (31, 31), 0)
@@ -273,8 +273,8 @@ def test_a_workflow_without_a_mask_node_is_an_edit_model_not_an_error():
     import json
     import os
     import tempfile
-    from bpc.config import Settings
-    from bpc import inpaint as FILL
+    from pc.config import Settings
+    from pc import inpaint as FILL
 
     edit = {"1": {"class_type": "LoadImage", "inputs": {"image": "x.png"},
                   "_meta": {"title": FILL.TITLE_IMAGE}},
@@ -307,7 +307,7 @@ def test_the_shipped_edit_workflow_carries_the_titles_the_code_writes_into():
     mask node -- that absence is the feature, not an oversight.
     """
     import os
-    from bpc import inpaint as FILL
+    from pc import inpaint as FILL
 
     path = os.path.join(os.path.dirname(FILL.DEFAULT_WORKFLOW),
                         "flux2-klein-edit-nomask.json")
@@ -328,7 +328,7 @@ def test_the_server_address_survives_being_taken_apart_and_put_together():
     is ever stored, so the split has to be lossless for anything a user might
     have typed, and forgiving of what they are halfway through typing.
     """
-    from bpc import inpaint as FILL
+    from pc import inpaint as FILL
 
     for url in ("http://127.0.0.1:8188", "https://box.local:9000",
                 "http://127.0.0.1", "http://[::1]:8188"):
@@ -357,8 +357,8 @@ def test_the_workflow_is_pointed_at_files_the_server_actually_has():
     somebody else's leftover PNG.
     """
     import json
-    from bpc.config import Settings
-    from bpc import inpaint as FILL
+    from pc.config import Settings
+    from pc import inpaint as FILL
 
     served = {
         "UNETLoader": {"input": {"required": {
@@ -425,7 +425,7 @@ def test_a_band_that_comes_back_smaller_is_scaled_up_and_still_touches_nothing()
     """
     import cv2
     import numpy as np
-    from bpc import inpaint as FILL
+    from pc import inpaint as FILL
 
     rng = np.random.default_rng(11)
     photo = (rng.random((300, 400, 3)) * 255).astype(np.uint8)
@@ -458,8 +458,8 @@ def test_the_server_light_has_three_states_not_two():
     in the module, not the window, so it can be asserted without a display.
     """
     import json
-    from bpc.config import Settings
-    from bpc import inpaint as FILL
+    from pc.config import Settings
+    from pc import inpaint as FILL
 
     served = {"UNETLoader": {"input": {"required": {
         "unet_name": [["installed.safetensors"], {}]}}}}
@@ -518,8 +518,8 @@ def test_the_indicator_names_the_workflow_and_says_when_nobody_chose_it():
     """
     import json
     import os
-    from bpc.config import Settings
-    from bpc import inpaint as FILL
+    from pc.config import Settings
+    from pc import inpaint as FILL
 
     served = {"UNETLoader": {"input": {"required": {
         "unet_name": [["installed.safetensors"], {}]}}}}
@@ -591,7 +591,7 @@ def test_every_shipped_workflow_exists_and_is_postable():
     section exists to stop.
     """
     import os
-    from bpc import inpaint as FILL
+    from pc import inpaint as FILL
 
     assert FILL.SHIPPED, "the chooser would be empty"
     for name, what in FILL.SHIPPED:

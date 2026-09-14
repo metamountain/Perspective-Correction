@@ -27,7 +27,7 @@ def _app():
         raise SkipTest(f"no tkinter ({exc})")      # noqa: F821
     if not os.path.exists(ASSET):
         raise SkipTest("asset missing")            # noqa: F821
-    from bpc.gui import App
+    from pc.gui import App
     try:
         app = App(start_maximized=False)
     except Exception as exc:                       # no display (CI, headless)
@@ -108,7 +108,7 @@ def test_the_prominent_button_asks_rather_than_writing_unattended():
 def test_shorten_middle_keeps_the_end_never_just_truncates():
     """P15: a filename is shortened by cutting its middle, so the end -- the
     extension and the _corr suffix that name where Save writes -- always shows."""
-    from bpc.gui import _shorten_middle as s
+    from pc.gui import _shorten_middle as s
     assert s("x.jpg") == "x.jpg", "a name that fits is untouched"
     long = "a_very_long_architectural_photography_name_0042.jpg"
     out = s(long)
@@ -590,7 +590,7 @@ def test_the_panel_default_keeps_both_the_buttons_and_a_usable_picture():
     real widgets is that the panel agrees with it, that the picture clears the
     floor, and that Save is still reachable either way.
     """
-    from bpc import layout as L
+    from pc import layout as L
     for w, h in ((1280, 800), (1920, 1080), (2560, 1400)):
         app = _app()
         try:
@@ -792,7 +792,7 @@ def test_the_cross_is_four_equal_fields():
     on them, and that the plus shape is the plus shape (loader lower-left,
     controls lower-right), which no size assertion alone would catch.
     """
-    from bpc import layout as L
+    from pc import layout as L
     for w, h in ((1920, 1080), (2560, 1440)):
         app = _app()
         try:
@@ -945,7 +945,7 @@ def test_gdino_batch_uses_the_stored_birefnet_model_without_asking():
     gdino batch with a stored model would still fall through to the prompt."""
     app = _app()
     try:
-        from bpc import gui as G
+        from pc import gui as G
         real_ask = G.messagebox.askyesnocancel
         # If the code wrongly reaches the dialog, return Cancel (None) so the test
         # fails fast instead of hanging on a modal window off-screen.
@@ -967,7 +967,7 @@ def test_theme_switch_retints_canvas_backgrounds():
     INK value -- the 'still bg black!' report.  The canvases are created with
     bg=INK["field"] and _retint_bg walks them; this pins that the walk actually
     reaches them and the swap fires."""
-    from bpc.gui import THEMES, INK
+    from pc.gui import THEMES, INK
 
     app = _app()
     try:

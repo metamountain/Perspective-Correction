@@ -15,7 +15,7 @@ with an exact known pose is the right instrument for that.
 import cv2
 
 import synth
-from bpc import config, scheme
+from pc import config, scheme
 
 
 def _scheme(scene):

@@ -26,7 +26,7 @@ and when nobody has picked, it says so rather than staying quiet:
 
     ... (shipped default -- nobody chose it) ...
 
-**`BPC_MASK` still works and no longer has an example.** BPC uploads the hole
+**`BPC_MASK` still works and no longer has an example.** PC uploads the hole
 and writes it into that node whenever a graph has one, so an inpainting
 workflow you build yourself behaves exactly as before -- there is just nothing
 bundled to copy. The wiring is in "The contract is three node titles" below,
@@ -34,14 +34,14 @@ and `test_a_masked_workflow_still_gets_its_mask` builds its own graph so the
 branch cannot rot unnoticed.
 
 An edit model has nowhere to put a mask, so the *band itself* carries the
-information. BPC primes it before uploading -- TELEA propagates the
+information. PC primes it before uploading -- TELEA propagates the
 boundary colour inwards and the result is pulled halfway to mid grey -- and the
 prompt says `remove grey border`. `docs/outpaint-band-example.jpg` is what that
 looks like before priming: a corrected frame whose rotation opened a flat grey
 band at the edges.
 
 Either way the guarantee is the same and does not depend on the workflow
-honouring anything: BPC composites the returned image back through the hole and
+honouring anything: PC composites the returned image back through the hole and
 nowhere else, so a model that repaints the whole frame still cannot move a
 photographed pixel.
 
@@ -68,7 +68,7 @@ do not live in this folder.
 | `CLIPLoader` | `qwen_3_8b_fp8mixed.safetensors` | the encoder **that model** wants |
 | `VAELoader` | `flux2-vae.safetensors` | your FLUX.2 VAE |
 
-BPC checks these three against the server before it posts, substitutes the
+PC checks these three against the server before it posts, substitutes the
 closest name it finds, and lights the panel amber when it had to guess. **The
 guess is by filename, and a filename does not know what a model is compatible
 with.** The middle row is the example: a graph once named
@@ -84,20 +84,20 @@ amber, pick the three explicitly in the selectors beside it.
 The fastest way to fix a graph is not to edit the JSON: open ComfyUI, build (or
 fix) it there until it runs by hand, then **Save (API format)** and point
 `--comfy-workflow` at the result. The editor's plain "Save" produces a
-different file that `/prompt` cannot take -- BPC detects that one and says so.
+different file that `/prompt` cannot take -- PC detects that one and says so.
 
 ## The contract is three node titles
 
-BPC does not care what the graph does. It looks for nodes by their **title**
+PC does not care what the graph does. It looks for nodes by their **title**
 (right-click a node > Title) and fills them in:
 
-| title | what BPC puts there | required |
+| title | what PC puts there | required |
 |---|---|---|
 | `BPC_IMAGE` | the corrected photograph, uploaded as a PNG | yes |
 | `BPC_MASK` | white where the rotation opened a hole, black elsewhere | no -- see below |
 | `BPC_PROMPT` | the text from `--comfy-prompt`, when given | no |
 
-Both image nodes must be `LoadImage`-shaped -- BPC writes the uploaded filename
+Both image nodes must be `LoadImage`-shaped -- PC writes the uploaded filename
 into their `image` input. The mask arrives as an image, so an inpainting graph
 needs `ImageToMask` on the red channel between the `BPC_MASK` node and whatever
 takes a `MASK`; the shipped graph has no mask node at all, so there is nothing
@@ -112,10 +112,10 @@ ComfyUI, then Save (API format) again.
 `--comfy-seed` overwrites every `seed` and `noise_seed` in the graph, which is
 what makes a batch reproducible. Left at 0, the workflow's own seeds stand.
 
-Any node that saves or previews an image ends the run; BPC takes the last image
+Any node that saves or previews an image ends the run; PC takes the last image
 the run produced.
 
-## What BPC does with the result
+## What PC does with the result
 
 It pastes it **into the hole and nowhere else**. The generated frame is resized
 to the output, and the composite ramps its alpha inside the hole mask, so every

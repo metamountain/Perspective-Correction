@@ -54,11 +54,11 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(
 import cv2                                                       # noqa: E402
 import numpy as np                                               # noqa: E402
 
-from bpc import geometry as G                                    # noqa: E402
-from bpc import imageio as IO                                    # noqa: E402
-from bpc import model as M                                       # noqa: E402
-from bpc.config import Settings                                  # noqa: E402
-from bpc.pipeline import analyse                                 # noqa: E402
+from pc import geometry as G                                     # noqa: E402
+from pc import imageio as IO                                     # noqa: E402
+from pc import model as M                                        # noqa: E402
+from pc.config import Settings                                   # noqa: E402
+from pc.pipeline import analyse                                  # noqa: E402
 
 # Small rotations, in the range a real correction works over, and mixed so that
 # roll-only, pitch-only and combined cases are all represented.
@@ -152,7 +152,7 @@ def main(argv=None) -> int:
                               mask_mode=args.mask,
                               deeplsd_model=args.deeplsd_model)
     if args.mask == "birefnet":
-        from bpc import birefnet as BN
+        from pc import birefnet as BN
         w = args.birefnet_model
         if w == "auto":
             w = BN.find_weights()

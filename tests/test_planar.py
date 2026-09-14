@@ -1,7 +1,7 @@
 """Planar rectification: homography from four points, target size, degeneracy."""
 import numpy as np
 
-from bpc import planar as P
+from pc import planar as P
 
 
 def _quad(w=400.0, h=300.0):
@@ -115,8 +115,8 @@ import os
 import tempfile
 
 import synth
-from bpc.config import Settings
-from bpc.review import ReviewSession
+from pc.config import Settings
+from pc.review import ReviewSession
 
 
 def _session():

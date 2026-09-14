@@ -9,7 +9,7 @@ dist/
 out/
 debug/
 tests/_out/
-bpc-run-*/
+pc-run-*/
 
 # local-only diagnostic folder -- nothing here is committed or pushed, except
 # the README that explains what the folder is for (a fresh clone gets an empty
@@ -49,3 +49,4 @@ models/*.tar
 
 .idea/
 .vscode/
+.qwen/

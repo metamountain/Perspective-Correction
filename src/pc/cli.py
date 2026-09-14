@@ -388,7 +388,7 @@ def diagnostics_text(args, settings) -> str:
     from . import birefnet as BN
 
     out = ["# --- environment " + "-" * 48]
-    out.append(f"# bpc {__version__} on {platform.platform()}")
+    out.append(f"# pc {__version__} on {platform.platform()}")
     out.append(f"# python {_sys.version.split()[0]}  {_sys.executable}")
     for mod in ("numpy", "cv2", "PIL", "piexif"):
         try:

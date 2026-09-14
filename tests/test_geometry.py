@@ -3,7 +3,7 @@ import math
 
 import numpy as np
 
-from bpc import geometry as G
+from pc import geometry as G
 
 
 def test_roll_pitch_round_trip():
