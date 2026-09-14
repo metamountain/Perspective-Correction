@@ -134,3 +134,41 @@ def test_settings_default_is_off():
     from pc.config import Settings
     st = Settings()
     assert st.undistort == "off"
+
+
+def test_the_lens_model_comes_back_as_text_not_a_bytes_repr():
+    """`str(b"...")` yields `"b'...'"`, which matches no lensfun entry.
+
+    piexif hands EXIF strings back as bytes. The helper used to `str()` them
+    directly, so a camera that *does* record its lens produced the literal
+    text `b'NIKKOR 18-55mm'` -- a name the database can never match, which
+    sent the lookup down the generic path and straight into the arbitrary
+    `lenses[0]` this project had to stop doing. The bug is invisible unless
+    you assert on the *type* of thing that comes out.
+    """
+    try:
+        import piexif
+    except ImportError:
+        raise SkipTest("piexif not installed")        # noqa: F821
+    from pc import distortion as D
+
+    name = "NIKKOR 18-55mm f/3.5-5.6"
+    exif = {"0th": {}, "Exif": {piexif.ExifIFD.LensModel: name.encode()},
+            "GPS": {}, "1st": {}, "thumbnail": None}
+    got = D._exif_lens_model(piexif.dump(exif))
+    assert got == name, f"expected {name!r}, got {got!r}"
+    assert not str(got).startswith("b'"), "still returning a bytes repr"
+
+
+def test_an_unknown_lens_is_refused_rather_than_guessed():
+    """No EXIF at all must yield no correction, not an arbitrary profile.
+
+    The stronger case -- an interchangeable-lens body where the generic query
+    returns many lenses -- needs lensfunpy and a real camera in the database,
+    so it is not asserted here. What is asserted is the floor: with nothing to
+    identify the lens, `undistort_map` returns None and the caller leaves the
+    photograph alone.
+    """
+    from pc import distortion as D
+    assert D.undistort_map(None, 1000, 800) is None
+    assert D.undistort_map(b"", 1000, 800) is None
