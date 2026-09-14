@@ -115,7 +115,7 @@ class Settings:
     # now reach the same place.  The risk the old comment describes is unchanged
     # and real -- a weak horizontal VP still shears -- it is simply visible to
     # the person reviewing the photograph before anything is written.
-    max_horizontal_deg: float = 30.0
+    max_horizontal_deg: float = 60.0
     min_horizontal_support: float = 0.3
 
     # ---- gating ----

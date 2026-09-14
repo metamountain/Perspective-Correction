@@ -52,8 +52,37 @@ def _files():
     return out
 
 
+# How many photographs the pool-wide sweeps may use. The full pool is ~50 and
+# the sweeps are the bulk of the suite's runtime; five is a cross-section, not a
+# measurement of the pool (user, 2026-09-14: "testsuite max 5 images").
+# `PC_TEST_ASSETS=0` restores the whole pool for a real measurement -- use it
+# before writing any number into CLAUDE.md, because a claim about the pool that
+# was computed from five of it is not a claim about the pool.
+MAX_ASSETS = int(os.environ.get("PC_TEST_ASSETS", "5"))
+
+# Names that must survive the cap whatever the sample says, because a dedicated
+# test is about them. Dropping one would turn its test into a silent skip -- or
+# worse, would take a *known failure* out of the suite and read as a fix.
+_ALWAYS = ("_upright.", "_skip.", "39079116")
+
+
+def _sample(files):
+    """An evenly spaced slice of the sorted pool, plus the named exceptions.
+
+    Evenly spaced rather than the first N: the pool is sorted by filename, so
+    the first five are whatever sorts first, which on this set means five
+    photographs from one contributor.
+    """
+    if MAX_ASSETS <= 0 or len(files) <= MAX_ASSETS:
+        return files
+    step = len(files) / float(MAX_ASSETS)
+    picked = {files[min(len(files) - 1, int(i * step))] for i in range(MAX_ASSETS)}
+    picked.update(f for f in files if any(k in os.path.basename(f) for k in _ALWAYS))
+    return [f for f in files if f in picked]
+
+
 def _require():
-    files = _files()
+    files = _sample(_files())
     if not files:
         raise SkipTest("no images in tests/assets")   # noqa: F821
     return files

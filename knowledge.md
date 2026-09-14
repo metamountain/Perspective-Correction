@@ -1,8 +1,8 @@
 # Knowledge base — remaining architecture goals
 
-Research + analysis backing the last open goals, written so `claude_save.md` can retire
+Research + analysis backing the last open goals, written so this project's earlier measurements can retire
 once this is in place. Every claim below is either (a) already measured in this
-project (cited from `claude_save.md`, with its section name so it can still be found
+project (cited from this project's earlier measurements, with its section name so it can still be found
 after that file is gone) or (b) external research with a source link — never both
 blended into one unlabelled sentence. **This file is analysis and instructions, not
 code.** Nothing here has been implemented; see CLAUDE.md's Ledger for the Qwen-facing
@@ -24,7 +24,7 @@ ends and facade B begins) let the whole perspective construct — both facades' 
 the shared vertical, the corner line between them — be computed more accurately or
 more robustly than partition-after-detect?
 
-### What's already measured (claude_save.md)
+### What's already measured
 
 - **"The model is three numbers, and that is the point"**: roll is `f`-independent
   (mean 0.018°), pitch is linear in `f` (0.10° known `f`, 2.03° guessed) — so *any*
@@ -90,7 +90,7 @@ above ordinary window/course lines, so the fit (and `ArchitectureScheme`'s parti
 can weight them differently instead of treating a roofline and a window mullion as
 the same kind of evidence.
 
-### What's already measured (claude_save.md)
+### What's already measured
 
 - **"Four ideas that measurement killed"** — the project has already tried and
   rejected several plausible-sounding line-quality ideas: merging broken fragments
@@ -138,7 +138,7 @@ That search was not done yet — flagged as the next research step, not complete
 
 ### 3a. SAM — revisit now that it can be prompted by text
 
-**What's already measured (claude_save.md, "Segment Anything was here, and what its
+**What's already measured (earlier measurement, "Segment Anything was here, and what its
 failure teaches")**: SAM (SAM1-era) was tried and deleted. It needed an invented
 criterion — line density OR outline straightness — to decide which of ~40 regions was
 "the building," and the straightness half had no signal on real photographs (median
@@ -206,7 +206,7 @@ work. (BiRefNet-lite, 169 MB, CPU-capable PVT-v2 backbone, was vendored alongsid
 
 ### 3b. Helper: overlay the perspective grid the algorithm actually found
 
-**What's already built (claude_save.md "A transparent grid over the corrected pane" —
+**What's already built (earlier work, "A transparent grid over the corrected pane" —
 current CLAUDE.md Done)**: a rectilinear checking grid on the *after* pane
 (`v_grid`, `_draw_grid`, now with rulers on three edges) — it answers "is this vertical
 now," a **generic** measuring instrument unrelated to what the algorithm detected.
@@ -238,51 +238,13 @@ scheme's relevant/ignored partition) before it's a scoped task.
 
 ---
 
-## 5. Barrel/pincushion distortion correction — research (2026-09-14)
+## 5. Barrel/pincushion distortion — external reference only
 
-### The problem
-
-`H = K R K⁻¹` is a pure rotation: it cannot touch radial distortion. A genuinely
-wide lens bows verticals and horizontals into curves no homography straightens.
-The trigger signal (from the CLAUDE.md Ledger entry): a `merge_collinear` chain's
-member segments show **monotonic angle drift** along the chain — each hop stays
-inside the existing 2° seed tolerance but the drift accumulates in one direction
-across the whole chain rather than being random noise. The "one edge became
-several straight-ish fragments" pattern the merger already produces *is* the
-wide-angle signal.
-
-### Pipeline order (user-confirmed)
-
-**Detect lines → undistort → correct.** Line detection runs on the original,
-still-distorted image because the trigger signal *is* the distortion's effect on
-straight edges. Undistorting first would erase the evidence the trigger reads.
-The roll/pitch/yaw correction is computed and applied last (or composed into a
-single remap, per Stage 5 below).
-
-### Stage 0 — EXIF + lensfunpy (manufacturer profile)
-
-- **Package**: `lensfunpy` v1.18.0, pip-installable, **Windows amd64 wheels on PyPI**.
-- **License**: MIT (the wrapper); underlying lensfun DB is GPL but linked dynamically
-  via the wheel — compatible with an MIT project.
-- **API**:
-  ```python
-  import lensfunpy
-  db = lensfunpy.Database()
-  cam = db.find_cameras(make, model)[0]
-  lens = db.find_lenses(cam, lens_make, lens_model)[0]
-  mod = lensfunpy.Modifier(lens, cam.crop_factor, width, height)
-  mod.initialize(focal_length, aperture, distance, pixel_format=img.dtype)
-  undist_coords = mod.apply_geometry_distortion()  # (map_x, map_y) for cv2.remap
-  img_undistorted = cv2.remap(img, *undist_coords, None, cv2.INTER_LINEAR)
-  ```
-- **Key point**: returns a per-pixel coordinate map (not polynomial coefficients),
-  directly consumable by `cv2.remap`. No need to fit Brown-Conrady ourselves.
-- **Database coverage**: thousands of lens/camera combos (the underlying Lensfun DB).
-  For EXIF-stripped images like `Aulendorf_Schloss_Fassade.jpg` (verified zero EXIF),
-  this stage is inapplicable — falls through to Stage 1.
-- **Integration**: `imageio.py` already reads EXIF focal; this adds make/model/lens
-  lookup. Optional-dependency-gated exactly like `birefnet.py`: lazy import,
-  `describe()`/`available()` for `deps.py --doctor`.
+**Status, pipeline order, the landed Stage 0, the measured-and-rejected drift
+trigger, settings and the test case all live in the Ledger.** They were
+duplicated here and are not any more — one status, one place. What is kept
+below is the part CLAUDE.md should *not* carry: third-party APIs and licences,
+which are facts about the outside world rather than about this project.
 
 ### Stage 1 — AnyCalib (blind single-image distortion fit)
 
@@ -347,19 +309,6 @@ single remap, per Stage 5 below).
   mean and doesn't depend on f at all. GeoCalib's value is almost entirely the
   focal prior for the no-EXIF flat-facade case.
 
-### Stage 3 — Cross-check gate (free)
-
-With up to four independent focal estimates (EXIF/lensfun, AnyCalib, GeoCalib,
-VP geometry), disagreement above ~10% becomes a new multiplicative confidence
-factor in `model.py`'s `_confidence`. Confidence is already multiplicative — no
-new philosophy, no new refusal path.
-
-### Stage 4 (optional) — Plumb-line refinement
-
-DeepLSD segments + `scipy.optimize.least_squares` on `(k1, k2, cx, cy)`, ~150
-lines, reimplementing the published method. Do **not** vendor
-`LensDistortionFromLines` (CC-BY-NC-SA, non-commercial).
-
 ### Stage 5 — One resample, never two
 
 Compose the undistortion map with `H = K R K⁻¹` into a single `remap`.
@@ -379,25 +328,6 @@ that returns `(map_x, map_y)` arrays instead of (or in addition to) the 3×3 H.
 The existing `cv2.warpPerspective` call in `warp.apply` becomes `cv2.remap` when
 an undistortion map is present.
 
-### Does this contradict the rejected radial-distortion result?
-
-No. What was rejected (recorded in CLAUDE.md's negative-results section) was blindly
-sweeping Hugin's radial `b` coefficient to explain an artifact that turned out to be
-border replication — a blind fit to a broken benchmark. A manufacturer profile and a
-learned per-image estimate are different instruments. The rejection **transfers as a
-requirement**: no distortion model lands without the same round-trip benchmark, and
-it must beat the border-guarded **0.66/1.68**, not the broken 1.71/6.08.
-
-### New settings (all defaulting to off)
-
-- `lens_profile: str = "off"` — Stage 0
-- `undistort: str = "off"` — Stage 1 (AnyCalib blind fit)
-- `focal_prior: str = "off"` — Stage 2 (GeoCalib)
-
-`deps.py` gains rows; `--doctor` reports them; pre-flight hard-fails only when a
-backend is explicitly requested but absent — the rule already established for
-BiRefNet/DeepLSD.
-
 ### Licences (checked 2026-09-14)
 
 | Component | Licence | Verdict |
@@ -410,41 +340,3 @@ BiRefNet/DeepLSD.
 | OpenCV | BSD | OK |
 | PerspectiveFields (Adobe) | Non-commercial | **Rejected** |
 | LensDistortionFromLines | CC-BY-NC-SA | **Rejected** |
-
-### Fallback baseline
-
-`chsasank/Image-Rectification` (BSD-3), if the learned models are ever unavailable.
-
-### Test case
-
-`Aulendorf_Schloss_Fassade.jpg` (`tests/assets/Horizontal/`, 1280×960, verified
-zero EXIF): both verticals and horizontals arrive from LSD/`merge_collinear` broken
-into several segments — the fragmentation trigger signal. Use it first when this
-stage exists to check. **Must keep the 8% border guard** — `BORDER_REPLICATE`
-smearing edges into fake straight lines is exactly what corrupted an earlier
-radial-distortion measurement.
-
-### Interpreter split (same as BiRefNet)
-
-| Stage | Interpreter | Why |
-|---|---|---|
-| lensfunpy | GUI (system python) | No torch needed, pure C extension |
-| AnyCalib | ComfyUI `python_embeded` | Needs torch + CUDA |
-| GeoCalib | ComfyUI `python_embeded` | Needs torch + torchvision + kornia |
-
-AnyCalib/GeoCalib results are computed once and cached (map file or JSON of
-intrinsics), consumed in the GUI interpreter — same `--mask-export` pattern.
-
----
-
-## Reconciliation with `claude_save.md`
-
-Every external/measured claim above that came from `claude_save.md` names its section
-heading so it stays findable if this file is the only one left. Sections not carried
-forward here (masking mechanics, fill-band generation, the manual crop/review-loop
-design, testing conventions, the Windows two-Python story, worker prompting practice)
-are either already fully summarized in the live `CLAUDE.md` or are settled/closed
-decisions with no open research question attached — they don't need to survive in a
-second document. Once the four goals above have their own Ledger entries in CLAUDE.md
-(done, see below) and this file exists, `claude_save.md` carries no information that
-is not reachable from one of the two — it is safe to delete.
