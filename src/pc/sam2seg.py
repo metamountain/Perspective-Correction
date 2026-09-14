@@ -25,15 +25,11 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
-import threading
 import time
 from typing import List, Optional, Tuple
 
 import cv2
 import numpy as np
-
-_LOCK = threading.Lock()
-_CACHE = {}
 
 # A prompt box smaller than this in analysis-res pixels is a stray click, not a
 # selection; SAM2 would happily segment a 3-pixel box and the result reads as
@@ -158,82 +154,6 @@ def available(python_exe: str = "", ckpt: str = "") -> bool:
     if not os.path.isfile(c):
         return False
     return True
-
-
-def _load(ckpt: str, cfgdir: str, device: str = "") -> dict:
-    """Build the predictor once per (checkpoint, device) per process.
-
-    Only ever called from inside a child spawned by ``run_subprocess`` -- in
-    the GUI's own Python this would import torch, which is not installed there
-    and is the whole reason for the subprocess bridge.  Cached because loading
-    324 MB of weights per prediction would dwarf the prediction itself.
-    """
-    key = (os.path.abspath(ckpt), device)
-    with _LOCK:
-        if key in _CACHE:
-            return _CACHE[key]
-
-        import torch
-        from hydra import initialize_config_dir
-        from sam2.build_sam import build_sam2
-        from sam2.sam2_image_predictor import SAM2ImagePredictor
-
-        dev = device or ("cuda" if torch.cuda.is_available() else "cpu")
-        if not os.path.isfile(ckpt):
-            raise FileNotFoundError("SAM2 checkpoint not found: " + ckpt)
-        initialize_config_dir(config_dir=cfgdir, version_base=None)
-        model = build_sam2("sam2/sam2_hiera_b+", ckpt, device=dev)
-        pred = SAM2ImagePredictor(model)
-        entry = {"pred": pred, "device": dev}
-        _CACHE[key] = entry
-        return entry
-
-
-def predict_box_and_points(bgr: np.ndarray, box: Optional[Tuple[int, int, int, int]],
-                           points: List[Tuple[int, int, int]], ckpt: str, cfgdir: str,
-                           device: str = "") -> np.ndarray:
-    """The SAM2 mask for a box and/or point prompts, True inside the selection.
-
-    ``box`` is (x0, y0, x1, y1) in ``bgr`` pixels; each point is (x, y, label)
-    with label 1 = positive (inside), 0 = negative (outside).  At least one of
-    the two must be given -- SAM2 has nothing to segment without a prompt.
-
-    Returns a boolean array at ``bgr``'s resolution; the caller decides what
-    "inside" means for its own convention.
-    """
-    if box is None and not points:
-        raise ValueError("SAM2 needs a box or at least one point prompt")
-    if box is not None:
-        x0, y0, x1, y1 = [int(round(v)) for v in box]
-        h, w = bgr.shape[:2]
-        x0, x1 = max(0, min(w - 1, x0)), max(0, min(w - 1, x1))
-        y0, y1 = max(0, min(h - 1, y0)), max(0, min(h - 1, y1))
-        if (x1 - x0) < MIN_BOX_PX or (y1 - y0) < MIN_BOX_PX:
-            raise ValueError("SAM2 box prompt is too small to segment "
-                             "({}x{})".format(x1 - x0, y1 - y0))
-
-    entry = _load(ckpt, cfgdir, device)
-    pred = entry["pred"]
-    rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
-    pred.set_image(rgb)
-
-    kw: dict = {"multimask_output": False}
-    if box is not None:
-        kw["box"] = np.array([x0, y0, x1, y1], dtype=np.float32)
-    if points:
-        coords = [(int(p[0]), int(p[1])) for p in points]
-        labels = [int(p[2]) for p in points]
-        kw["point_coords"] = np.array(coords, dtype=np.float32)
-        kw["point_labels"] = np.array(labels, dtype=np.int32)
-
-    with _LOCK:
-        masks, _, _ = pred.predict(**kw)
-    mask = bool(masks[0])
-    h, w = bgr.shape[:2]
-    if mask.shape[:2] != (h, w):
-        mask = cv2.resize(mask.astype(np.uint8), (w, h),
-                          interpolation=cv2.INTER_NEAREST).astype(bool)
-    return mask
 
 
 def _imread_unicode(path: str, flags: int):
