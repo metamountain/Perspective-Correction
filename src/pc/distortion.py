@@ -93,7 +93,13 @@ def _exif_lens_model(exif_bytes: bytes | None):
         ex = d.get("Exif", {})
         lm = ex.get(piexif.ExifIFD.LensModel, "") if hasattr(piexif.ExifIFD, "LensModel") else ""
         if lm:
-            return str(lm).strip()
+            # piexif hands back bytes; str() on bytes yields "b'...'", which
+            # would never match a lensfun entry -- decode it.
+            if isinstance(lm, bytes):
+                lm = lm.decode("utf-8", "replace")
+            lm = str(lm).replace(chr(0), "").strip()
+            if lm:
+                return lm
         # MakeNote is camera-specific; skip parsing it here.
     except Exception:
         pass
@@ -135,14 +141,35 @@ def undistort_map(exif_bytes: bytes | None, width: int, height: int,
         if not cams:
             return None
         cam = cams[0]
-        # Try the full camera model string first, then just the make as a
-        # generic-lens lookup (some cameras store "NIKON CORPORATION" as Make
-        # and the lens name is in a separate tag we don't parse).
-        lenses = db.find_lenses(cam, "", "")
+        # Look the lens up by the name EXIF gives, and refuse when it does not
+        # determine one.
+        #
+        # This used to be `find_lenses(cam, "", "")` followed by `lenses[0]`,
+        # with a comment calling it "imperfect but better than nothing". For
+        # distortion that is not true: on an interchangeable-lens body the
+        # empty query returns everything known for that camera and the first
+        # entry is arbitrary, so a wrong profile **bends straight lines the
+        # wrong way** -- worse than leaving them alone, and against this
+        # project's standing rule that doing nothing beats acting on a bad
+        # hypothesis. `_exif_lens_model` already read the name; it was simply
+        # never passed in.
+        lens_model = _exif_lens_model(exif_bytes)
+        lenses = []
+        if lens_model:
+            try:
+                lenses = list(db.find_lenses(cam, None, lens_model))
+            except Exception:
+                lenses = []
+        if not lenses:
+            # No lens name, or nothing matched it. A generic query is only
+            # trustworthy when it is *unambiguous* -- exactly one lens known
+            # for this body, i.e. a fixed-lens camera, where there is nothing
+            # to get wrong. More than one and we decline.
+            generic = list(db.find_lenses(cam, "", ""))
+            if len(generic) == 1:
+                lenses = generic
         if not lenses:
             return None
-        # Pick the first lens; for multi-lens bodies this is imperfect but
-        # better than nothing.  A future refinement could match on focal length.
         lens = lenses[0]
         mod = lensfunpy.Modifier(lens, cam.crop_factor, width, height)
         mod.initialize(f_mm, aperture, distance=10.0, pixel_format=np.uint8)
