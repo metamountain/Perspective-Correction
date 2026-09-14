@@ -47,8 +47,8 @@ deeplsd = [                          # also wants a cvg/DeepLSD checkout in tool
 ]
 
 [project.urls]
-Homepage = "https://github.com/metamountain/Batch-Perspective-Correction"
-Source = "https://github.com/metamountain/Batch-Perspective-Correction"
+Homepage = "https://github.com/metamountain/Perspective-Correction"
+Source = "https://github.com/metamountain/Perspective-Correction"
 
 [project.scripts]
 bpc = "bpc.cli:main"
