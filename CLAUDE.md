@@ -95,70 +95,62 @@ declared `mlsd` extra) is installed in the **system** interpreter, so
 
 ## Ledger — the only place status lives
 
-**Suite 2026-09-14: 299 tests, 2 failed, 2 skipped, ~166 s.** Two failures are
-the single receding-row photograph in the bug entry below (3.71° round-trip on
-one asset; pre-existing, unrelated to new code). Everything else passes,
-including the distortion module, all GUI tests, and the new `test_sam2seg`
-module (7 tests). Re-run before trusting this — it is a measurement, not a
+**Suite 2026-09-14, re-measured in `D:\Coding\Perspective-Correction` at
+`843a76b` + the in-flight `src/pc/gui.py`: 292 tests, 3 failed, 2 skipped,
+160.3 s.** Two failures are the single receding-row photograph in the bug entry
+below (3.71° round-trip on one asset; pre-existing). **The third is new and is a
+regression, not a known limitation**: `test_gui.test_the_ruler_reads_the_same_
+height_on_left_and_right` fails with *"grid on, pixel mode: the rulers drew
+nothing"* (`tests/test_gui.py:770`) — the ruler rework that moved ticks into the
+20px `RULER_MARGIN` border zone left this test's path drawing no items at all.
+Until that is understood, the claim "all GUI tests pass" below is false and the
+previous line here (299 tests, 2 failed, ~166 s) was measured against something
+this checkout does not reproduce — 292 is what `tests/run_tests.py` counts now.
+Re-run before trusting this — it is a measurement, not a
 promise, and no entry below may restate it. An item stays under **Open** until
 nothing is left to do; **Done** is only for finished work. `Pn` labels are short
 handles for work packages; entries written out in full here stand on their own.
 
 ### Open — do these
 
-**Priority, set 2026-09-14.** The list below is not in order; this is.
+**Priority, re-sorted 2026-09-14 (user: "sort jobs, start with easy ones, first
+work on tools and mask features").** Easiest first, tools and masking ahead of
+everything else. The list below is not in that order; this is.
 
-**0. ~~Commit.~~ Done 2026-09-14.** Four commits (weights excluded from git, the
-manual-first code, ASCII asset names, README) are on `origin/main` — `main` was
-fast-forwarded and pushed without touching the working tree, so the worker's
-in-flight edits were undisturbed. The day's work is no longer only local. What
-is *still* uncommitted is the distortion work below and this file.
+**A. Tools and masking — small, visible, an afternoon or less each.**
 
-**1. Re-decide the batch-era caps as manual-first defaults.** Cheapest real
-improvement per hour, and it touches every photograph reviewed. `max_horizontal_deg`
-8 → 30 already proved the pattern: a cap reasoned for unattended batch was
-throttling a correction the user wanted, and the fix was one constant. The same
-argument is still unexamined for `max_pitch_deg`, the multiplicative confidence
-veto, and P9's refuse-whole-correction recommendation. Each needs its own
-measurement, not a blanket loosening — but each is a constant with a documented
-sweep behind it, so the work is bounded.
+1. **Mark lines by rubberband.** `_click_mark` takes two clicks; press-drag-release
+   is wanted. The session layer already takes a whole segment in one call
+   (`add_control_line(x0, y0, x1, y1, display_scale, kind)`), so this is GUI-only.
+   **Trap**: a click that never moved must still mean "remove this mark", or the
+   removal gesture disappears with it.
+2. **Tool icons as one coherent set; bigger buttons; typography and spacing.** The
+   window is judged by this. Do it as a **single pass** — icons, font sizes, button
+   sizes and spacing share a visual language, and split across sessions they will
+   not match.
+3. **More tools / shortcuts**, but only where a gesture is already being done the
+   long way. Not a wish for its own sake.
 
-**2. Click-to-select the building** (item below). The user's own preference, it
-kills the failure that recurred all of 09-13 (BiRefNet chose two parked cars,
-GDINO chose one building of a row), it completes the manual masking story the
-brush started — brush for coarse, click for exact — and every piece is already
-local. Bigger than #1 but the highest-value feature left.
+**B. Estimator defaults — still one constant each.**
 
-**3. Decide the receding-row bug** (item below) — *decide*, not necessarily fix.
-It is the only thing keeping the suite red, and a permanently red suite stops
-being a signal. Either do the real work (make the focal estimate reject
-horizontal evidence spanning multiple planes) or scope that photograph class out
-of the round-trip gate deliberately and in writing. Leaving it red by default is
-the one option that costs something every day.
+4. **Re-decide the remaining batch-era caps as manual-first defaults.**
+   `max_horizontal_deg` has now moved twice on exactly this argument (8 → 30 → 60).
+   Still unexamined: `max_pitch_deg`, the multiplicative confidence veto, and P9's
+   refuse-whole-correction recommendation. Each has a documented sweep behind it.
 
-**4. SAM3 via ComfyUI** (item below) is now partly superseded by #2 — a point
-prompt is the same machinery with a better interface. Fold it into #2 or drop it;
-do not build both.
+**C. Decide, do not necessarily fix.**
 
-**5. Distortion correction and the four `knowledge.md` research goals** stay
-last: blocked on a go-ahead and on measurement passes respectively, and none of
-them is what the product needs next.
+5. **The receding-row bug** (below) is the only thing keeping the suite red, and a
+   permanently red suite stops being a signal. Either do the real work (make the
+   focal estimate reject horizontal evidence spanning multiple planes) or scope that
+   photograph class out of the round-trip gate deliberately and in writing.
 
-- **[open] Click-to-select the building instead of guessing it (2026-09-13,
-  user-directed, ref `github.com/Acly/krita-vision-tools`).** Every automatic
-  subject finder tried here guesses, and today it guessed *two parked cars* on
-  `39079116-...`. A point prompt does not guess: click the facade, SAM segments
-  it. This is what SAM is designed for and is **simpler** than the box/text route
-  already built, not harder. Pieces already in place: SAM2 (base-plus/large/small/
-  tiny) and SAM3 weights local, BiRefNet wired, and the review canvas already
-  handles clicks (planar corners, line brush, marks). Missing: a **point**-prompt
-  path (only the box path exists, via `masks.gdino_box` → `gdino_mask`), plus the
-  usual interpreter split (SAM needs the ComfyUI python, the GUI needs tkinter) —
-  solve it the way BiRefNet already does, compute once and cache, rather than
-  loading a segmenter inside the GUI process. **Fits the manual-first direction
-  and only that**: a click is per-photograph, so this is a review-panel tool and
-  can never be a batch default. **Licence**: krita-vision-tools is GPL-3.0 — take
-  the idea, not the code; SAM2 itself is Apache-2.0 and already vendored.
+**D. Last.**
+
+6. **SAM3 via ComfyUI** is largely superseded by the click-to-select work that has
+   already landed — fold it in or drop it, do not build both. **Distortion Stages 1+
+   and the four `knowledge.md` research goals** stay last: blocked on a go-ahead and
+   on measurement passes respectively, and none is what the product needs next.
 
 - **[bug, diagnosed 2026-09-13, not fixed] An oblique *receding row* of facades
   is corrected confidently and wrongly — a real limitation, not a bad asset.**
@@ -292,381 +284,231 @@ them is what the product needs next.
      `ArchitectureScheme.draw_preview`); what's missing is a GUI toggle and a decision
      on which of the two to show by default.
 
+- **[bug] The lens profile is picked essentially at random.** `distortion.py`
+  calls `db.find_lenses(cam, "", "")` with an **empty lens name** and takes
+  `lenses[0]`. The EXIF lens model *is* read (`_exif_lens_model`) and never
+  passed in, so on an interchangeable-lens body this selects an arbitrary
+  profile from everything known for that camera — and **a wrong distortion
+  profile bends straight lines the wrong way**, which is worse than leaving
+  them alone and against this project's own standard. The code comment calls it
+  "imperfect but better than nothing"; for distortion that is not true. Pass the
+  lens model, or refuse when the lens is unknown.
+- **Rulers: simple grey lines, dragged out of the black cross** (09-14, user).
+  Hover over the cross or the border reveals; drag pulls a guide onto Q2 and
+  leaves it there. Done so far: `_draw_rulers` targets `c_after` (it guarded on
+  `c_before` — drew on Q1 and returned early for Q2 while its own docstring said
+  Q2), and `_on_cross_motion` / `_on_cross_leave` reveal on hover, which works
+  because the cross *is* the panel background showing through the grid, so only
+  gutter events reach `self`. Left to do: the drag-out itself.
+  **`test_the_ruler_reads_the_same_height_on_left_and_right` still fails** — it
+  expects tick marks tied to the grid toggle, i.e. a ruler *scale*, not a grey
+  guide. The user has now said "simple grey lines", so the test encodes a
+  superseded design; replace it rather than bending the code to it.
+- **Marker lines: place by rubberband, not two clicks** (09-14, user).
+  `_click_mark` sets `_pending_mark` on the first click and completes on the
+  second. Wanted: press, drag, release, line following the cursor. The session
+  layer is already the right shape — `add_control_line(x0, y0, x1, y1,
+  display_scale, kind)` takes a whole segment in one call — so this is GUI-only.
+  **The trap:** a click that never moved must still mean "remove this mark", or
+  the removal gesture disappears.
+- **Marker lines: vertical and horizontal need different colours, chosen
+  automatically** (09-14, user). Two kinds drawn identically is the one thing a
+  glance cannot resolve, and the kind is what decides which array the line
+  lands in.
+- **Both preview images must be the same size and fill the frame** (09-14,
+  user, emphatic). Horizontally *and* vertically. Today a photograph is fitted
+  into its field and leaves the rest of the field empty; the two fields are
+  equal but the two *pictures* need not be.
+- **UI craft pass** (09-14, user): typography and graphic design in the
+  templates — font sizes and layout; tool icons reworked to read as one
+  coherent set, Photoshop-like; more tools where a useful shortcut exists;
+  and the click buttons made larger and less ugly. Treat as one pass, not six
+  tickets: they share a visual language and doing them separately guarantees
+  they will not match.
+
 ### Done — rely on these
 
-- **Package renamed `bpc` → `pc`** (09-14, user: "bpc should be replaced with pc perspective correction!"). Directory `src/bpc/` → `src/pc/`, all imports across 205+ files, `pyproject.toml` entry point (`pc = "pc.cli:main"`), `rectify.py`, `tools/*.py`, docs. ComfyUI node title constants (`BPC_IMAGE`, `BPC_MASK`, `BPC_PROMPT`) are part of the workflow JSON API contract and intentionally unchanged. Launcher renamed to `"Perspective Correction.bat"`.
-- **Rulers, Q2 layout, SAM interaction overhaul** (09-14). Rulers are plain solid lines (`#556677`, 12px major / 8px minor ticks) in a symmetric 20px `RULER_MARGIN` border zone around **both** panes — no stipple, no text, no antenna look. Q2 (after pane) is the same size as Q1; `_to_photo(arr, box)` uses the full canvas box minus the margin on each side. SAM2 click-to-select: drag a box on the before pane, Shift+click adds positive points, Alt+click negative; runs in the ComfyUI interpreter via `sam2seg.run_subprocess`, hourglass cursor during prediction, result shown as a 3px green border rectangle around the canvas perimeter (a selection indicator, not an applied mask). Checkboxes enlarged to 24×24. Crop pan restricted to inside the crop box.
-- **Rulers moved to static 20px border zone** (09-14, user: "border zone of images should be zone for creating rulers, 20 pixels around images"). The after-pane image is now inset by `RULER_MARGIN=20` px on all sides (`_show_after` computes `inset_box`), guaranteeing a border strip regardless of aspect ratio. `_draw_rulers` draws ticks in that margin (top, left, right, bottom) pointing inward from the canvas edge — no longer overlaid on the photograph. Hovering the border zone shows a crosshair cursor (`_on_crop_motion`). Crop drag still calls `_show_after` which redraws rulers each tick; since they now live in the static margin (not on the moving image), the flicker is imperceptible.
-- **Stage 0 barrel distortion (lensfunpy)** (09-14). `src/pc/distortion.py`: EXIF make/model/focal/aperture → lensfunpy `Modifier.apply_geometry_distortion()` → per-pixel `(map_x, map_y)` float32 arrays. No EXIF or no profile match = returns None (graceful skip). `warp.apply_undistorted()` composes the undistortion map with H_total into a single `cv2.remap` (Stage 5: one resample). CLI: `--undistort {off,lensfun}`. Pinned by `tests/test_distortion.py` (7 tests).
-- **Clipboard paste + jpeg quality spinbox** (09-13, user: "möchte screenshots per copy paste einfügen"). Paste button (`add_paste_btn`) in addbar calls `App._paste_screenshot()`, which grabs the clipboard via `PIL.ImageGrab.grabclipboard()`, saves a timestamped JPG in the output dir at the configured quality, and feeds it through `_add`. Jpeg quality spinbox (`v_jpegq`, range 10–100) added to batch options grid (2,4), persisted via `trace_add` → `prefs.save(jpeg_quality=…)`. Pinned by `test_gui.test_paste_button_exists_and_handler_is_wired` and `test_gui.test_jpeg_quality_spinbox_in_batch_options`.
-- **[bug] Before/after canvases stayed black after a theme switch** (09-13, user:
-  "still bg black!"). `tk.Canvas` has no `-fg` option, so the old Canvas branch's
-  `cget("fg")` raised TclError and aborted the branch *before* the background was
-  re-tinted. Rewrote it as an independent per-option cget loop (gui.py ~280-294):
-  each of bg/foreground/highlightbackground is read and swapped on its own, a bad
-  option can no longer take the others down with it. Pinned by
-  `test_gui.test_theme_switch_retints_canvas_backgrounds`.
-- **Status box removed; detector moved Q4→Q3** (09-13, user: "status not needed
-  anymore, move all detector stuff from 4 quarter to 3rd quadrant left bottom").
-  The `tk.Text` status area and its copy button are gone from the review panel's
-  top frame; `_set_status`/`_set_status_extra` are no-ops so the ~25 call sites
-  throughout `gui.py` remain safe. The detector combobox and weights button now
-  live in Q3 (`_build_tools`, the tools field, bottom-left) instead of the App-level
-  batch options panel (Q4). `App.v_detector` is kept as a StringVar synced via
-  `trace_add("write", …)` from the review panel's combobox so `_settings()` still
-  reads the right value. The weights button is created on the App object
-  (`app.btn_weights`) inside `_build_tools` so `_download_models()` can reference
-  it for progress display. Four test assertions in `test_gui.py` that read
-  `r.status.get("1.0","end")` were removed.
-- **[bug] The mask brush did nothing from the second photograph onwards — fixed
-  (09-13).** `v_stroke`/`v_stroke_w` were rebuilt by `_build`, which re-runs on
-  every load, while the "Mask brush" checkbutton lives in the tools field, which
-  is built **once**. After the first load the box set a variable nothing read and
-  `_on_click_before` saw a fresh `False`. Every test passed throughout, because
-  they all set `v_stroke` directly instead of pressing the widget — the exact
-  "Tested is not reachable" trap this file names. Fixed by making them once, and
-  pinned by `test_gui.test_the_mask_brush_still_works_after_a_second_photograph_loads`,
-  which **presses the real checkbutton and sends real Tk events, after a reload**.
-  **Audited for more of the same class**: every other tools-field variable
-  (`v_alpha`, `v_detector`, `v_gdino_prompt`, `v_maskinv`, `v_maskmode`, `v_roi`,
-  `v_roi_x0/x1`) is created inside `_build_tools` itself, so none can go stale.
-  This was the only instance.
-- **Brush preview fixed and restyled** (09-13, user: "yellow cursor is far off").
-  It drew stroke points — stored in *image* coordinates — straight onto the
-  *canvas*, so it sat a whole `_before_off` away from the pointer; and it used the
-  radius as a width, so the guide was half the mark it left. Now offset correctly,
-  at the true diameter, solid dark red instead of dashed yellow (a marquee reads
-  as a selection, not as paint).
-- **Grid draws on the corrected pane only** (09-13, user-directed). It was being
-  drawn on both. On the original it measures nothing and competes with the
-  detected lines; on the result a true vertical should run along a grid line,
-  which is the whole point. Pinned in `test_the_grid_never_reaches_the_saved_file`.
-- **"Check lines": re-detect on the corrected frame** (09-13, user-directed
-  diagnostic). A switch on the after pane runs the detector over the *result* and
-  draws what it finds — green where a line came out truly vertical/horizontal,
-  red/orange where it still leans. The direct way to see a correction that came
-  out too weak, instead of inferring it from the before pane. Off by default;
-  runs on the preview-sized array, never full resolution.
-- **`max_horizontal_deg` raised 8 → 30** (09-13, user: "horizontal correction is
-  often way too weak"). The 8 was reasoned for unattended batch, where a wrong yaw
-  shears a frame nobody looks at; P9 measured the real single-VP yaw on this pool
-  at **16–70°**, so the cap was clamping it to a fraction of what the geometry
-  asked for. 30 matches the manual slider, so automatic and by-hand now reach the
-  same place. The shear risk is unchanged and real — it is simply seen by the
-  person reviewing before anything is written. First consequence of the
-  manual-first direction reaching a measured default; the others (pitch cap,
-  confidence veto, P9's refuse-whole) are still open.
-- **Tools live on the picture now** (09-13, user-directed): the before pane's
-  top-left corner is a vertical palette — a bigger `+`, the folder icon, then
-  Mask brush / Mark / Planar as toggle buttons (`indicatoron=False`, so a tool
-  reads as held). Everything you can do to the original is in one column on the
-  original.
+- **The suite runs on five photographs, not fifty** (09-14, user: "test should be
+  minimal half of time", "testsuite max 5 images"). **152.8 s → 48.3 s**, a 3.2x cut,
+  with the same 292 tests, the same 2 known failures and the same 2 skips — the
+  pool-wide sweeps were the bulk of the runtime. `test_assets.MAX_ASSETS = 5`,
+  sampled **evenly across the sorted pool** rather than the first five (the pool
+  sorts by filename, so the first five are five photographs from one contributor).
+  `PC_TEST_ASSETS=0` restores the whole pool, and **must** be used before writing any
+  pool-wide number into this file: a claim about the pool computed from a tenth of it
+  is not a claim about the pool. `_ALWAYS` force-keeps `*_upright.*`, `*_skip.*` and
+  the receding-row asset, so the cap cannot quietly drop a **known failure** and read
+  as a fix — the sample is 6, not 5, for exactly that reason.
+- **The ruler test that was failing is gone, and the rulers are guides now** (09-14).
+  The open bug entry that called this a regression is closed: the test pinned a ruler
+  *scale* (ticks tied to the grid toggle), which the "simple grey lines" decision
+  superseded. Replaced rather than loosened — see the guides entry below.
+- **Pad colour, its swatch and the "edge" button removed from the fill row** (09-14,
+  user). `pad` only shows through when the fill is off, and the fill defaults to
+  `telea`, so three controls competed for width in the busiest row to set something
+  almost nobody sees. `--pad` and `Settings.pad` are untouched. The "edge" button's
+  tooltip described padding *width*, which it never set — it had been lying about
+  itself too. Handlers, swatch and the now-orphaned `colorchooser` import all went
+  with it; zero references left.
 
-- **The brush paints the mask now, instead of erasing individual lines** (09-13,
-  user-directed: "use brush to expand mask manually — for example killing the
-  car"). Renamed **Mask brush**. `review.paint_ignore(pts, display_scale, radius,
-  erase=False)` maintains a hand-painted region at analysis resolution, merges it
-  into the shown mask so the red wash grows as you paint, and strikes lines the
-  paint covers **end to end** — `drop_by_endpoints`, the same rule the automatic
-  mask uses, so a facade edge that merely crosses the painted area keeps its say.
-  Re-derived from the region on every stroke rather than accumulated, which is
-  what makes erasing work. Deliberately skips the two heuristics that
-  second-guess a *computed* mask — `protect_structure` (hands long lines back)
-  and `credible` (can refuse a mask outright): what the user paints is a decision,
-  not a hypothesis. Survives a re-detect (`_detect` re-applies it), so changing
-  detector or mask source no longer discards it. Gestures are Photoshop's: **left
-  paints, right erases, Alt+right dragged sideways sizes the pen**. This is the
-  manual answer to the problem that ran all day — BiRefNet picked two parked cars
-  as the subject, GDINO picked one building; a stroke ends the argument.
-  `test_review.test_painting_the_mask_strikes_what_it_covers_and_erasing_hands_it_back`
-  + `test_gui.test_the_mask_brush_paints_the_ignore_region_and_erases_it_again`.
-  **Supersedes `erase_lines_in_stroke`, which is deleted** along with its tests —
-  painting subsumes it (the mask drops those lines anyway) and the user asked to
-  drop per-line annotating.
-- **Overlay switches moved onto the images they draw on** (09-13, user-directed):
-  `Lines` and `Mask` to the top-right of the *before* pane, `Grid` to the
-  top-right of the *after* pane, both `place`d over the canvas like the add icons
-  in the before pane's top-left. A switch for an overlay belongs on the picture it
-  changes, not in a box across the window; and the grid in particular is the ruler
-  you judge the *corrected* frame with, so it belongs on that frame. Built in
-  `_build` beside their canvases — `_build` re-runs on every load, so a bar
-  parented to the previous canvas dies with it; the variables are made once so the
-  switches don't flip themselves back on each photograph. `_mk_show`/`_mk_mask`
-  deleted (their only callers were the old row).
-- **Masks get a morphological close before the shrink** (09-13, user-reported thin
-  stripes, with a screenshot). `build_mask` now closes (dilate then erode, default
-  `close_frac=0.004`) before the measured `shrink_frac` erosion. The matte leaves
-  thin unmasked slivers where it runs between structures, and the shrink is an
-  erosion, which eats a thin region entirely and leaves broken stripes. Closing
-  first fills them without moving the silhouette, so it cannot disturb what
-  `shrink_frac` was measured against. Kept deliberately smaller than the shrink:
-  it is for speckle, not for reshaping the subject.
-- **The options bar says what it is**: titled "defaults every photograph opens
-  with" (09-13). "detector", "mask" and "fill" appear *twice* in this window and
-  nothing said which was which — `_settings()` feeds these to every
-  `review.load`, and the panel's copies override them for the photograph on
-  screen. Same controls, now legible.
 
-- **The prominent run button now *asks* instead of writing unattended** (09-13,
-  user-directed "focus on manual; if batch then image by image"). The accent
-  button in the run bar is `Review each` (`Review` for a single photograph) and
-  calls `_review_each`, which opens one review window per image and writes only
-  on Save; the old fire-and-forget run is demoted to a plain `Unattended` button
-  (`btn_batch`) beside it — **demoted, not deleted**, and both go disabled while
-  a run is writing so a review walk can't race it. Nothing about `_review_each`
-  itself changed: the walk, its `[n/total]` position label and its close-advances-
-  the-queue chaining already existed and were simply not the default.
-  `test_gui.test_the_prominent_button_asks_rather_than_writing_unattended` pins
-  it by *pressing* the button and checking no worker thread starts — a button
-  labelled Review but wired to the batch is the failure worth catching, and only
-  invoking it tells the two apart.
-- **`masks.build` accepts several sources at once** (09-13): `mask_mode` may be
-  one name as always ("birefnet") or comma-joined ("file,birefnet"), in which
-  case the ignore regions are **added** (a pixel is ignored when any source
-  ignores it). Single values behave exactly as before, so every caller, CLI flag
-  and remembered preference is untouched. `_build_one` holds the per-source logic.
-  **Currently reachable from nothing** — the GUI checkbox UI that would drive it
-  was started and reverted when mask work was paused, so this is a seam with no
-  caller: the gotcha this file already names. Either wire it or drop it; don't
-  leave it a third time.
+- **Both previews fill their field, at one scale** (09-14, user: "images must be
+  same size and fill frame fully", "images same size maximized"). `_redraw` shrank
+  *both* boxes by `2 * RULER_MARGIN` and `_show_after` then inset again, so the
+  corrected image rendered **11.5 % smaller than the original beside it** — the one
+  thing a before/after comparison must not do. Measured at 1920x1200: before
+  648x486 (64.9 % of canvas) and after 625x446 (57.5 %); now **701x526 (76.0 %)**
+  and **737x526 (79.9 %)**, both exactly the canvas height. The two boxes are
+  computed by identical expressions on purpose — one rule is the only way two
+  panes stay at one scale. Remaining width difference is real: the warp changes
+  the frame's aspect, so at equal scale the corrected frame *is* wider, which is
+  information rather than a defect.
+- **Rulers are guides pulled out of the black cross** (09-14, user: "rulers should
+  be simple grey lines", "ruler zone outside in black cross", "from black cross and
+  border"). Three changes. (1) The guide zone left the inside of the canvases —
+  that inset was what was stealing the pixels above, and the cross is outside the
+  images where it costs nothing. (2) Creation moved to the panel itself: the cross
+  *is* `ReviewPanel`'s background showing through the grid, every child canvas eats
+  its own events, so anything reaching `self` is over the gutter or border and
+  needs no hit-testing (`_on_cross_press` / `_on_cross_pull` / `_on_cross_drop`,
+  with `_cross_orientation` giving a guide parallel to the bar it came from, and a
+  dashed preview while dragging). Released back over the cross it is discarded,
+  like dragging a guide back to the ruler. (3) They draw as **plain grey hairlines**
+  (`GUIDE_GREY`); they had been 3 px light blue with a tick every 20 px, majors
+  every 100 and a numeric label — that is a ruler *scale*, and a guide is laid
+  against an edge to judge parallelism, so every tick competes with the photograph.
+  `test_a_guide_is_pulled_out_of_the_border_as_a_plain_grey_line` **replaces**
+  `test_the_ruler_reads_the_same_height_on_left_and_right`, which pinned the
+  superseded scale and was the suite's only self-inflicted red.
+- **`max_horizontal_deg` raised 30 → 60** (09-14, user: "horizontal correction up
+  to 60 degrees"). Manual yaw slider and spinbox widened to ±60 to match, so the
+  estimator's cap and the by-hand control reach the same place. Second time this
+  constant has moved under the manual-first direction (8 → 30 → 60); the shear
+  risk is unchanged and real, and is seen by the person reviewing before anything
+  is written.
+- **Three dead Tk bindings, and the brush cursor nobody could see** (09-14). Tk's
+  `bind()` *replaces* a handler for the same sequence rather than adding, so
+  `c_before` binding `<B1-Motion>`, `<ButtonRelease-1>` and `<ButtonPress-3>` twice
+  each left `_on_sam_drag`, `_on_sam_release` and `_on_sam_right_click` **dead** —
+  SAM's drag, release and right-click did nothing, which is why SAM read as
+  missing. Now one bind per sequence dispatching to both, each handler already
+  self-guarding (`v_sam` / `_brush_live`). Separately the brush outline drew a
+  single **black** 1 px ring on a dark field and was invisible; it is a white ring
+  outside a black one now, the way every editor does it, so one of the two always
+  contrasts.
+- **Planar left Q4 and the tool palette** (09-14, user: "remove planar from q4",
+  "less is more"). The quad was doing two unrelated jobs — rectify a flat face, and
+  state which plane the lines belong to — and marker lines answer the second with
+  far less UI. `v_planar` is now made once rather than rebuilt by `_build`, the
+  trap that had already killed the mask brush from the second photograph onward.
+  `planar.py` and its tests stay; nothing in the window points at them.
+- **Docs condensed** (09-14, user). CLAUDE.md 957 → 567 lines (Done collapsed to
+  one line per entry; full prose is in git history, which is why dropping it is
+  not lossy), `knowledge.md` 451 → 342 (the `claude_save.md` reconciliation section
+  had done its job when that file was deleted, nine pointers at it were dead, and
+  §5's status duplicated this Ledger — only third-party APIs and licences kept).
+  `qwen.md` had four stale names — `src/bpc/`, the `bpc` command, `bpc --doctor`,
+  `run_bpc_gui.bat` — all of which would have sent the worker somewhere that does
+  not exist.
 
-Condensed 2026-09-13 (see Governance) — one to a few lines each: what shipped, the
-date, and the pinning test if any. Full narrative for anything still worth arguing
-about lives in `knowledge.md` (research goals) or `docs/worker-environment.md`
-(worker/tooling); everything else, the code and tests are the source of truth for
-*how* — this list is only the record *that* it happened.
 
-- **Review-window UI polish: tooltips, movable mark endpoints, Alt+click mask erase, Mask Apply, loupe in mark mode** (09-13, user-directed). `_attach_tooltip` (gui.py ~473) adds a `tk.Toplevel` tooltip to all ~30 interactive buttons; rubberband mark lines gained draggable endpoints for refinement; Alt+Left-click erases mask paint (same as right-click, gui.py 2414); "Mask Apply" button strikes lines covered by painted mask (gui.py 2208); full-resolution loupe magnifier follows the cursor when dragging planar corner handles (gui.py 1539-1588). `test_gui.test_the_mask_brush_paints_the_ignore_region_and_erases_it_again`, `test_gui.test_planar_corners_can_be_placed_and_dragged`.
-- **Loupe click forwarding + drag tracking** (09-14, user-reported "loupe not working on click" then "loupe still fixed when moving handle"). Two fixes: (1) `_loupe_show()` now binds `<Button-1>`, `<ButtonRelease-1>`, `<B1-Motion>` on the loupe canvas and relays them to `c_before` via `event_generate` at the equivalent coordinate — the loupe floats above `c_before` and was swallowing clicks. (2) `_on_before_b1motion` now calls `_loupe_move(event)` first, so the loupe tracks the cursor during drags (`<B1-Motion>` fires instead of `<Motion>` while a button is held). Checkbox indicators enlarged ~25% via `indicatorwidth=16, indicatorheight=16` on the TCheckbutton style (same session, user-directed "25% larger").
-- **FIND controls moved to the input side; review panel is edit-only.** The line
-  detector + ROI x left the lower-right adjustments panel (`leftcol` removed) and now
-  live in the bottom-left tools field beside the before-image (`_build_tools`) — what
-  the estimator *sees* belongs on the input side, not with the angles that edit the
-  result (09-13, user-directed; verified by off-screen position dump). The panel is a
-  single edit column now. This supersedes the "three-zone within the panel" proposal in
-  the layout-ergonomics item it closed.
-- **ROI strip auto-enables horizontal correction** (09-13, fixes "ROI shown but not
-  applied"): ROI x only restricts *horizontal* evidence → yaw, and yaw is gated on
-  `correct_horizontal` (`model.py:426`, `warp.py:49`) which defaults off — so the strip
-  changed nothing until that flag was set. `_apply_roi` now turns the flag on (and calls
-  `_on_horizontal_toggle()`) when a valid strip is set; clearing the strip does not force
-  it back off. `test_gui.test_enabling_an_roi_strip_turns_on_horizontal_correction`.
-- **Batch Output destination moved to the Start/Stop bar** from the loader field — an
-  output concern riding the run controls' existing height (the options frame above has no
-  vertical headroom; the cross fixes field height). `_w_out` packed right on `bar`, path
-  field before the progress bar so it keeps width at 1280 (09-13). Closes layout-ergonomics ask #1.
-- **Window floor raised to 1920×1080** (`self.minsize(1920, 1080)`, `gui.py`): the cross
-  needs a full field per quadrant, so the old 960×640 floor let a resize starve the
-  canvases. Off-screen tests updated to the new floor (09-13).
+One line each. **The full reasoning for any entry is in this file's git
+history** — it has been committed at every step, so `git log -p -- CLAUDE.md`
+recovers the prose without keeping it in the live context. Kept as titles so
+nothing is silently re-proposed and so a search still finds it.
 
-- **Controls `btns` row no longer clips at any window size** (09-13, full fix for
-  the overflow bug — closes the Open item that had called this "partially fixed").
-  Two mechanisms: (1) the action row (Save/overwrite/Close/Keep original) reaches
-  every size because `btns.pack(side="bottom", fill="x")` now runs first in the
-  assembly, so it claims its strip before the picture does — the picture yields
-  height, never the buttons; paired with the adaptive adjustments-panel default
-  `layout.adjustments_start_open` (open only if the window height can afford both
-  controls and a usable picture; `_adapt_adjust_default` applies it and stands down
-  permanently the instant the user touches the toggle by hand). (2) The row's own
-  width overflow is solved by splitting it into two rows — `self._btns` (Auto/Reset
-  left, Save/overwrite/Close/Keep right) and `self._btns2` (Mark/kind/Planar/Clear
-  marks/Strike slanted/Auto crop/Reset crop) — and moving the display overlays
-  (Lines/Mask/Grid/grid-step) out of the row into the lower-left tools field
-  (`_build_tools`), so each row fits the ~742–1230 px field at the 1920 floor.
-  `test_gui.test_the_save_button_is_reachable_at_every_window_size` (now asserts
-  every child of both rows has width > 0) +
-  `test_the_panel_default_keeps_both_the_buttons_and_a_usable_picture` +
-  `test_a_hand_made_choice_about_the_controls_outranks_the_height` +
-  `test_collapsing_the_adjustments_leaves_the_cross_where_it_was`; measured by
-  `analysis/verify_btns_fit.py`. **Supersedes** the "three sub-rows" IA redesign this
-  bug's Open entry used to propose — that specific proposal was not what got built;
-  this is a narrower, different fix (assembly priority + adaptive default + row
-  split), not the redesign.
-- **Folder-add icon redesigned**: one continuous polygon silhouette (a body whose
-  top edge steps up into a short tab over the left half), replacing the old two-
-  overlapping-rounded-rectangles blob that was confirmed unrecognizable at 18px
-  (09-13, `_folder_pil`, `gui.py`). **Visually verified by the architect** at 18px
-  and 8x (`analysis/folder_final_18.png` / `folder_final_8x.png`, rendered via
-  `analysis/render_folder_final.py` from four candidates) — Qwen cannot view images
-  itself (confirmed directly from its own reasoning trace while working this item),
-  so this item's "visually checked before done" gate routes through rendered
-  artifacts plus a sighted reviewer, not a worker self-check. No dedicated shape-
-  pinning test, only the pre-existing `test_gui.py:673` mapped-presence check — a
-  future edit could silently regress the shape.
-- **Crop rectangle gained mid-edge handles**, not just corners: a drag on an edge
-  midpoint moves just that edge along its axis (top/bottom vertically, left/right
-  horizontally) instead of re-placing all four (09-13, `_grab_handle`, `gui.py`).
-  `test_gui.test_the_mid_edge_handles_move_one_edge_on_its_axis`.
+- **Package renamed `bpc` → `pc`** (09-14)
+- **Rulers, Q2 layout, SAM interaction overhaul** (09-14)
+- **Rulers moved to static 20px border zone** (09-14)
+- **Stage 0 barrel distortion (lensfunpy)** (09-14)
+- **Clipboard paste + jpeg quality spinbox** (09-13)
+- **[bug] Before/after canvases stayed black after a theme switch** (09-13)
+- **Status box removed; detector moved Q4→Q3** (09-13)
+- **[bug] The mask brush did nothing from the second photograph onwards — fixed (09-13)** (09-13)
+- **Brush preview fixed and restyled** (09-13)
+- **Grid draws on the corrected pane only** (09-13)
+- **"Check lines": re-detect on the corrected frame** (09-13)
+- **`max_horizontal_deg` raised 8 → 30** (09-13)
+- **Tools live on the picture now** (09-13)
+- **The brush paints the mask now, instead of erasing individual lines** (09-13)
+- **Overlay switches moved onto the images they draw on** (09-13)
+- **Masks get a morphological close before the shrink** (09-13)
+- **The options bar says what it is** (09-13)
+- **The prominent run button now *asks* instead of writing unattended** (09-13)
+- **`masks.build` accepts several sources at once** (09-13)
+- **Review-window UI polish: tooltips, movable mark endpoints, Alt+click mask erase, Mask Apply, loupe in mark mode** (09-13)
+- **Loupe click forwarding + drag tracking** (09-14)
+- **FIND controls moved to the input side; review panel is edit-only** (09-13)
+- **ROI strip auto-enables horizontal correction** (09-13)
+- **Batch Output destination moved to the Start/Stop bar** (09-13)
+- **Window floor raised to 1920×1080** (09-13)
+- **Controls `btns` row no longer clips at any window size** (09-13)
+- **Folder-add icon redesigned** (09-13)
+- **Crop rectangle gained mid-edge handles** (09-13)
 - **Enabling the `roi_x` strip now turns on `correct_horizontal` with it** (09-13)
-  — the strip only shapes the yaw, and yaw is gated on that flag (off by default),
-  so a strip that left it off changed nothing. One-way: clearing the strip again
-  does not force the flag back off, since that may now be a deliberate choice.
-  `test_gui.test_enabling_an_roi_strip_turns_on_horizontal_correction`.
-- **`roi_x` got a real interface**: mouseover tooltip + two draggable vertical
-  rulers on the before-canvas, defaulting to 20%/80% (not the old useless 0/100),
-  clamped to the frame edge and to each other so the strip can't collapse or be
-  swiped away; percent spinboxes stay as a secondary fine-tune (09-13, user-directed).
-  `test_gui.test_roi_x_draws_two_draggable_rulers_defaulting_to_20_and_80`. The
-  auto-derived default from a GDINO box (`grounding-sam/SKILL.md` §6) is a later,
-  separately-measured refinement — this is the baseline.
-- **Mask opacity works with "Lines" off** (09-13) — `render_before` drew the mask
-  wash only when lines were shown; now independent.
-  `test_review.test_mask_opacity_is_adjustable_and_zero_means_invisible`.
-- **"subfolders"/"overwrite originals" duplicate checkbox fixed** (09-13) — one pair
-  now, not two. `test_gui.test_the_batch_bar_has_each_setting_exactly_once`.
-- **`--mask gdino` shipped**: 4th mask_mode, text-prompt box (GDINO) crops, BiRefNet
-  mattes inside it; opt-in, not default (09-13). Needed `kornia` (`--no-deps`) to
-  unblock BiRefNet loading in-process. 6 `test_masks` tests +
-  `test_gui.test_the_gdino_prompt_field_and_mode_are_reachable`. Not a measured win on
-  clean assets (see the GDINO-crop finding below) — ships as an alternate entry point /
-  competing-foreground fix.
-- **Pitch cap raised 20°→30°** (09-13, user-directed, overriding the measurement
-  below). `config.py max_pitch_deg = 30.0`.
-- **BiRefNet-lite checkpoint support** added (`_arch_file` routes "lite" names to
-  `birefnet_lite.py`) (09-13). `test_birefnet.test_the_lite_checkpoint_uses_its_own_network_file`.
-  **GDINO-crop-then-BiRefNet measured no gain** over plain BiRefNet on 3 assets (IoU
-  0.975–1.000) — `tools/probe_gdino_birefnet.py`, recorded in `knowledge.md` §3a. (This
-  did not stay a stopped probe — it shipped anyway as `--mask gdino` above, a looser
-  reading of §3a's gate than this measurement supports; noted once, here.)
-- **Crop rectangle gains a pan gesture**: press-inside drags the whole rect, clipping
-  to the frame at an edge (09-13, user-directed).
-  `test_gui.test_dragging_inside_the_crop_pans_it_and_clips_to_the_frame`.
-- **Cached-mask pool completed** (6 assets generated) **and a real bug fixed**:
-  `cv2.imread` mangles non-ASCII paths on Windows — added `masks._imread`
-  (`np.fromfile`+`imdecode` fallback) (09-13). A mojibake mask filename and two
-  legitimately-degenerate masks (routed to the existing `MK.credible` refusal) were
-  also cleaned up in the same pass.
-- **P13 decided**: division/fraction grid modes stay bare, by construction
-  (`_grid_step` returns `step=0` → `_draw_rulers` no-ops there) (09-13). No code
-  change needed — rulers remain pixel-mode-only, top/left/right edges.
-- **P10 done**: the 2 actually-missing assets (of the 4 the item named — 2 had
-  already landed) were tracked-but-deleted, restored via `git checkout --`, no
-  network needed (Commons is 403 from this box regardless) (09-13).
-- **`ArchitectureScheme` wired in** behind `config.use_scheme` (default `False`) /
-  `--scheme` (09-13) — off by default since it only ever removes evidence.
-  `pipeline.analyse` re-derives vert/horiz from survivors when it fires; summary
-  logged to `detect_info`. `test_pipeline.test_use_scheme_partitions_lines_and_is_off_by_default`
-  + `test_schemes` (7). **Do not build a second classifier for this under a different
-  name** — checked against a prompt referencing `XiaohuLuVPDetection`/`GlobustVP`/
-  `vp-toolbox`/`perspective-control` on 09-12, this class already covers it. A more
-  outlier-robust VP search belongs in `vanishing.py`, not a new class; `vp-toolbox`'s
-  J-linkage drops the Manhattan-orthogonality assumption `H=KRK^-1` depends on, a
-  core-model change, not a line-filter tweak.
-- **P9 (yaw policy) measured, analysis-only** (09-13): over 33 assets with
-  `correct_horizontal=True`, refuse-whole-on-limit throws away 25 photos whose
-  roll+pitch were safely within cap — only yaw (16–70°) breached; only lochfassade
-  breached multi-axis. **Recommendation: refuse only on roll/pitch breach; drop yaw
-  and keep levelling when only yaw breaches.** Not implemented — a separate
-  `warp.limit`/`pipeline.analyse` decision, and only matters once `correct_horizontal`
-  is opted into (default off).
-- **Pitch cap measured, analysis-only** (09-13): 32/33 assets ≤19.5°, only
-  lochfassade at 28.6° exceeded 20°; forcing it through showed a fill-smear + a
-  trapezoidal far-facade (expected — one rotation can't square two non-coplanar
-  planes). Recommended keeping the cap at 20 — **overridden the same day**, see
-  "Pitch cap raised to 30" above; kept here as the measurement the override was
-  weighed against.
-- **P16 done**: rubberband marking takes `kind="v"|"h"` now — a horizontal-kind mark
-  drives yaw via `min_horizontal_support=0`; mark-line width scales with image size
-  (09-12). `test_review` (4 new) + `test_layout.test_the_mark_line_thins_out_on_small_photographs`.
-- **BiRefNet's process-wide `subprocess.check_output` monkeypatch scoped** to a
-  contextmanager around just the torch import (09-12) — stopped leaking into other
-  callers.
-- **`tests/assets/Horizontal/` wired into `test_assets.py`**, `*_corr.*` outputs
-  filtered out so the test doesn't grade its own homework (09-12).
-- **`skills/ui.md` rewritten** for the cross layout + the widgets that landed since
-  (Spinboxes, mark-kind combobox, rulers, loupe) (09-12).
-- **Bottom-left field became the persistent tools area**: line-brush + masking
-  controls (incl. a working mask-opacity `tk.Scale`) moved there from the old
-  lower-right row (09-12, user-directed).
-- **Review-panel columns read "find vs. edit"**: detector in `leftcol`, angle
-  sliders + fill/mask/ComfyUI in `rightcol` (09-12, user-directed). Pure reparenting.
-  **Superseded 09-13** — the FIND controls (detector + ROI x) left the panel entirely
-  for the bottom-left tools field; the panel is now a single edit column (see the
-  "FIND controls moved to the input side" entry above).
-- **Loader minimized** to two grey add-icons overlaid on the before-image + a
-  save-folder row; file listbox removed (09-12, user-directed) — this also fixed a
-  3px results-tree collapse at 1280×800 that the listbox's height demand was causing.
-- **Line-brush stroke tool**: drag over the before-canvas erases every candidate
-  line it touches — a pencil, not a toggle; sweeping the same path twice is
-  idempotent, one `refit()` per stroke (09-12; **corrected 09-13** — this shipped as
-  a toggle/flip and was documented as one here, but the code is now erase-only:
-  `erase_lines_in_stroke`, was `toggle_lines_in_stroke` — the old entry was a wrong
-  done). Refined 09-13 (user-directed): default width 24→10; struck lines now
-  *vanish* from the before render instead of lingering grey (`render_before` no
-  longer draws disabled lines in `PV.GREY`), so an erased line stays gone; the drag
-  preview is a temporary saturated-amber dashed brush (`#ffd000`, denser dash) that
-  clears on release while the erasure persists — pale `#ffe14d` was invisible on
-  light facades. `test_review.test_a_stroke_erases_every_line_it_crosses_and_is_idempotent`
-  + `test_gui.test_line_brush_stroke_erases_lines_and_clears_its_preview`.
-- **`ReviewPanel._apply_mask` no longer crashes on a missing `v_maskpath`** (09-13,
-  surfaced by an off-screen probe). It read `self.v_maskpath`, but that StringVar is
-  created on the App (batch options), not the ReviewPanel — so picking birefnet/gdino
-  with no stored model threw `AttributeError`. Now it reads the App's remembered
-  `"birefnet_model"` (mode-independent, unlike the mode-dependent `v_maskpath` field)
-   via `self._app()`, falling back to prefs under a test root.
-- **Mask-mode label renamed "source" → "mask"** (09-13, user-directed): the tools-field
-  label beside the mask-mode combobox (off/file/birefnet/gdino) now reads "mask". One-line
-  text change at `gui.py` (`_build_tools`), nothing else on that row moves.
-- **Hough detector removed** (09-12, user call — too noisy, and was a silent
-  fallback even when a different detector was explicitly picked). `detect_segments`
-  now returns empty rather than degrading to it. `test_detectors.py`/`test_prefs.py`
-  updated for the removed name.
-- **Off-screen test coverage added for planar corners** (`debug_ui.py` +
-  `test_gui.test_planar_corners_can_be_placed_and_dragged`), closing the gap that let
-  P11/P12 (below) sit broken undetected for a day (09-12).
-- **Loupe crash fix**: `w.lift()` is the wrong Canvas API for raising a window (it's
-  the *item*-stacking call); now `w.tk.call("raise", w._w)` (09-12).
-- **Planar Save fix**: `_save` was writing the roll/pitch correction even with 4
-  planar corners placed, silently discarding them. Now branches on
-  `v_planar.get() and len(planar_quad)==4` (09-12).
-  `test_gui.test_save_routes_to_planar_when_four_corners_are_placed`.
-- **P15 done**: before/after panes show source/destination filenames,
-  middle-truncated so the extension always survives (`_shorten_middle`) (09-12).
-- **Grid-spacing combobox made genuinely editable** — was still `readonly` despite
-  an earlier claim otherwise (09-12).
-- **Angle/focal sliders gained paired Spinboxes** for fine control; flex rulers (P13)
-  added on the after-canvas, pixel mode only (09-12). `layout.ruler_ticks` +
-  `gui._draw_rulers`, `test_layout.test_ruler_ticks_*`.
-- **Ruler ticks added to the right edge too**, for counter-checking level — same
-  y-positions as the left ruler (09-12, user-directed).
-  `test_gui.test_the_ruler_reads_the_same_height_on_left_and_right`.
-- **M-LSD unblocked in the GUI interpreter** — needed `ai-edge-litert`
-  (`--no-deps`) (09-12). 2 tests un-skipped.
-- **Perfect cross UI, window = cross** (09-12). Four exactly equal fields — before/
-  after on top, loader + controls below — a flat **20px dark cross** and **20px dark
-  border** (`CROSS_GAP`/`CROSS_BORDER`, `layout.py`; `INK["cross"]`, `gui.py`). No
-  PanedWindow, no results strip: the results tree lives in the loader field, the
-  batch bar at the foot of the controls field. Pinned by `test_the_cross_is_four_equal_fields`,
-  `test_the_window_is_the_cross_and_nothing_else`,
-  `test_the_perfect_cross_is_flat_twenty_on_every_real_screen` (five screen sizes).
-  **Closed decision** — the cross and the loader's `+` icon are what the user wants;
-  do not propose layout changes.
-- **P14 done**: manual yaw slider to ±30° (`max_horizontal_deg` unchanged at 8 —
-  that's the auto-estimator's cap, a slider is a person deciding, not a guess).
-- **Version series starts at 1.0** — 0.x was never user-visible.
-- **P11+P12 done**: planar corner placement/drag and the loupe both work (an
-  earlier CLAUDE.md claim that `_loupe_show`/`_loupe_hide` didn't exist was already
-  stale when written).
-- **Slim live CLAUDE.md**, full history split out (that archive, `claude_save.md`,
-  was itself deleted 2026-09-13 once carried forward into this file and
-  `knowledge.md`) — 09-12.
-- **Batch-options bar regrouped**: detector+params left (cols 0-5), output
-  (mask/fill/server/checkboxes) right (cols 7-11) (09-12, user-directed).
-- **`ttk.Scale` crash on window open, fixed** (09-12) — `ttk.Scale` doesn't take
-  `width`/`sliderlength` (that's `tk.Scale`'s API); an in-flight styling change had
-  added them to three sliders, crashing the whole window on open. Removed;
-  `layout.SLIDER_WIDTH`/`SLIDER_THUMB` stay defined but unused pending a proper
-  `ttk.Style` pass, if that's still wanted.
+- **`roi_x` got a real interface** (09-13)
+- **Mask opacity works with "Lines" off** (09-13)
+- **"subfolders"/"overwrite originals" duplicate checkbox fixed** (09-13)
+- **`--mask gdino` shipped** (09-13)
+- **Pitch cap raised 20°→30°** (09-13)
+- **BiRefNet-lite checkpoint support** (09-13)
+- **Crop rectangle gains a pan gesture** (09-13)
+- **Cached-mask pool completed** (09-13)
+- **P13 decided** (09-13)
+- **P10 done** (09-13)
+- **`ArchitectureScheme` wired in** (09-13)
+- **P9 (yaw policy) measured, analysis-only** (09-13)
+- **Pitch cap measured, analysis-only** (09-13)
+- **P16 done** (09-12)
+- **BiRefNet's process-wide `subprocess.check_output` monkeypatch scoped** (09-12)
+- **`tests/assets/Horizontal/` wired into `test_assets.py`** (09-12)
+- **`skills/ui.md` rewritten** (09-12)
+- **Bottom-left field became the persistent tools area** (09-12)
+- **Review-panel columns read "find vs. edit"** (09-12)
+- **Loader minimized** (09-12)
+- **Line-brush stroke tool** (09-12)
+- **`ReviewPanel._apply_mask` no longer crashes on a missing `v_maskpath`** (09-13)
+- **Mask-mode label renamed "source" → "mask"** (09-13)
+- **Hough detector removed** (09-12)
+- **Off-screen test coverage added for planar corners** (09-12)
+- **Loupe crash fix** (09-12)
+- **Planar Save fix** (09-12)
+- **P15 done** (09-12)
+- **Grid-spacing combobox made genuinely editable** (09-12)
+- **Angle/focal sliders gained paired Spinboxes** (09-12)
+- **Ruler ticks added to the right edge too** (09-12)
+- **M-LSD unblocked in the GUI interpreter** (09-12)
+- **Perfect cross UI, window = cross** (09-12)
+- **P14 done**
+- **Version series starts at 1.0**
+- **P11+P12 done**
+- **Slim live CLAUDE.md**
+- **Batch-options bar regrouped** (09-12)
+- **`ttk.Scale` crash on window open, fixed** (09-12)
 
 ### Repo note
 
-Nothing on this branch is committed yet. `git status` is otherwise clean — no scratch
-files at the root, and the untracked additions (`skills/`, `scheme.py`
-+ its test, `tools/debug_ui.py`, `tools/worker_bench.py`, `tests/test_cli.py`,
-`"Perspective Correction.bat"` replacing the deleted `run_bpc_gui.bat`, the
-`Horizontal/` assets and the newer top-level ones) are all wanted. Nothing to delete
-or move. The commit-readiness caveat this note used to carry (`scheme.py` unwired, the
-monkeypatch unscoped) no longer applies — both landed (see Done).
+**Rewritten 2026-09-14 — the old text ("nothing on this branch is committed yet")
+had been false for eight commits.** Actual state, measured:
+
+- `D:\Coding\Perspective-Correction` is the **live checkout**, `main` at `843a76b`,
+  in sync with `origin/main`. Uncommitted here: `CLAUDE.md` and `src/pc/gui.py`
+  (worker in flight — the new ruler test failure is most likely in that diff).
+- **`D:\Coding\Batch-Perspective-Correction` still exists.** The rescue section at
+  the foot of this file says that folder "is gone"; it is not. It is a stale
+  checkout one commit behind (`1dc2670`, still `src/bpc/`) with its own modified
+  `CLAUDE.md`, and it is what a recurring drift-check pointed at all day — which is
+  how a suite was run against the wrong tree. Delete it or leave it, but **do not
+  measure anything in it**, and do not confuse it with the off-limits
+  `D:\Batch-Perspective-Correction`.
+- Two strays sit at `D:\Coding\` itself, outside any checkout: a `CLAUDE.md` (a
+  stale copy of this ledger, dated 09-13, claiming 280 tests) and an `analysis\`
+  folder. The stray `CLAUDE.md` is worse than clutter — it is one directory above
+  the project, so a session opened at `D:\Coding` loads *it* as the instructions
+  and reads a day-old ledger as current. That is this file's own "two lists that
+  must agree will not", made worse by neither copy knowing the other exists.
+- Untracked and wanted, unchanged from before: `skills/`, `tools/debug_ui.py`,
+  `tools/worker_bench.py`, `"Perspective Correction.bat"`.
 
 ## Gotchas (each cost real time)
 
@@ -699,6 +541,17 @@ monkeypatch unscoped) no longer applies — both landed (see Done).
   the same bug again.
 
 ## Worker (local Qwen3.8-27B)
+
+**Context is 125 056** (2026-09-14, from the running server's `/v1/models`
+`context_length` — not the card, not the Studio panel, which shows the
+*requested* number). Reached with the KV cache at `q4_0` on both halves and
+speculation off. **Qwen Code does not ask the server**: `contextLimit =
+model.contextWindowSize ?? tokenLimit(id)`, and an unknown id falls back to
+`DEFAULT_TOKEN_LIMIT = 200 000`, so it must be told via
+`generationConfig.contextWindowSize` in `~/.qwen/settings.json` or it compacts
+far too late. Fourth different figure this project has recorded — **ask the
+running server and write the date beside the number.**
+
 
 - CLI: `qwen -m "unsloth/Qwen3.8-27B-GGUF" -p "<package>"`. Server
   `http://127.0.0.1:8888/v1`. Key lives in `~/.qwen/settings.json` under

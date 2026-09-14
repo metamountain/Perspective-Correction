@@ -9,7 +9,7 @@ Straightens converging verticals (roll, pitch) in architectural photographs, bat
 ## Repository Layout
 
 ```
-src/bpc/          source package (setuptools, src layout)
+src/pc/           source package (setuptools, src layout)
   cli.py          argparse front end, batch orchestration
   pipeline.py     process() / analyse() — one image end-to-end
   geometry.py     camera math (K, R, H), vanishing-point fit
@@ -46,7 +46,7 @@ skills/           agent skill definitions
 
 ```bash
 pip install -r requirements.txt       # run from this folder without installing
-pip install -e .                      # install; gives the `bpc` command
+pip install -e .                      # install; gives the `pc` command
 ```
 
 Python 3.9+. Core deps: numpy, opencv-python(-headless), Pillow, piexif.
@@ -73,10 +73,10 @@ Its stale pins downgrade Pillow/numpy and break OpenCV in the same interpreter. 
 python rectify.py "D:\Fotos"                  # write *_corr.jpg beside originals
 python rectify.py "D:\Fotos" -o "D:\Out" -r   # to another folder, recursive
 python rectify.py --gui                       # Tkinter batch window
-bpc --doctor                                  # what this interpreter can actually run
+pc --doctor                                  # what this interpreter can actually run
 ```
 
-Windows shortcuts: `run_bpc_gui.bat` (GUI), `run_and_log.bat` (batch + log + report.json).
+Windows shortcuts: `Perspective Correction.bat` (GUI), `run_and_log.bat` (batch + log + report.json).
 
 ### Tests
 

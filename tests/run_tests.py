@@ -5,6 +5,7 @@
     python tests/run_tests.py geometry   only modules matching "geometry"
     python tests/run_tests.py -v         show every test name
     python tests/run_tests.py -s         run sequentially, in MODULES order
+    python tests/run_tests.py --full     include the slow modules (or PC_FULL=1)
 
 Modules run in worker processes (up to one per core, capped at eight) because
 the suite is bound by a handful of long asset sweeps and wall time should be
@@ -23,6 +24,10 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, os.path.join(ROOT, "src"))
 sys.path.insert(0, HERE)
+
+# Real Tk windows and real photograph sweeps: correct, and far too slow to run
+# after every edit. Deferred unless --full / PC_FULL / named explicitly.
+SLOW = ("test_gui", "test_assets")
 
 MODULES = ["test_geometry", "test_lines", "test_layout", "test_warp", "test_estimation",
             "test_pipeline", "test_cli", "test_review", "test_masks", "test_birefnet", "test_prefs",
@@ -98,7 +103,23 @@ def main(argv):
     if stray:
         print("!! not in MODULES, so never run: " + ", ".join(stray))
     picks = [a for a in argv if not a.startswith("-")]
+    full = "--full" in argv or bool(os.environ.get("PC_FULL"))
     names = [n for n in MODULES if not picks or any(p in n for p in picks)]
+
+    # A normal run is the one you make after every edit, so it has to be quick
+    # enough that you actually make it (user, 2026-09-14: "reduce normal test to
+    # 10s, do extensive testing only after finishing all"). These two are the
+    # whole difference: `test_gui` builds real Tk windows and `test_assets`
+    # sweeps real photographs, and together they were ~40 s of a ~48 s run.
+    #
+    # Naming either one explicitly still runs it -- the skip only applies to the
+    # default sweep -- and the banner below is deliberately loud, because a
+    # default that silently runs less than it says is how a suite stops meaning
+    # anything.
+    deferred = []
+    if not full and not picks:
+        deferred = [n for n in names if n in SLOW]
+        names = [n for n in names if n not in SLOW]
 
     t0 = time.time()
     done = {}
@@ -143,6 +164,10 @@ def main(argv):
         print(f"\n{'=' * 70}\n{name}.{t}\n{'-' * 70}\n{tb}")
     print(f"\n{total} test(s), {failed} failed, {skipped} skipped, "
           f"{time.time() - t0:.1f}s")
+    if deferred:
+        print("!! FAST RUN -- did NOT run: " + ", ".join(deferred))
+        print("!! Green here does not mean green. Before claiming the suite passes:")
+        print("!!   python tests/run_tests.py --full")
     return 1 if (failed or stray) else 0
 
 
