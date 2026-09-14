@@ -120,6 +120,13 @@ class Settings:
     min_confidence: float = 0.40
     max_area_ratio: float = 4.0         # refuse absurd warps
 
+    # ---- distortion correction (Stage 0) ----
+    # "off" = no undistortion.  "lensfun" = look up the EXIF make/model/lens in
+    # the Lensfun database and apply a per-pixel remap before the perspective
+    # warp.  Only fires when EXIF identifies the camera; EXIF-stripped images
+    # fall through unchanged (Stage 1 AnyCalib is the no-EXIF route, not yet).
+    undistort: str = "off"              # off | lensfun
+
     # ---- output ----
     crop: str = "auto"                  # auto | aspect | inside | none
     max_crop_loss: float = 0.05         # auto pads rather than crop past this

@@ -269,6 +269,11 @@ def build_parser():
     g.add_argument("--no-exif", action="store_true", help="do not carry EXIF/ICC over")
     g.add_argument("--interpolation", choices=["lanczos", "cubic", "linear"],
                    default=Settings.interpolation)
+    g.add_argument("--undistort", choices=["off", "lensfun"], default=Settings.undistort,
+                   help="radial-distortion correction before the perspective warp. "
+                        "'lensfun' looks up the EXIF make/model in the Lensfun "
+                        "database (pip install lensfunpy); images without a "
+                        "matching profile are left unchanged")
 
     g = p.add_argument_group("reporting")
     g.add_argument("-n", "--dry-run", action="store_true", help="decide but write nothing")
@@ -342,6 +347,7 @@ def settings_from(args) -> Settings:
     s.jpeg_quality = args.jpeg_quality
     s.keep_exif = not args.no_exif
     s.interpolation = args.interpolation
+    s.undistort = args.undistort
     return s
 
 
