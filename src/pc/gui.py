@@ -3235,6 +3235,12 @@ class ReviewPanel(tk.Frame):
         from . import sam2seg
         ignore = sam2seg.load_mask_png(png_path, (self.session.h, self.session.w))
         self._sam_selection = ~ignore
+        # Hand the result to the session, which is the whole point of selecting
+        # the building: until this call the segment only drew a green outline
+        # and a percentage, and the estimator never saw it.  `apply_sam_mask`
+        # resizes to analysis-res and refits.
+        self.session.apply_sam_mask(ignore)
+        self._sync_from_session()
         self._draw_sam_prompts()
         frac = self._sam_selection.mean() if self._sam_selection is not None else 0
         self._set_status(f"SAM selection: {frac:.1%} of frame")
