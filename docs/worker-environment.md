@@ -105,7 +105,7 @@ re-read a file repeatedly is the concrete lever this number argues for.
   unsloth/Qwen3.8-27B-GGUF:UD-IQ4_XS --reasoning-effort medium`. A double-clicked
   `.bat` runs with its own folder (Desktop) as the working directory — **not** the
   project — which silently changed behaviour when other things were also being
-  debugged at the same time. Fix: `cd /d "D:\Coding\Batch-Perspective-Correction"` as
+  debugged at the same time. Fix: `cd /d "D:\Coding\Perspective-Correction"` as
   the first real line of the script, before the `unsloth start` call.
 - `opencode`'s own `--help` is the source of truth for its flags, not assumption:
   `-c`/`--continue` (resume the last session) is valid; `--dir` is **not** — the

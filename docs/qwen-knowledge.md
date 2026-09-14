@@ -220,7 +220,7 @@ in `chat_template_kwargs`, or a literal `<|think_off|>` tag in the message text
 @echo off
 title opencode
 color 1F
-cd /d "D:\Coding\Batch-Perspective-Correction"
+cd /d "D:\Coding\Perspective-Correction"
 unsloth start opencode --model unsloth/Qwen3.8-27B-GGUF:UD-IQ4_XS --reasoning-effort medium
 cmd /k
 ```
