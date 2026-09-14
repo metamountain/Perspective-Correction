@@ -46,6 +46,7 @@ install stays numpy + OpenCV + Pillow.
 """
 from __future__ import annotations
 
+import importlib
 import os
 import sys
 import threading
@@ -58,14 +59,26 @@ import numpy as np
 # bare OSError (WinError 6) instead of FileNotFoundError; the driver only
 # catches (CalledProcessError, FileNotFoundError), so the import dies.  Convert
 # it to FileNotFoundError -- exactly what a healthy NVIDIA box produces anyway.
+# Scoped to the import itself: `_rocm_safe` installs the shim for the duration
+# of one torch import and restores the original on exit, so no other caller in
+# the process has its OSError reclassified (the old code patched it at module
+# load and never put it back).
 import subprocess as _sp
-_sp_co = _sp.check_output
+from contextlib import contextmanager
+_sp_co_orig = _sp.check_output
 def _sp_co_shim(*a, **k):
     try:
-        return _sp_co(*a, **k)
+        return _sp_co_orig(*a, **k)
     except OSError as e:
         raise FileNotFoundError(str(e)) from e
-_sp.check_output = _sp_co_shim
+
+@contextmanager
+def _rocm_safe():
+    _sp.check_output = _sp_co_shim
+    try:
+        yield
+    finally:
+        _sp.check_output = _sp_co_orig
 
 _LOCK = threading.Lock()
 _CACHE = {}
@@ -180,30 +193,52 @@ def architecture_dirs():
     return out
 
 
+def _arch_file(weights: str) -> str:
+    """The network filename that defines this checkpoint.
+
+    HR / general / dynamic all share ``birefnet.py``; the lite checkpoints use a
+    smaller PVT-v2 backbone (embed 96 vs. Swin's 192) defined in
+    ``birefnet_lite.py``.  Guessing from the name is what every ComfyUI node does,
+    and the names are consistent enough for it -- loading lite weights into the
+    shared network size-matches at the first layer, so a wrong guess fails fast
+    rather than silently producing garbage.
+    """
+    if "lite" in os.path.basename(weights).lower():
+        return "birefnet_lite.py"
+    return "birefnet.py"
+
+
 def _arch_dir(weights: str) -> str:
-    """The folder holding ``birefnet.py``.
+    """The folder holding this checkpoint's network file.
 
     Beside the weights if it is there, otherwise wherever it can be found.  The
-    architecture is generic across BiRefNet checkpoints -- HR, general, lite and
-    dynamic are the same network with different weights -- so pairing a
-    checkpoint with an architecture from another folder is correct, not a
-    workaround, and ``load_state_dict`` catches it immediately if it ever is not.
+    architecture is generic across most BiRefNet checkpoints -- HR, general and
+    dynamic share ``birefnet.py`` -- so pairing a checkpoint with an architecture
+    from another folder is correct, not a workaround, and ``load_state_dict``
+    catches it immediately if it ever is not.  The lite checkpoints are the
+    exception: they use a smaller PVT-v2 backbone defined in
+    ``birefnet_lite.py``, so those must be paired with that file or the first
+    layer size-matches against nothing.
 
     This exists because of a real failure: a user's remembered checkpoint pointed
     into ``models/BiRefNet``, which on that machine holds three perfectly good
     checkpoints and no ``birefnet.py``, while ``models/RMBG/BiRefNet`` next door
     holds both.  Refusing it read as "BiRefNet does not work".
     """
+    need = _arch_file(weights)
     d = os.path.dirname(os.path.abspath(weights))
-    if os.path.isfile(os.path.join(d, "birefnet.py")):
+    if os.path.isfile(os.path.join(d, need)):
         return d
     found = architecture_dirs()
+    for base in found:
+        if os.path.isfile(os.path.join(base, need)):
+            return base
     if found:
         return found[0]
     raise BiRefNetUnavailable(
         "found the weights but not the network that defines them.\n\n"
         "  have: " + os.path.abspath(weights) + "\n"
-        "  need: " + " + ".join(ARCH_FILES) + " (searched beside the weights and "
+        "  need: " + need + " (searched beside the weights and "
         "every usual ComfyUI folder)\n\n" + what_you_need(missing_weights=False))
 
 
@@ -221,11 +256,12 @@ def _load(weights: str, device: str = ""):
             raise BiRefNetUnavailable(
                 "BiRefNet weights not found:\n  " + os.path.abspath(weights) +
                 "\n\n" + _found_report() + "\n\n" + what_you_need())
-        try:
-            import torch
-            from safetensors.torch import load_file
-        except Exception as exc:
-            raise BiRefNetUnavailable(_install_hint()) from exc
+        with _rocm_safe():
+            try:
+                import torch
+                from safetensors.torch import load_file
+            except Exception as exc:
+                raise BiRefNetUnavailable(_install_hint()) from exc
 
         import importlib.util
         d = _arch_dir(weights)
@@ -239,7 +275,7 @@ def _load(weights: str, device: str = ""):
                 sys.modules["BiRefNet_config"] = mod
                 spec.loader.exec_module(mod)
             spec = importlib.util.spec_from_file_location(
-                "birefnet_arch", os.path.join(d, "birefnet.py"))
+                "birefnet_arch", os.path.join(d, _arch_file(weights)))
             arch = importlib.util.module_from_spec(spec)
             sys.modules["birefnet_arch"] = arch
             spec.loader.exec_module(arch)
@@ -331,8 +367,8 @@ def backends() -> dict:
     """
     import importlib.util
     out = {}
-    for n in ("torch", "timm", "transformers", "safetensors", "torchvision",
-              "tkinter"):
+    for n in ("torch", "timm", "transformers", "einops", "safetensors",
+              "torchvision", "tkinter"):
         try:
             out[n] = importlib.util.find_spec(n) is not None
         except Exception:
@@ -450,7 +486,8 @@ def shrink_px_for(shape, frac: float) -> int:
 
 
 def build_mask(bgr: np.ndarray, weights: str, threshold: float = DEFAULT_THRESHOLD,
-               device: str = "", res: int = 0, shrink_frac: float = 0.008):
+               device: str = "", res: int = 0, shrink_frac: float = 0.008,
+               close_frac: float = 0.004):
     """``(ignore_mask, note)`` -- True where the fit should not look.
 
     **The threshold is not a knob.**  The matte is near-binary: sweeping 0.1 to
@@ -479,6 +516,18 @@ def build_mask(bgr: np.ndarray, weights: str, threshold: float = DEFAULT_THRESHO
     """
     fg = foreground(bgr, weights, device=device, res=res)
     mask = fg < float(threshold)
+    # Close before shrinking.  The matte leaves thin unmasked slivers where it
+    # runs between two structures -- a gap of sky between roofs, the seam beside
+    # a downpipe -- and the shrink below is an erosion, which eats a thin region
+    # entirely and leaves the rest as broken stripes.  Closing first (dilate,
+    # then erode by the same amount) fills those holes while leaving the
+    # silhouette where it was, so it cannot disturb what `shrink_frac` was
+    # measured against.  Kept smaller than the shrink deliberately: it is meant
+    # for speckle, not for reshaping the subject.
+    cpx = shrink_px_for(mask.shape, close_frac)
+    if cpx > 0:
+        k = np.ones((2 * cpx + 1,) * 2, np.uint8)
+        mask = cv2.morphologyEx(mask.astype(np.uint8), cv2.MORPH_CLOSE, k).astype(bool)
     px = shrink_px_for(mask.shape, shrink_frac)
     if px > 0:
         k = np.ones((2 * px + 1,) * 2, np.uint8)
@@ -531,8 +580,23 @@ def export_masks(images, weights, out_dir, settings, log=print):
     return written, failed
 
 
+# What the BiRefNet architecture source imports. Read off the files in the
+# weights folder, not guessed: BiRefNet_config.py and birefnet.py import
+# PretrainedConfig/PreTrainedModel from transformers, DropPath and
+# register_model from timm, rearrange from einops, and torch/torchvision
+# throughout.
+ARCH_REQUIRES = ("torch", "torchvision", "transformers", "timm", "einops")
+
+
 def transformers_available() -> bool:
     """Whether *this* interpreter can load the architecture.
+
+    Four imports, not one. The architecture source is read straight from the
+    weights folder, and it does `from transformers import PretrainedConfig`,
+    `from timm.models.layers import DropPath`, `from einops import rearrange`
+    and `import torch` / `torchvision`. Checking only `transformers` -- which
+    this function did -- passes an interpreter that then dies on `timm`, which
+    is the same failure one layer down.
 
     The weights are not the only half of it: ``birefnet.py`` there imports
     ``transformers``, and a box can have torch without it -- measured on this
@@ -541,11 +605,27 @@ def transformers_available() -> bool:
     A download that leaves the reader one import short is a broken installer,
     so the GUI asks before it offers the button.
     """
-    try:
-        import transformers  # noqa: F401
-        return True
-    except ImportError:
-        return False
+    for mod in ARCH_REQUIRES:
+        try:
+            importlib.import_module(mod)
+        except ImportError:
+            return False
+    return True
+
+
+def arch_missing() -> list:
+    """Which of ``ARCH_REQUIRES`` this interpreter cannot import, in order.
+
+    Named separately from the boolean because "no" is not a useful thing to
+    tell someone: the fix depends entirely on *which* import is absent.
+    """
+    out = []
+    for mod in ARCH_REQUIRES:
+        try:
+            importlib.import_module(mod)
+        except ImportError:
+            out.append(mod)
+    return out
 
 
 def default_weights_dir() -> str:

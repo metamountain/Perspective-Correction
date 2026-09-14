@@ -39,22 +39,24 @@ import cv2
 import numpy as np
 from PIL import Image, ImageTk
 
+from . import __version__
 from . import layout
 from . import prefs
 from .config import Settings
 from .imageio import READABLE
 from .pipeline import ERROR, OK, SKIPPED, process
 from .inpaint import join_url as _join_url, split_url as _split_url
-from .review import AUTO, MANUAL, ReviewSession
+from .review import AUTO, MANUAL, ReviewSession, darken_outside_crop
 
-STATUS_COLOUR = {OK: "#5ac37f", SKIPPED: "#e0b24c", ERROR: "#ef6b6b"}
+QUEUED = "queued"
+STATUS_COLOUR = {OK: "#5ac37f", SKIPPED: "#e0b24c", ERROR: "#ef6b6b", QUEUED: "#8899aa"}
 
 # Both windows offer the same list, and it has to match cli.py's --detector
 # choices; a name only one of the two knows about is a bug report waiting to
 # happen.  mlsd/hybrid/union need a TFLite runtime and the deep-* three need
 # torch and a DeepLSD checkout, so several of these can fail to load -- which
 # is why both windows report the failure rather than falling back.
-DETECTORS = ("auto", "lsd", "fld", "hough", "mlsd", "hybrid", "union",
+DETECTORS = ("lsd", "fld", "mlsd", "hybrid", "union",
              "deeplsd", "deep-hybrid", "deep-union")
 
 # --------------------------------------------------------------------------
@@ -69,6 +71,7 @@ INK = {
     "bg":      "#16181c",   # window
     "panel":   "#1d2025",   # raised surfaces
     "field":   "#101216",   # inputs, canvases, the image well
+    "cross":   "#0b0d10",   # the review panel's dark cross and border
     "line":    "#2b2f36",   # hairlines, borders
     "text":    "#e6e8ec",
     "dim":     "#8b929c",   # secondary text
@@ -76,6 +79,69 @@ INK = {
     "ok":      "#5ac37f",
     "warn":    "#e0b24c",
     "err":     "#ef6b6b",
+}
+
+# ---------------------------------------------------------------------------
+# Theme palettes.  Each entry overrides the INK keys; fonts are optional and
+# fall back to the system defaults when absent.  The default (Minimal Black)
+# is INK itself -- switching to it simply restores the original palette.
+# ---------------------------------------------------------------------------
+THEMES = {
+    # --- Minimal Black (original, untouched) ---
+    "Minimal Black": {
+        "bg": "#16181c", "panel": "#1d2025", "field": "#101216",
+        "cross": "#0b0d10", "line": "#2b2f36",
+        "text": "#e6e8ec", "dim": "#8b929c",
+        "accent": "#4da3ff", "ok": "#5ac37f", "warn": "#e0b24c", "err": "#ef6b6b",
+    },
+    # --- C64: the "blue screen" but darkened for a UI.  Border blue (#40318D)
+    #     as bg, lighter periwinkle panels, cyan accent (C64's "white-on-blue"
+    #     terminal feel).  Courier New evokes the VIC-20/C64 bitmap font. ---
+    "C64": {
+        "bg": "#2a1f5e", "panel": "#3b2d78", "field": "#1e1548",
+        "cross": "#16103a", "line": "#5c4cb3",
+        "text": "#e8e4ff", "dim": "#9b8fd4",
+        "accent": "#00e5d0", "ok": "#66ff66", "warn": "#ffe066", "err": "#ff5555",
+        "ui_font": "Courier New", "mono_font": "Courier New",
+    },
+    # --- Amiga 500: Workbench 2.0 light gray desktop with the iconic dark-blue
+    #     title bar as accent.  Verdana approximates the Workbench pixel sans.
+    #     Magenta/pink is the Amiga's "selected" highlight in Workbench. ---
+    "Amiga 500": {
+        "bg": "#c8c8d0", "panel": "#d8d8e0", "field": "#b8b8c4",
+        "cross": "#a0a0ac", "line": "#888898",
+        "text": "#1a1a2e", "dim": "#505068",
+        "accent": "#0000cc", "ok": "#00aa44", "warn": "#cc8800", "err": "#cc2222",
+        "ui_font": "Verdana", "mono_font": "Consolas",
+    },
+    # --- Graphic Designer: Swiss/International Typographic Style.  Near-white
+    #     bg, one bold vermilion accent (not pink — that's iOS), strong black
+    #     text.  Segoe UI for clean sans, SF Mono / Cascadia for data. ---
+    "Graphic Designer": {
+        "bg": "#f7f7f5", "panel": "#ffffff", "field": "#efefec",
+        "cross": "#e6e6e2", "line": "#d0d0ca",
+        "text": "#111111", "dim": "#6b6b64",
+        "accent": "#e84530", "ok": "#2a9d5c", "warn": "#d4880f", "err": "#cc2222",
+        "ui_font": "Google Sans Flex", "mono_font": "Cascadia Mono",
+    },
+    # --- Light: all-light, no dark contrast.  Soft off-white bg so the white
+    #     panels read as raised; cross/border in light gray (not black). ---
+    "Light": {
+        "bg": "#eef0f2", "panel": "#ffffff", "field": "#f6f7f8",
+        "cross": "#dfe2e5", "line": "#cdd1d6",
+        "text": "#6b7a86", "dim": "#9aa5ae",
+        "accent": "#6fa8d6", "ok": "#7dc49a", "warn": "#d4ad5e", "err": "#cf8a82",
+    },
+    # --- Phosphor: CRT terminal glow.  Pure black canvas, pale cyan text
+    #     (hackfirst's #E9F7FC), bright green accent (buena's #55ff55 hover).
+    #     Hairline borders at low opacity.  Consolas evokes the mono terminal. ---
+    "Phosphor": {
+        "bg": "#000000", "panel": "#0d1113", "field": "#07090a",
+        "cross": "#020304", "line": "#1a2628",
+        "text": "#e9f7fc", "dim": "#5a7a80",
+        "accent": "#55ff55", "ok": "#55ff55", "warn": "#e0b24c", "err": "#ef6b6b",
+        "ui_font": "Segoe UI", "mono_font": "Consolas",
+    },
 }
 
 # Grotesque first, then whatever the platform has.  Numbers get a mono face so
@@ -97,10 +163,33 @@ def _pick_family(root, candidates, fallback):
     return fallback
 
 
-def apply_theme(root):
-    """Dark, flat, and quiet.  Returns ``(ui_family, mono_family)``."""
-    ui = _pick_family(root, _UI_FAMILIES, "TkDefaultFont")
-    mono = _pick_family(root, _MONO_FAMILIES, "TkFixedFont")
+def _shorten_middle(name, limit=28):
+    """Shorten a filename by cutting its middle, never its end.
+
+    The tail is what identifies a file -- the extension, the ``_corr`` suffix that
+    tells you where Save will write -- so it always survives; only the middle is
+    elided.  A name that already fits is returned untouched.
+    """
+    if len(name) <= limit:
+        return name
+    head = (limit - 1) // 2
+    tail = limit - head - 1          # the ellipsis occupies one slot
+    return f"{name[:head]}\u2026{name[-tail:]}"
+
+
+def apply_theme(root, palette=None):
+    """Apply a colour palette to all ttk styles.  Returns ``(ui_family, mono_family)``."""
+    p = palette or INK
+    ui_override = p.get("ui_font")
+    mono_override = p.get("mono_font")
+    if ui_override:
+        ui = _pick_family(root, (ui_override, *tuple(_UI_FAMILIES)), "TkDefaultFont")
+    else:
+        ui = _pick_family(root, _UI_FAMILIES, "TkDefaultFont")
+    if mono_override:
+        mono = _pick_family(root, (mono_override, *tuple(_MONO_FAMILIES)), "TkFixedFont")
+    else:
+        mono = _pick_family(root, _MONO_FAMILIES, "TkFixedFont")
     try:
         from tkinter import font as tkfont
         for name, fam, size in (("TkDefaultFont", ui, 10), ("TkTextFont", ui, 10),
@@ -111,54 +200,120 @@ def apply_theme(root):
     except Exception:
         pass
 
-    root.configure(background=INK["bg"])
+    root.configure(background=p["bg"])
     st = ttk.Style(root)
     try:
-        st.theme_use("clam")            # the only stock theme that takes colours
+        st.theme_use("clam")
     except Exception:
         pass
-    st.configure(".", background=INK["bg"], foreground=INK["text"],
-                 fieldbackground=INK["field"], bordercolor=INK["line"],
-                 lightcolor=INK["panel"], darkcolor=INK["panel"],
-                 focuscolor=INK["accent"], troughcolor=INK["field"],
-                 insertcolor=INK["text"], font=(ui, 10))
-    st.configure("TFrame", background=INK["bg"])
-    st.configure("Panel.TFrame", background=INK["panel"])
-    st.configure("TLabel", background=INK["bg"], foreground=INK["text"])
-    st.configure("Dim.TLabel", foreground=INK["dim"])
-    st.configure("Head.TLabel", foreground=INK["dim"], font=(ui, 9))
-    st.configure("Value.TLabel", foreground=INK["text"], font=(mono, 10))
-    st.configure("Title.TLabel", foreground=INK["text"], font=(ui, 15))
+    st.configure(".", background=p["bg"], foreground=p["text"],
+                 fieldbackground=p["field"], bordercolor=p["line"],
+                 lightcolor=p["panel"], darkcolor=p["panel"],
+                 focuscolor=p["accent"], troughcolor=p["field"],
+                 insertcolor=p["text"], font=(ui, 10))
+    st.configure("TFrame", background=p["bg"])
+    st.configure("Panel.TFrame", background=p["panel"])
+    st.configure("TLabel", background=p["bg"], foreground=p["text"])
+    st.configure("Dim.TLabel", foreground=p["dim"])
+    st.configure("Head.TLabel", foreground=p["dim"], font=(ui, 9))
+    st.configure("Value.TLabel", foreground=p["text"], font=(mono, 10))
+    st.configure("Title.TLabel", foreground=p["text"], font=(ui, 15))
 
-    st.configure("TButton", background=INK["panel"], foreground=INK["text"],
+    st.configure("TButton", background=p["panel"], foreground=p["text"],
                  borderwidth=0, focusthickness=0, padding=(12, 6))
     st.map("TButton",
-           background=[("pressed", INK["line"]), ("active", INK["line"])],
-           foreground=[("disabled", INK["dim"])])
-    st.configure("Accent.TButton", background=INK["accent"], foreground="#0b1017",
+           background=[("pressed", p["line"]), ("active", p["line"])],
+           foreground=[("disabled", p["dim"])])
+    st.configure("Accent.TButton", background=p["accent"], foreground="#0b1017",
                  padding=(14, 7))
-    st.map("Accent.TButton", background=[("active", "#6bb4ff"),
-                                         ("disabled", INK["line"])])
+    st.map("Accent.TButton", background=[("active", p["accent"]),
+                                         ("disabled", p["line"])])
 
     st.configure("TEntry", padding=6, borderwidth=0)
-    st.configure("TCombobox", padding=4, borderwidth=0, arrowcolor=INK["dim"])
-    st.map("TCombobox", fieldbackground=[("readonly", INK["field"])],
-           foreground=[("readonly", INK["text"])])
-    st.configure("TCheckbutton", background=INK["bg"], foreground=INK["text"])
-    st.map("TCheckbutton", background=[("active", INK["bg"])])
-    st.configure("TScale", background=INK["bg"], troughcolor=INK["field"])
-    st.configure("TProgressbar", background=INK["accent"], troughcolor=INK["field"],
+    st.configure("TCombobox", padding=4, borderwidth=0, arrowcolor=p["dim"])
+    st.map("TCombobox", fieldbackground=[("readonly", p["field"])],
+           foreground=[("readonly", p["text"])])
+    st.configure("TCheckbutton", background=p["bg"], foreground=p["text"],
+                 padding=8, indicatorwidth=16, indicatorheight=16)
+    st.map("TCheckbutton", background=[("active", p["bg"])])
+    st.configure("TScale", background=p["bg"], troughcolor=p["field"],
+                 sliderlength=16, thickness=8)
+    st.map("TScale", background=[("active", p["bg"])])
+    st.configure("TProgressbar", background=p["accent"], troughcolor=p["field"],
                  borderwidth=0, thickness=4)
-    st.configure("Treeview", background=INK["field"], fieldbackground=INK["field"],
-                 foreground=INK["text"], borderwidth=0, rowheight=24)
-    st.configure("Treeview.Heading", background=INK["bg"], foreground=INK["dim"],
+    st.configure("Treeview", background=p["field"], fieldbackground=p["field"],
+                 foreground=p["text"], borderwidth=0, rowheight=24)
+    st.configure("Treeview.Heading", background=p["bg"], foreground=p["dim"],
                  borderwidth=0, font=(ui, 9))
-    st.map("Treeview", background=[("selected", INK["line"])],
-           foreground=[("selected", INK["text"])])
-    st.configure("TSpinbox", arrowcolor=INK["dim"], borderwidth=0, padding=4)
-    st.configure("TLabelframe", background=INK["bg"], bordercolor=INK["line"])
-    st.configure("TLabelframe.Label", background=INK["bg"], foreground=INK["dim"])
+    st.map("Treeview", background=[("selected", p["line"])],
+           foreground=[("selected", p["text"])])
+    st.configure("TSpinbox", arrowcolor=p["dim"], borderwidth=0, padding=4)
+    st.configure("TLabelframe", background=p["bg"], bordercolor=p["line"])
+    st.configure("TLabelframe.Label", background=p["bg"], foreground=p["dim"])
+    st.configure("TSeparator", background=p["line"])
     return ui, mono
+
+
+def _retint_bg(widget, old_palette, new_palette):
+    """Recursively re-tint tk widgets whose explicit bg/fg match a palette key."""
+    try:
+        wclass = widget.winfo_class()
+    except Exception:
+        return
+
+    all_keys = ("bg", "panel", "field", "cross", "line", "text", "dim",
+                "accent", "ok", "warn", "err")
+
+    def _swap(color, old_p, new_p):
+        if color is None or color == "":
+            return None
+        for key in all_keys:
+            if color == old_p.get(key):
+                return new_p[key]
+        return None
+
+    try:
+        if wclass == "Frame":
+            bg = widget.cget("background")
+            new = _swap(bg, old_palette, new_palette)
+            if new:
+                widget.configure(background=new)
+        elif wclass == "Canvas":
+            # Canvas options are -bg / -foreground / -highlightbackground; there
+            # is no -fg.  cget each independently so a missing option on one
+            # cannot abort the re-tint of the others (the old code read "fg"
+            # and the TclError it raised killed the whole branch before bg was
+            # ever configured -- the "still bg black!" report).
+            for opt, cfg in (("bg", "bg"), ("foreground", "foreground"),
+                             ("highlightbackground", "highlightbackground")):
+                try:
+                    val = widget.cget(opt)
+                except tk.TclError:
+                    continue
+                new_val = _swap(val, old_palette, new_palette)
+                if new_val:
+                    widget.configure(**{cfg: new_val})
+        elif wclass in ("Label", "Button"):
+            bg = widget.cget("background")
+            fg = widget.cget("foreground")
+            new_bg = _swap(bg, old_palette, new_palette)
+            if new_bg:
+                widget.configure(background=new_bg)
+            new_fg = _swap(fg, old_palette, new_palette)
+            if new_fg:
+                widget.configure(foreground=new_fg)
+            for opt in ("activebackground", "activeforeground", "selectcolor"):
+                try:
+                    val = widget.cget(opt)
+                except tk.TclError:
+                    continue
+                new_val = _swap(val, old_palette, new_palette)
+                if new_val:
+                    widget.configure(**{opt: new_val})
+    except tk.TclError:
+        pass
+    for child in widget.winfo_children():
+        _retint_bg(child, old_palette, new_palette)
 
 
 def _to_photo(bgr, box):
@@ -234,6 +389,56 @@ def _logo_image(size, colour):
     return tint
 
 
+def _hex_rgba(hexc, alpha=255):
+    """A ``#rrggbb`` palette colour as an RGBA tuple for PIL."""
+    h = hexc.lstrip("#")
+    return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16), alpha)
+
+
+def _folder_pil(size, colour):
+    """A flat monochrome folder glyph at ``size``, tinted to ``colour``.
+
+    Drawn rather than shipped as an asset: it follows the palette (so it reads
+    grey on the dark ground, like the "+" beside it) and a missing file cannot
+    take the window down with it.
+
+    One continuous silhouette -- a body whose top edge steps up into a short tab
+    over the left half -- not two stacked rectangles: at 18px those read as a
+    single blob rather than a folder (measured, analysis/folder_icon_8x.png).
+    Every edge is axis-aligned, so the small render stays crisp with no
+    stair-stepped diagonals."""
+    from PIL import ImageDraw
+    img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    c = _hex_rgba(colour)
+    s = size
+    left, right = round(0.11 * s), round(0.89 * s)
+    tab_top, body_top, bottom = round(0.28 * s), round(0.44 * s), round(0.83 * s)
+    tab_right = round(0.56 * s)
+    d.polygon([(left, tab_top), (tab_right, tab_top), (tab_right, body_top),
+               (right, body_top), (right, bottom), (left, bottom)], fill=c)
+    return img
+
+
+def _paste_pil(size, colour):
+    """A flat monochrome clipboard glyph at ``size``, tinted to ``colour``.
+
+    A rounded-rectangle body with a small clip bump at the top centre --
+    reads as "paste from clipboard" at 22 px without needing a label."""
+    from PIL import ImageDraw
+    img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    d = ImageDraw.Draw(img)
+    c = _hex_rgba(colour)
+    s = size
+    left, right = round(0.18 * s), round(0.82 * s)
+    top, bottom = round(0.22 * s), round(0.86 * s)
+    d.rounded_rectangle([left, top, right, bottom], radius=max(1, s // 8), fill=c)
+    clip_l, clip_r = round(0.38 * s), round(0.62 * s)
+    clip_top, clip_bot = round(0.10 * s), round(0.30 * s)
+    d.rounded_rectangle([clip_l, clip_top, clip_r, clip_bot], radius=max(1, s // 10), fill=c)
+    return img
+
+
 def _beholder_pil(size=64):
     """The mark as a black-background RGBA PIL image, for ``iconphoto``.
 
@@ -274,11 +479,12 @@ def _attach_tooltip(widget, text):
         if tip["t"] is not None:
             return
         t = tk.Toplevel(widget)
+        t.configure(bg=INK["cross"])
         t.wm_overrideredirect(True)
         x = widget.winfo_rootx() + 12
         y = widget.winfo_rooty() + widget.winfo_height() + 4
         t.wm_geometry(f"+{x}+{y}")
-        lbl = tk.Label(t, text=text, background="#0b1017", foreground=INK["text"],
+        lbl = tk.Label(t, text=text, background=INK["cross"], foreground=INK["text"],
                        font=("TkDefaultFont", 9), padx=8, pady=4, relief="solid",
                        borderwidth=1, wraplength=320, justify="left")
         lbl.pack()
@@ -293,7 +499,7 @@ def _attach_tooltip(widget, text):
     widget.bind("<Leave>", hide)
 
 
-def _brand_header(parent):
+def _brand_header(parent, on_select=None):
     """Emblem + wordmark, packed at the top of a window."""
     bar = ttk.Frame(parent)
     bar.pack(fill="x", side="top")
@@ -317,7 +523,16 @@ def _brand_header(parent):
     title = ttk.Label(bar, text="Batch Perspective Correction", style="Title.TLabel")
     title.pack(side="left", anchor="w")
     _attach_tooltip(title, "Batch perspective correction for architectural photographs")
-    return bar
+    # Which copy of this repo is actually running: a stale second copy shows an
+    # older number and gives the whole exercise away.
+    ttk.Label(bar, text=f"v{__version__}", style="Dim.TLabel").pack(side="right", padx=(8, 6))
+    theme_var = tk.StringVar(value="Minimal Black")
+    if on_select is not None:
+        theme_var.trace_add("write", lambda *_: on_select(theme_var.get()))
+    combo = ttk.Combobox(bar, textvariable=theme_var, values=list(THEMES.keys()),
+                         state="readonly", width=14)
+    combo.pack(side="right", padx=(0, 8), pady=2)
+    return bar, theme_var, combo
 
 
 # ==========================================================================
@@ -329,9 +544,30 @@ class ReviewPanel(tk.Frame):
     # focus on every double-click.  Built once; `load` swaps the photograph
     # into the same widgets.
     def __init__(self, master):
-        super().__init__(master, background=INK["bg"])
-        self.container = ttk.Frame(self)
-        self.container.pack(fill="both", expand=True)
+        super().__init__(master, background=INK["cross"])
+        # The perfect cross (2026-09-12): four exactly equal fields -- the two
+        # previews on top, loader and controls below -- divided by a flat dark
+        # cross and ringed by a dark border, both CROSS_GAP/CROSS_BORDER wide.
+        # One grid of uniform rows and columns makes equality a property of the
+        # layout rather than an agreement between two arrangements; `load`
+        # destroys and rebuilds three of the four fields, the loader survives.
+        b = layout.CROSS_BORDER
+        g = layout.CROSS_GAP // 2
+        self.rowconfigure(0, weight=1, uniform="cross_rows")
+        self.rowconfigure(1, weight=1, uniform="cross_rows")
+        self.columnconfigure(0, weight=1, uniform="cross_cols")
+        self.columnconfigure(1, weight=1, uniform="cross_cols")
+        self.cell_before = ttk.Frame(self)
+        self.cell_after = ttk.Frame(self)
+        self.loader = ttk.Frame(self)              # rebuilt by the batch window
+        self.cell_ui = ttk.Frame(self)
+        # Each cell carries half the cross on its inner sides and the full
+        # border on its outer ones, so the dark shows through at exactly
+        # CROSS_GAP between fields and CROSS_BORDER around the panel.
+        self.cell_before.grid(row=0, column=0, sticky="nsew", padx=(b, g), pady=(b, g))
+        self.cell_after.grid(row=0, column=1, sticky="nsew", padx=(g, b), pady=(b, g))
+        self.loader.grid(row=1, column=0, sticky="nsew", padx=(b, g), pady=(g, b))
+        self.cell_ui.grid(row=1, column=1, sticky="nsew", padx=(g, b), pady=(g, b))
         self.session = None
         self.settings = None
         self.dest_path = None
@@ -344,30 +580,40 @@ class ReviewPanel(tk.Frame):
         self._busy = False
         self._before_scale = 1.0
         self._redraw_tries = 0
-        # Re-assert the review/results split whenever this pane's size changes.
-        # Loading a photograph grows the cross, which makes the paned window
-        # redistribute the sash -- but its own height does not change, so no
-        # <Configure> fires on the paned to pull it back.  This pane's resize
-        # does fire here; `_apply_sash` only moves when off by >2px, so this
-        # settles after one pass.
+        self._after_guides = []
+        self._guide_drag = None
         self.bind("<Configure>", self._on_review_configure)
         self._show_hint()
 
     def _on_review_configure(self, _event=None):
-        app = self._app()
-        if app is not None:
-            app.after_idle(app._apply_sash)
+        # The pane's real height is not known until it has been laid out, so
+        # the default for the adjustments rides on <Configure>.  It stands down
+        # the moment the user touches the toggle and returns early when its
+        # verdict has not changed, so it is safe on an event that fires
+        # continuously during a window drag.
+        self._adapt_adjust_default()
 
     def _show_hint(self):
         # The cross is shown from the first frame, not after the first load:
         # two empty image slots and both control columns, so the window has one
         # shape whether or not a photograph is in it.  A default Settings gives
         # the controls their values; `load` rebuilds with the real ones.
-        for w in self.container.winfo_children():
-            w.destroy()
+        self._clear_cells()
         self.session = None
         self.settings = Settings()
         self._build()
+
+    def _clear_cells(self):
+        """Empty the three fields this panel rebuilds; the loader is not one.
+
+        The loader field belongs to the batch window and must survive a
+        `load`, which destroys and rebuilds everything else.
+        """
+        for cell in (self.cell_before, self.cell_after, self.cell_ui):
+            for w in cell.winfo_children():
+                if getattr(w, "_bpc_persistent", False):
+                    continue      # the batch window's own frames, not a photograph's
+                w.destroy()
 
     def load(self, path, settings, dest_path, overwrite=False, on_saved=None,
              on_closed=None, position=""):
@@ -379,21 +625,24 @@ class ReviewPanel(tk.Frame):
         self._busy = False
         self._before_scale = 1.0
         self._redraw_tries = 0
-        for w in self.container.winfo_children():
-            w.destroy()
+        self._after_guides = []
+        self._guide_drag = None
+        self._clear_cells()
         try:
             self.session = ReviewSession(path, settings)
         except Exception as exc:
-            ttk.Label(self.container, foreground="red", justify="left",
+            ttk.Label(self.cell_before, foreground="red", justify="left",
                       text=f"cannot open image:\n{exc}").pack(expand=True)
             self._fire_closed()
             return
         app = self._app()
         if app is not None:
-            app.title(f"{position}  {os.path.basename(path)}  |  Batch "
-                      f"Perspective Correction".strip())
+            title = (f"{position}  {os.path.basename(path)}  |  Batch "
+                     f"Perspective Correction  v{__version__}")
+            app.title(title.strip())
         self._build()
         self.v_overwrite.set(bool(overwrite))
+        self._refresh_file_names()
         self.v_alpha.set(self.session.mask_alpha)
         # Small correction, small band: take the crop rather than leave a band
         # that would otherwise need a generative model to fill.  Visible, shaded
@@ -428,51 +677,167 @@ class ReviewPanel(tk.Frame):
         """Where Save writes: the original, or the ``_corr`` copy beside it."""
         return self.session.path if self.v_overwrite.get() else self.dest_path
 
+    def _refresh_file_names(self):
+        """Name the photograph on each side of the cross.  `before` is the input;
+        `after` is where Save will write it (the original itself when overwrite is
+        set).  Only the middle of a long name is elided -- the extension and the
+        _corr suffix always survive, so the end that identifies a file never goes."""
+        if self.session is None:
+            return
+        src = os.path.basename(self.session.path)
+        dst = os.path.basename(self._target_path())
+        self._before_lbl.configure(text=f"before   {_shorten_middle(src)}")
+        self._after_lbl.configure(text=f"after   {_shorten_middle(dst)}")
+
     # -- layout ----------------------------------------------------------
     def _build(self):
         # No brand header here: the panel sits inside the batch window, which
         # carries its own.
-        top = ttk.Frame(self.container, padding=6)
+        # The controls are one of the four fields, not a strip under two of
+        # them: `cell_ui` is the lower-right box of the cross and everything
+        # from the hint down to the Save row lives inside it.
+        top = ttk.Frame(self.cell_ui, padding=6)
         top.pack(fill="both", expand=True)
 
-        panes = ttk.Frame(top)
-        # Packed *last*, at the bottom of this method: `pack` serves its
-        # children in call order and gives what is left to the expanding one,
-        # so whatever is packed before the canvases is what survives a short
-        # window.  See the assembly block below.
-        # `uniform` is what actually splits these evenly: weight only shares out
-        # surplus space, so the long heading in column 0 set that column's
-        # minimum and squeezed the corrected image to a sliver on a narrow
-        # window. The hint that caused it now sits below the panes instead.
-        panes.columnconfigure(0, weight=1, uniform="panes")
-        panes.columnconfigure(1, weight=1, uniform="panes")
-        panes.rowconfigure(1, weight=1)
-
-        ttk.Label(panes, text="before").grid(row=0, column=0, sticky="w")
-        ttk.Label(panes, text="after").grid(row=0, column=1, sticky="w")
-
+        # The two previews are the upper fields.  Nothing here divides
+        # anything: the split between them is the cross's own grid, so the two
+        # preview fields and the two lower fields are the same size by
+        # construction rather than by two arrangements agreeing.
         # width/height 1: a tk.Canvas asks for 378x265 by default, and that
         # request is what pushed the Save row off the bottom of a 1080p window
         # -- the picture claimed a size it had not earned while the buttons
-        # took what was left.  The canvases expand into the leftover instead.
-        self.c_before = tk.Canvas(panes, bg=INK["field"], highlightthickness=0,
-                                  width=1, height=1)
-        self.c_before.grid(row=1, column=0, sticky="nsew", padx=(0, 3))
-        self.c_after = tk.Canvas(panes, bg=INK["field"], highlightthickness=0,
-                                 width=1, height=1)
-        self.c_after.grid(row=1, column=1, sticky="nsew", padx=(3, 0))
+        # took what was left.  The canvases expand into their field instead.
+        # P15: name the photograph on each side.  `before` is what you are
+        # correcting; `after` is where Save will write it.  The names are filled
+        # in by `_refresh_file_names` once the overwrite decision is known.
+        self._before_lbl = ttk.Label(self.cell_before, text="before")
+        self._before_lbl.pack(anchor="w")
+        self.c_before = tk.Canvas(self.cell_before, bg=INK["field"],
+                                  highlightthickness=0, width=1, height=1)
+        self.c_before.pack(fill="both", expand=True)
+        # The add triggers live in the before-image's own top-left corner, in front
+        # of the picture: a grey "+" for images and a grey folder for a folder.
+        # Grey rather than accent -- they are part of the ground, not a call to
+        # action; the cross keeps its one colour of emphasis elsewhere.  The frame
+        # is re-created on every `load` (the canvas is rebuilt), so the buttons
+        # track the panel's lifecycle for free.
+        app = self._app()
+        addbar = tk.Frame(self.c_before, bg=INK["field"])
+        self._addbar = addbar
+        # Stacked downwards, not across (2026-09-13, user-directed): this corner
+        # is a tool palette, and a palette reads as a column.  Load is the big one
+        # -- it is the only thing to press on an empty window, so it earns the
+        # size; the tools below it are small and uniform.
+        self.add_btn = tk.Button(addbar, text="+", font=("Segoe UI", 20, "bold"),
+                                 width=2, relief="flat", bd=0, cursor="hand2",
+                                 background=INK["field"], foreground=INK["dim"],
+                                 activebackground=INK["line"],
+                                 activeforeground=INK["text"],
+                                 command=self._on_add_files)
+        self.add_btn.pack(side="top")
+        _attach_tooltip(self.add_btn, "Add image files")
+        self._folder_img = ImageTk.PhotoImage(_folder_pil(22, INK["dim"]))
+        self.add_folder_btn = tk.Button(addbar, image=self._folder_img, relief="flat",
+                                        bd=0, cursor="hand2", background=INK["field"],
+                                        command=self._on_add_folder)
+        self.add_folder_btn.pack(side="top", pady=(2, 0))
+        _attach_tooltip(self.add_folder_btn, "Add a folder of images")
+        self._paste_img = ImageTk.PhotoImage(_paste_pil(22, INK["dim"]))
+        self.add_paste_btn = tk.Button(addbar, image=self._paste_img, relief="flat",
+                                       bd=0, cursor="hand2", background=INK["field"],
+                                       command=self._on_paste)
+        self.add_paste_btn.pack(side="top", pady=(2, 0))
+        _attach_tooltip(self.add_paste_btn, "Paste screenshot from clipboard")
+        # Placed rather than packed: the frame is a child of the canvas and sits
+        # over its top-left corner, in front of whatever the picture shows.  A
+        # placed child is drawn above the canvas's own content and stays fixed at
+        # that corner -- it does not scroll or rescale with the image.
+        addbar.place(x=8, y=8, anchor="nw")
+        # Lines and Mask draw on *this* image, so their switches sit on it --
+        # top-right, opposite the add icons, and mirroring the Grid switch on the
+        # after pane (2026-09-13, user-directed).  Made once and reused because
+        # `_build` re-runs on every load: fresh variables here would reset both
+        # toggles for each photograph and leave the old canvas' checkbuttons
+        # pointing at dead ones.
+        if getattr(self, "v_show_lines", None) is None:
+            self.v_show_lines = tk.BooleanVar(value=True)
+            self.v_show_mask = tk.BooleanVar(value=True)
+        ovbar = tk.Frame(self.c_before, bg=INK["field"])
+        self._ovbar = ovbar
+        ttk.Checkbutton(ovbar, text="Lines", command=self._schedule_redraw,
+                        variable=self.v_show_lines).pack(side="left", padx=(4, 0))
+        ttk.Checkbutton(ovbar, text="Mask", command=self._toggle_mask,
+                        variable=self.v_show_mask).pack(side="left", padx=4, pady=2)
+        ovbar.place(relx=1.0, x=-8, y=8, anchor="ne")
+        self._after_lbl = ttk.Label(self.cell_after, text="after")
+        self._after_lbl.pack(anchor="w")
+        self.c_after = tk.Canvas(self.cell_after, bg=INK["field"],
+                                 highlightthickness=0, width=1, height=1)
+        self.c_after.pack(fill="both", expand=True)
+        # The grid is a ruler laid over the *corrected* frame -- the instrument
+        # you judge the result with -- so its switch belongs on that image rather
+        # than in a control box across the window (2026-09-13, user-directed).
+        # Top-right of the after pane, mirroring the add icons in the before
+        # pane's top-left.  Built here, beside the canvas it sits on, because
+        # `_build` re-runs on every load and a bar parented to the previous
+        # canvas dies with it; the variables are made once so the switch does not
+        # flip itself off each time a photograph opens.
+        if getattr(self, "v_grid", None) is None:
+            self.v_grid = tk.BooleanVar(value=False)
+            self.v_grid_step = tk.StringVar(value="50 px")
+            self.v_after_lines = tk.BooleanVar(value=False)
+        gridbar = tk.Frame(self.c_after, bg=INK["field"])
+        self._gridbar = gridbar
+        ttk.Checkbutton(gridbar, text="Grid", command=self._schedule_redraw,
+                        variable=self.v_grid).pack(side="left", padx=(4, 0))
+        # Detection re-run on the corrected frame: the direct check on whether a
+        # correction actually worked, rather than inferring it from the original.
+        ttk.Checkbutton(gridbar, text="Check lines", command=self._schedule_redraw,
+                        variable=self.v_after_lines).pack(side="left", padx=(6, 0))
+        # Editable, not readonly: the presets are a convenience, but any "NN px"
+        # step must work.  `_grid_step` parses the field defensively, so a value
+        # that is neither a preset nor a number simply falls back to 50 px.
+        grid_cb = ttk.Combobox(gridbar, textvariable=self.v_grid_step, width=8,
+                               values=["25 px", "50 px", "100 px",
+                                       "thirds", "quarters", "sixths"])
+        grid_cb.pack(side="left", padx=4, pady=2)
+        for ev in ("<<ComboboxSelected>>", "<Return>", "<FocusOut>"):
+            grid_cb.bind(ev, lambda e: self._schedule_redraw())
+        gridbar.place(relx=1.0, x=-8, y=8, anchor="ne")
         self._pending_mark = None
         self._after_off = (0, 0)
         self._crop_drag_start = None
         self._planar_drag = None      # corner index being dragged, or None
-        self._loupe = None            # magnifying-glass Toplevel, or None
+        self._roi_drag = None         # which ROI ruler is grabbed: 0=left, 1=right
+        self._guide_drag = None       # ("v"|"h", index) while a guide is dragged
+        if getattr(self, "_loupe", None) is not None:   # _build re-runs on load
+            self._loupe.destroy()
+        self._loupe = None            # magnifying-glass canvas over the cross, or None
+        # A rebuild (new image loaded) kills the glass; bring it back if the
+        # mode that owns it is still on.
+        if getattr(self, "v_mark", None) is not None and self.v_mark.get():
+            self._loupe_show()
+        elif getattr(self, "v_planar", None) is not None and self.v_planar.get():
+            self._loupe_show()
         self.c_before.bind("<Button-1>", self._on_click_before)
         self.c_before.bind("<Motion>", self._on_before_motion)
-        self.c_before.bind("<B1-Motion>", self._on_planar_drag)
-        self.c_before.bind("<ButtonRelease-1>", self._on_planar_release)
+        self.c_before.bind("<B1-Motion>", self._on_before_b1motion)
+        self.c_before.bind("<ButtonRelease-1>", self._on_before_b1release)
+        # Photoshop's gestures, because this is a brush and those are the ones in
+        # everybody's hands already: left paints, right erases, Alt+right dragged
+        # sideways sizes the pen.  The Alt bindings are declared first only for
+        # readability -- Tk picks the more specific pattern regardless of order.
+        self.c_before.bind("<Alt-ButtonPress-1>", self._on_alt_erase_press)
+        self.c_before.bind("<Alt-ButtonPress-3>", self._on_pen_size_start)
+        self.c_before.bind("<Alt-B3-Motion>", self._on_pen_size_drag)
+        self.c_before.bind("<ButtonPress-3>", self._on_erase_press)
+        self.c_before.bind("<B3-Motion>", self._on_erase_motion)
+        self.c_before.bind("<ButtonRelease-3>", self._on_erase_release)
         self.c_after.bind("<ButtonPress-1>", self._on_crop_press)
         self.c_after.bind("<B1-Motion>", self._on_crop_drag)
         self.c_after.bind("<ButtonRelease-1>", self._on_crop_release)
+        self.c_after.bind("<Motion>", self._on_crop_motion)
+        self.c_after.bind("<Leave>", lambda e: self.c_after.config(cursor=""))
         for c in (self.c_before, self.c_after):
             c.bind("<Configure>", lambda e: self._schedule_redraw())
         # The before slot is a drop target too, so a file can land on the picture
@@ -487,18 +852,6 @@ class ReviewPanel(tk.Frame):
                               "or to bring it back")
 
         stat = ttk.Frame(top)
-        self.status = tk.Text(stat, height=4, wrap="word", relief="flat",
-                              borderwidth=0, highlightthickness=0, padx=10, pady=8,
-                              background=INK["field"], foreground=INK["dim"],
-                              font=("TkFixedFont",))
-        self.status.pack(side="left", fill="both", expand=True)
-        # Read-only box, but copying must still work: the old blanket
-        # "<Key>" -> "break" swallowed Ctrl+C along with typing, so an error
-        # message could be selected but never copied.  Swallow typing only and
-        # let Ctrl+C fall through to the Text class binding (tk::TextCopy).
-        self.status.bind("<Key>", self._status_key)
-        ttk.Button(stat, text="copy", width=6, command=self._copy_status
-                   ).pack(side="right", fill="y", padx=(4, 0))
         # The four control rows below cost ~280 px of height that the two image
         # canvases want back.  Collapsing them is one click.  The toggle rides
         # in this row instead of a row of its own, because a new row would cost
@@ -529,24 +882,27 @@ class ReviewPanel(tk.Frame):
         self._adj = adj
         # Two columns instead of four stacked rows: the two image canvases on
         # top want the height back, and a cross (images over controls) reads as
-        # one surface rather than a long scroll.  Left is what the correction
-        # does -- the angles plus which detector feeds it; right is where it
-        # looks and how the opened band is handled -- mask plus fill.  Each
-        # column is about half the old block, so opening the controls costs the
-        # picture ~140 px instead of ~282.
-        leftcol = ttk.Frame(adj)
-        leftcol.pack(side="left", fill="both", expand=True, padx=(0, 6))
+        # one surface rather than a long scroll.  Left is FIND -- which detector
+        # feeds the estimator; right is EDIT -- the angles that turn it into the
+        # after pane, plus how the opened band is filled.  Each column is about
+        # half the old block, so opening the controls costs the picture ~140 px
+        # instead of ~282.
+        # The panel is the EDIT side only now: the FIND controls (line detector +
+        # ROI x) moved to the lower-left tools field, beside the input image where
+        # what-the-estimator-sees belongs.  One column, so the sliders that need
+        # horizontal room to drag take all of it -- an even split used to starve
+        # the tracks on a laptop: label + spinbox leave ~14 px.
         rightcol = ttk.Frame(adj)
-        rightcol.pack(side="left", fill="both", expand=True, padx=(6, 0))
+        rightcol.pack(side="left", fill="both", expand=True)
 
-        ctl = ttk.Frame(leftcol, padding=(0, 8, 0, 0))
+        ctl = ttk.Frame(rightcol, padding=(0, 8, 0, 0))
         ctl.pack(fill="x")
         self.v_roll = tk.DoubleVar(value=0.0)
         self.v_pitch = tk.DoubleVar(value=0.0)
         self.v_focal = tk.DoubleVar(value=28.0)
-        self._slider(ctl, 0, "roll (level)", self.v_roll, -20, 20, "deg")
-        self._slider(ctl, 1, "pitch (verticals)", self.v_pitch, -30, 30, "deg")
-        self._slider(ctl, 2, "focal length", self.v_focal, 8, 200, "mm eq")
+        self._slider(ctl, 1, "roll (level)", self.v_roll, -20, 20, "deg", 0.1, "%.2f")
+        self._slider(ctl, 2, "pitch (verticals)", self.v_pitch, -30, 30, "deg", 0.1, "%.2f")
+        self._slider(ctl, 3, "focal length", self.v_focal, 8, 200, "mm eq", 1, "%.0f")
         # Yaw slider: disabled until the checkbox is ticked.  The checkbox and
         # the slider share a row so the relationship is visible at a glance.
         self.v_correct_horizontal = tk.BooleanVar(value=self.settings.correct_horizontal)
@@ -557,53 +913,33 @@ class ReviewPanel(tk.Frame):
         # yaw entry in CLAUDE.md -- this is a special case, not a default.
         ttk.Checkbutton(ctl, text="horizontal (yaw) - one facade only",
                         variable=self.v_correct_horizontal,
-                        command=self._on_horizontal_toggle).grid(row=3, column=0, sticky="w")
-        self._yaw_scale = ttk.Scale(ctl, from_=-15, to=15, variable=self.v_yaw,
-                                    orient="horizontal", command=lambda _v: self._on_slider())
-        self._yaw_scale.grid(row=3, column=1, sticky="ew", padx=6)
+                        command=self._on_horizontal_toggle).grid(row=0, column=0, sticky="w")
+        # ±30, not the automatic cap: a hand is allowed to ask for what the
+        # estimator's 8 deg gate refuses -- the manual path carries no limit.
+        self._yaw_scale = ttk.Scale(ctl, from_=-30, to=30, variable=self.v_yaw,
+                                    orient="horizontal",
+                                    command=lambda _v: self._on_slider())
+        self._yaw_scale.grid(row=0, column=1, sticky="ew", padx=6)
+        self._yaw_spin = ttk.Spinbox(ctl, textvariable=self.v_yaw, from_=-30, to=30,
+                                     increment=0.1, format="%.2f", width=7,
+                                     command=self._on_slider)
+        self._yaw_spin.grid(row=0, column=2, sticky="e", padx=(6, 0))
+        self._yaw_spin.bind("<Return>", lambda _e: self._on_slider())
         if not self.settings.correct_horizontal:
             self._yaw_scale.configure(state="disabled")
-        lbl_yaw = ttk.Label(ctl, width=12)
-        lbl_yaw.grid(row=3, column=2, sticky="e")
-        self._lbl_3 = (lbl_yaw, self.v_yaw, "deg")
+            self._yaw_spin.configure(state="disabled")
 
-        # The detector belongs beside the mask, not in the batch panel only:
-        # both change what the estimator is looking at rather than what it does
-        # with it, and both can only be judged against the lines on screen.
-        det = ttk.Frame(leftcol, padding=(0, 8, 0, 0))
-        det.pack(fill="x")
-        self.v_detector = tk.StringVar(value=self.settings.detector)
-        ttk.Label(det, text="line detector", width=18).grid(row=0, column=0, sticky="w")
-        dbox = ttk.Combobox(det, textvariable=self.v_detector, width=11,
-                            state="readonly", values=list(DETECTORS))
-        dbox.grid(row=0, column=1, sticky="w", padx=(6, 6))
-        dbox.bind("<<ComboboxSelected>>", lambda e: self._apply_detector())
-        det.columnconfigure(2, weight=1)
+        # The line detector and ROI x moved to the lower-left tools field with
+        # the rest of the FIND controls (see `_build_tools`) -- beside the input
+        # image, where what-the-estimator-sees belongs.  This panel is EDIT only.
 
-        msk = ttk.Frame(rightcol, padding=(0, 8, 0, 0))
-        msk.pack(fill="x")
-        self.v_maskmode = tk.StringVar(value=self.settings.mask_mode)
-        ttk.Label(msk, text="source", width=18).grid(row=0, column=0, sticky="w")
-        box = ttk.Combobox(msk, textvariable=self.v_maskmode, width=8, state="readonly",
-                           values=["off", "file", "birefnet"])
-        box.grid(row=0, column=1, sticky="w", padx=(6, 6))
-        box.bind("<<ComboboxSelected>>", lambda e: self._apply_mask())
-        ttk.Button(msk, text="mask folder...", command=self._pick_mask_folder
-                   ).grid(row=0, column=2, sticky="w")
-        ttk.Button(msk, text="BiRefNet model...", command=self._pick_birefnet_model
-                   ).grid(row=0, column=4, sticky="w", padx=(10, 0))
-        self.v_maskinv = tk.BooleanVar(value=self.settings.mask_invert)
-        ttk.Checkbutton(msk, text="mask marks what to KEEP",
-                        variable=self.v_maskinv, command=self._apply_mask
-                        ).grid(row=0, column=3, sticky="w", padx=10)
-        self.lbl_mask = ttk.Label(msk, text="", wraplength=760, justify="left")
-        self.lbl_mask.grid(row=1, column=0, columnspan=4, sticky="w", pady=(4, 0))
-        self.v_alpha = tk.DoubleVar(value=0.28)
-        ttk.Label(msk, text="mask opacity", width=18).grid(row=2, column=0, sticky="w")
-        ttk.Scale(msk, from_=0.0, to=1.0, variable=self.v_alpha, orient="horizontal",
-                  command=lambda _v: self._on_alpha()).grid(row=2, column=1, columnspan=3,
-                                                            sticky="ew", padx=6)
-        msk.columnconfigure(3, weight=1)
+        # The masking controls (source + BiRefNet model picker) live in the
+        # lower-left tools field now -- App._build calls `_build_tools`, which
+        # builds them there. They were a row here in the lower-right cell.
+
+        # A hairline between the edit block above and the output block below, so
+        # "angles" and "fill/mask/output" read as two zones instead of one column.
+        ttk.Separator(rightcol, orient="horizontal").pack(fill="x", pady=(6, 2))
 
         fill_row = ttk.Frame(rightcol, padding=(0, 8, 0, 0))
         fill_row.pack(fill="x")
@@ -613,13 +949,17 @@ class ReviewPanel(tk.Frame):
                             state="readonly", values=["none", "telea", "lama", "comfyui"])
         fbox.grid(row=0, column=1, sticky="w", padx=(6, 6))
         fbox.bind("<<ComboboxSelected>>", lambda e: self._apply_fill())
-        ttk.Button(fill_row, text="pad colour...",
-                   command=self._pick_pad_colour).grid(row=0, column=2, sticky="w")
+        _b = ttk.Button(fill_row, text="pad colour...",
+                        command=self._pick_pad_colour)
+        _b.grid(row=0, column=2, sticky="w")
+        _attach_tooltip(_b, "Pick the colour used to pad the frame when filling gaps")
         self.lbl_pad_colour = tk.Label(fill_row, fg=INK["text"], width=4,
                                        relief="flat", font=("TkDefaultFont", 8))
         self.lbl_pad_colour.grid(row=0, column=3, sticky="w", padx=(6, 0))
-        ttk.Button(fill_row, text="edge",
-                   command=self._pad_edge).grid(row=0, column=4, sticky="w", padx=(6, 0))
+        _b = ttk.Button(fill_row, text="edge",
+                        command=self._pad_edge)
+        _b.grid(row=0, column=4, sticky="w", padx=(6, 0))
+        _attach_tooltip(_b, "Set how many pixels of padding to add around the frame")
         # The ComfyUI mode was selectable here with no way to configure it and
         # no indicator -- so picking it meant the default address and, worse,
         # the *unnamed default workflow*, which is the inpainting graph. An
@@ -628,6 +968,7 @@ class ReviewPanel(tk.Frame):
         self.btn_comfy = ttk.Button(fill_row, text="ComfyUI settings",
                                     command=self._open_comfy)
         self.btn_comfy.grid(row=0, column=5, sticky="w", padx=(12, 0))
+        _attach_tooltip(self.btn_comfy, "Configure the ComfyUI server address and inpainting workflow")
         self.lbl_comfy = ttk.Label(fill_row, text="", style="Dim.TLabel")
         self.lbl_comfy.grid(row=1, column=1, columnspan=5, sticky="w", padx=(6, 0))
         fill_row.columnconfigure(5, weight=1)
@@ -636,52 +977,80 @@ class ReviewPanel(tk.Frame):
 
         # Save / Keep / Close stay outside the collapsible: a queue advances on
         # Save, so a Save button that can be hidden is a behaviour change.
+        # Two rows, not one.  The single row requested ~1795 px -- thirteen left-
+        # packed correction controls plus the four right-packed actions -- against
+        # a 910 px field at the 1920x1080 floor, so `pack` starved the action
+        # cluster (and the Grid/grid-step tail) to zero width.  Splitting keeps
+        # every control mapped; the picture yields the height, per the assembly
+        # rule below.  The display overlays (Lines / Mask / Grid / grid-step)
+        # moved to the lower-left tools field -- see `_build_tools`.
         btns = ttk.Frame(top, padding=(0, 8))
         self._btns = btns
-        ttk.Button(btns, text="Auto", command=self._use_auto).pack(side="left")
-        ttk.Button(btns, text="Reset", command=self._reset).pack(side="left", padx=6)
-        self.v_mark = tk.BooleanVar(value=False)
-        ttk.Checkbutton(btns, text="Mark vertical",
-                        variable=self.v_mark, command=self._on_mark_toggle
-                        ).pack(side="left", padx=(12, 0))
-        self.v_planar = tk.BooleanVar(value=False)
-        ttk.Checkbutton(btns, text="Planar",
-                        variable=self.v_planar, command=self._on_planar_toggle
-                        ).pack(side="left", padx=(6, 0))
-        ttk.Button(btns, text="Clear marks",
-                   command=self._clear_marks).pack(side="left", padx=6)
-        ttk.Button(btns, text="Strike slanted",
-                   command=self._strike_slanted).pack(side="left", padx=(6, 12))
-        ttk.Button(btns, text="Auto crop",
-                    command=self._auto_crop).pack(side="left", padx=(0, 6))
-        ttk.Button(btns, text="Reset crop",
-                    command=self._clear_crop).pack(side="left", padx=(0, 6))
-        ttk.Checkbutton(btns, text="Lines", command=self._schedule_redraw,
-                         variable=self._mk_show()).pack(side="left")
-        ttk.Checkbutton(btns, text="Mask", command=self._toggle_mask,
-                         variable=self._mk_mask()).pack(side="left", padx=6)
-        # Control grid: a soft overlay for checking corrections by eye.  A true
-        # vertical in the corrected frame should run along a grid line; the
-        # spacing is either fixed pixels or camera-style divisions.
-        self.v_grid = tk.BooleanVar(value=False)
-        ttk.Checkbutton(btns, text="Grid", command=self._schedule_redraw,
-                         variable=self.v_grid).pack(side="left")
-        self.v_grid_step = tk.StringVar(value="50 px")
-        grid_cb = ttk.Combobox(btns, textvariable=self.v_grid_step, width=8,
-                               state="readonly",
-                               values=["25 px", "50 px", "100 px",
-                                       "thirds", "quarters", "sixths"])
-        grid_cb.pack(side="left", padx=(4, 6))
-        grid_cb.bind("<<ComboboxSelected>>", lambda e: self._schedule_redraw())
-        ttk.Button(btns, text="Save", command=self._save,
-                   style="Accent.TButton").pack(side="right")
+        _b = ttk.Button(btns, text="Auto", command=self._use_auto)
+        _b.pack(side="left")
+        _attach_tooltip(_b, "Apply the auto-computed correction (roll + pitch)")
+        _b = ttk.Button(btns, text="Reset", command=self._reset)
+        _b.pack(side="left", padx=6)
+        _attach_tooltip(_b, "Reset all angles to zero")
+        _b = ttk.Button(btns, text="Save As…", command=self._save_as)
+        _b.pack(side="right", padx=(0, 6))
+        _attach_tooltip(_b, "Choose a file name and location for the corrected image")
+        _b = ttk.Button(btns, text="Save", command=self._save,
+                        style="Accent.TButton")
+        _b.pack(side="right")
+        _attach_tooltip(_b, "Save the corrected image and advance to the next")
         self.v_overwrite = tk.BooleanVar(value=False)
-        ttk.Checkbutton(btns, text="overwrite original",
-                        variable=self.v_overwrite).pack(side="right", padx=8)
-        ttk.Button(btns, text="Close",
-                   command=self._close).pack(side="right", padx=(14, 6))
-        ttk.Button(btns, text="Keep original",
-                   command=self._keep).pack(side="right", padx=6)
+        _cb = ttk.Checkbutton(btns, text="overwrite original",
+                              variable=self.v_overwrite,
+                              command=self._refresh_file_names)
+        _cb.pack(side="right", padx=8)
+        _attach_tooltip(_cb, "Replace the source file instead of writing a new one")
+        _b = ttk.Button(btns, text="Close",
+                        command=self._close)
+        _b.pack(side="right", padx=(14, 6))
+        _attach_tooltip(_b, "Close this image without saving")
+        _b = ttk.Button(btns, text="Keep original",
+                        command=self._keep)
+        _b.pack(side="right", padx=6)
+        _attach_tooltip(_b, "Skip correction and keep the unmodified file")
+
+        # Row two: crop operations.  Mark vertical / mark kind / Strike slanted
+        # moved to the lower-left tools field (2026-09-13).
+        btns2 = ttk.Frame(top, padding=(0, 8))
+        self._btns2 = btns2
+        self.v_planar = tk.BooleanVar(value=False)
+        _cb = ttk.Checkbutton(btns2, text="Planar",
+                              variable=self.v_planar, command=self._on_planar_toggle)
+        _cb.pack(side="left", padx=(6, 0))
+        _attach_tooltip(_cb, "Use planar homography instead of rotation (for flat surfaces)")
+        # Mask brush state lives here; its widgets live in the lower-left tools
+        # field -- App._build calls `_build_tools` to place them.  **Made once.**
+        # `_build` re-runs on every load while that tools field is built a single
+        # time, so rebuilding these variables handed the checkbutton a stale one:
+        # ticking the box set a variable nobody read, `_on_click_before` saw the
+        # fresh False, and the brush silently did nothing from the second
+        # photograph onwards.  Same trap as the overlay switches above.
+        if getattr(self, "v_stroke", None) is None:
+            self.v_stroke = tk.BooleanVar(value=False)
+            self.v_stroke_w = tk.IntVar(value=10)
+        if getattr(self, "v_mark", None) is None:
+            self.v_mark = tk.BooleanVar(value=False)
+            self.v_mark_kind = tk.StringVar(value="vertical")
+        # The palette in the picture's top-left corner can only be finished here:
+        # it toggles these variables, and they do not exist until this point.
+        self._build_tool_palette()
+        _b = ttk.Button(btns2, text="Clear marks",
+                        command=self._clear_marks)
+        _b.pack(side="left", padx=(6, 0))
+        _attach_tooltip(_b, "Remove all manually placed control lines")
+        _b = ttk.Button(btns2, text="Auto crop",
+                        command=self._auto_crop)
+        _b.pack(side="left", padx=(0, 6))
+        _attach_tooltip(_b, "Crop to the detected content bounds")
+        _b = ttk.Button(btns2, text="Reset crop",
+                        command=self._clear_crop)
+        _b.pack(side="left", padx=(0, 6))
+        _attach_tooltip(_b, "Remove any manual crop selection")
 
         # -- assembly: who gives up height first ---------------------------
         # `pack` hands each child its requested height in call order and gives
@@ -693,11 +1062,11 @@ class ReviewPanel(tk.Frame):
         # mapped before this, in the one mode that exists to be driven by hand.
         # Same pattern as the ComfyUI dock's `side="bottom"`.
         btns.pack(side="bottom", fill="x")
+        btns2.pack(side="bottom", fill="x")
         if self.v_adjust.get():
-            adj.pack(side="bottom", fill="x")
+            adj.pack(side="bottom", fill="x", after=btns2)
         stat.pack(side="bottom", fill="x", pady=(6, 4))
         hint.pack(side="bottom", anchor="w", pady=(4, 0))
-        panes.pack(side="top", fill="both", expand=True)
         # The control columns stay visible; there is no height-based verdict to
         # apply on resize.  (The old adaptive default collapsed them at short
         # windows, which is why the two-panel layout was never seen.)
@@ -721,12 +1090,12 @@ class ReviewPanel(tk.Frame):
             return
         self.v_adjust.set(want)
         if want:
-            adj.pack(side="bottom", fill="x", after=self._btns)
+            adj.pack(side="bottom", fill="x", after=self._btns2)
         else:
             adj.pack_forget()
 
     def _toggle_adjust(self):
-        """Hide or show the four control rows; the picture gets the height.
+        """Hide or show the two control columns; the picture gets the height.
 
         `pack` appends, so the re-expand has to name where the frame goes back
         or the controls surface *below* the Save row -- the same trap as
@@ -737,13 +1106,9 @@ class ReviewPanel(tk.Frame):
             # so the packing order runs upwards from the action row and the
             # slot above it is the one *after* it in that order.  Getting this
             # backwards puts the controls below Save.
-            self._adj.pack(side="bottom", fill="x", after=self._btns)
+            self._adj.pack(side="bottom", fill="x", after=self._btns2)
         else:
             self._adj.pack_forget()
-
-    def _mk_show(self):
-        self.v_show_lines = tk.BooleanVar(value=True)
-        return self.v_show_lines
 
     def _apply_detector(self):
         """Switch detector and say what it found.
@@ -765,16 +1130,71 @@ class ReviewPanel(tk.Frame):
         else:
             self._redraw()
 
+    def _apply_roi(self, _event=None):
+        """Restrict horizontal evidence to an x-strip (corner views).  Off or an
+        empty/invalid strip leaves ``roi_x`` at None -- the unfiltered frame.
+        Re-estimates only in AUTO; a manual take-over keeps its angles until the
+        user returns to Auto, so the strip cannot yank a correction they set.
+
+        A valid strip also turns horizontal (yaw) correction on: the strip only
+        shapes the yaw, and the yaw is gated on ``correct_horizontal`` -- left off,
+        the rulers would show and change nothing.  Clearing the strip does not force
+        the flag back off; a hand-set yaw or an independent choice stays put."""
+        s = self.session
+        if s is None:
+            return
+        aw = s.gray.shape[1]
+        roi = None
+        if self.v_roi.get():
+            try:
+                x0 = float(self.v_roi_x0.get()) / 100.0
+                x1 = float(self.v_roi_x1.get()) / 100.0
+            except ValueError:
+                return
+            if 0.0 <= x0 < x1 <= 1.0 and (x1 - x0) >= 0.02:
+                roi = (x0 * aw, x1 * aw)
+        s.roi_x = roi
+        if roi is not None and not s.settings.correct_horizontal:
+            self.v_correct_horizontal.set(True)
+            # Sets the flag, enables the yaw slider, and refits in AUTO -- with
+            # roi_x already in place above, so the strip is what gets applied.
+            self._on_horizontal_toggle()
+            return
+        if s.mode == AUTO:
+            s.refit()
+            self._sync_from_session()
+        else:
+            self._redraw()
+
     def _apply_mask(self):
+        if not self.session:
+            return                     # no photo loaded; nothing to mask yet
         mode = self.v_maskmode.get()
         if mode == "file" and not self.session.settings.mask_file:
             if not self._pick_mask_folder(apply_now=False):
                 self.v_maskmode.set(self.session.settings.mask_mode)
                 return
-        if mode == "birefnet" and not self.session.settings.birefnet_model:
-            if not self._pick_birefnet_model(apply_now=False):
+        if mode in ("birefnet", "gdino") and not self.session.settings.birefnet_model:
+            # The path was typed once and saved to prefs; a fresh photo reloads
+            # with an empty session, so fall back to the stored value before
+            # asking again -- it must be asked exactly once, not per photograph.
+            # Read the App's remembered birefnet model (mode-independent), not
+            # its v_maskpath field, which holds a folder when the batch side sits
+            # in "file" mode; under a test root there is no App, so use prefs.
+            app = self._app()
+            remembered = getattr(app, "_remembered", {}) if app is not None else {}
+            stored = (remembered.get("birefnet_model", "")
+                      or prefs.load().get("birefnet_model", ""))
+            if stored and os.path.isfile(stored):
+                self.session.settings = self.session.settings.replace(
+                    birefnet_model=stored)
+            elif not self._pick_birefnet_model(apply_now=False):
                 self.v_maskmode.set(self.session.settings.mask_mode)
                 return
+        if mode == "gdino":
+            # the prompt lives in the entry, not the settings, until it is applied
+            self.session.settings = self.session.settings.replace(
+                gdino_prompt=self.v_gdino_prompt.get())
         err = self.session.set_mask(mode, invert=bool(self.v_maskinv.get()))
         self.lbl_mask.configure(text=err or "")
         if self.session.mode == AUTO:
@@ -789,6 +1209,8 @@ class ReviewPanel(tk.Frame):
         that run at different resolutions -- and the architecture has to sit
         beside them, so the choice is described immediately rather than after a
         failed batch."""
+        if not self.session:
+            return False               # nothing to attach the model to yet
         from . import birefnet as BN
         p = filedialog.askopenfilename(
             title="BiRefNet weights",
@@ -815,6 +1237,8 @@ class ReviewPanel(tk.Frame):
     def _pick_mask_folder(self, apply_now=True):
         """A folder of one mask per photo is what ``--mask-export`` writes; a
         single PNG is the hand-painted case."""
+        if not self.session:
+            return False               # nothing to attach the mask to yet
         d = filedialog.askdirectory(title="folder of mask images (one per photo)",
                                     parent=self)
         if not d:
@@ -827,6 +1251,8 @@ class ReviewPanel(tk.Frame):
         return True
 
     def _on_alpha(self):
+        if not self.session:
+            return
         self.session.mask_alpha = float(self.v_alpha.get())
         self._schedule_redraw()
 
@@ -842,6 +1268,25 @@ class ReviewPanel(tk.Frame):
         """The batch window, when there is one.  ``None`` under a test root."""
         app = self.master
         return app if hasattr(app, "_open_comfy") else None
+
+    def _on_add_files(self):
+        app = self._app()
+        if app is not None:
+            app._add_files()
+
+    def _on_add_folder(self):
+        app = self._app()
+        if app is not None:
+            app._add_folder()
+
+    def _on_paste(self):
+        app = self._app()
+        if app is None:
+            return
+        try:
+            app._paste_screenshot()
+        except Exception as exc:
+            messagebox.showerror("Paste", str(exc))
 
     def _cfg(self):
         """The settings in force, whether or not a session is loaded yet.
@@ -954,10 +1399,6 @@ class ReviewPanel(tk.Frame):
         else:
             self.lbl_pad_colour.configure(bg=INK["field"], text=pad[:4])
 
-    def _mk_mask(self):
-        self.v_show_mask = tk.BooleanVar(value=True)
-        return self.v_show_mask
-
     def _toggle_mask(self):
         """Show the excluded region and the lines it removed.
 
@@ -967,21 +1408,19 @@ class ReviewPanel(tk.Frame):
         self.session.show_mask = bool(self.v_show_mask.get())
         self._schedule_redraw()
 
-    def _slider(self, parent, row, label, var, lo, hi, unit):
+    def _slider(self, parent, row, label, var, lo, hi, unit, inc, fmt):
         ttk.Label(parent, text=label, width=18).grid(row=row, column=0, sticky="w")
         sc = ttk.Scale(parent, from_=lo, to=hi, variable=var, orient="horizontal",
                        command=lambda _v: self._on_slider())
         sc.grid(row=row, column=1, sticky="ew", padx=6)
-        parent.columnconfigure(1, weight=1)
-        lbl = ttk.Label(parent, width=12)
-        lbl.grid(row=row, column=2, sticky="e")
-        setattr(self, f"_lbl_{row}", (lbl, var, unit))
-
-    def _update_slider_labels(self):
-        for row in range(4):
-            lbl, var, unit = getattr(self, f"_lbl_{row}")
-            lbl.configure(text=f"{var.get():+.2f} {unit}" if unit == "deg"
-                          else f"{var.get():.0f} {unit}")
+        parent.columnconfigure(1, weight=1, minsize=layout.SLIDER_MIN)
+        # The scale reaches a region by eye; the spinbox is for the last fraction
+        # of a degree -- type an exact value or nudge one fine step at a time.
+        # Both drive the same variable, so moving either moves both.
+        sp = ttk.Spinbox(parent, textvariable=var, from_=lo, to=hi, increment=inc,
+                         format=fmt, width=7, command=self._on_slider)
+        sp.grid(row=row, column=2, sticky="e", padx=(6, 0))
+        sp.bind("<Return>", lambda _e: self._on_slider())
 
     # -- state -----------------------------------------------------------
     def _sync_from_session(self):
@@ -998,7 +1437,9 @@ class ReviewPanel(tk.Frame):
     def _on_horizontal_toggle(self):
         on = self.v_correct_horizontal.get()
         self.session.settings = self.session.settings.replace(correct_horizontal=on)
-        self._yaw_scale.configure(state="normal" if on else "disabled")
+        state = "normal" if on else "disabled"
+        self._yaw_scale.configure(state=state)
+        self._yaw_spin.configure(state=state)
         if on and self.session.mode == AUTO:
             # the estimator only computes a yaw when the flag was already on
             # at estimation time, so switching it on must re-fit -- cheap, it
@@ -1040,8 +1481,28 @@ class ReviewPanel(tk.Frame):
     def _on_mark_toggle(self):
         """Entering or leaving vertical-marking mode; a half-finished line is
         forgotten rather than left dangling."""
-        self._pending_mark = None
+        on = self.v_mark.get()
+        if on:
+            if self.v_stroke.get():
+                self.v_stroke.set(False)
+                self._on_stroke_toggle()
+            self._pending_mark = None
+            self._loupe_show()
+        else:
+            self._pending_mark = None
+            self._mark_drag = None
+            self._loupe_hide()
         self._set_status(self.session.status_text())
+        self._redraw()
+
+    def _mark_kind(self):
+        """Which plane the mark gesture asserts: ``"v"`` or ``"h"``."""
+        return "h" if str(self.v_mark_kind.get()).lower().startswith("h") else "v"
+
+    def _on_mark_kind(self, _event=None):
+        """Switching orientation mid-gesture would strand a half-line in the
+        wrong array; forget it rather than guess which plane it meant."""
+        self._pending_mark = None
         self._redraw()
 
     # -- planar (four-corner) correction ---------------------------------
@@ -1067,7 +1528,16 @@ class ReviewPanel(tk.Frame):
         corner.  The quad is ordered TL, TR, BR, BL -- the order the user
         clicks is the order the corners are named, so the status says which
         one to click next rather than trusting the guess."""
-        hit = self.session.pick_planar_corner(x, y, display_scale=self._before_scale)
+        # Screen -> full-resolution pixels first: the quad is stored in those
+        # and so is the pick's other half.  Comparing display coordinates
+        # against them made a corner grabbable only on previews scaled to ~1 --
+        # at scale 0.08 a click beside a placed corner passed straight through,
+        # and a phantom radius reached into the canvas where the corner's
+        # full-resolution position numerically fell, swallowing clicks that
+        # were meant to place.
+        fx = x / self._before_scale
+        fy = y / self._before_scale
+        hit = self.session.pick_planar_corner(fx, fy, display_scale=self._before_scale)
         if hit is not None:
             self._planar_drag = hit
             return
@@ -1076,9 +1546,6 @@ class ReviewPanel(tk.Frame):
             self._set_status("all four corners are set -- drag one to move it, "
                              "or click 'Planar' off to leave the mode")
             return
-        # screen -> full-resolution pixels
-        fx = x / self._before_scale
-        fy = y / self._before_scale
         self.session.set_planar_point(i, fx, fy)
         nxt = (self._PLANAR_NAMES[i + 1] + " corner next"
                if i + 1 < 4 else "four corners set -- the right pane is the rectified view")
@@ -1100,6 +1567,102 @@ class ReviewPanel(tk.Frame):
     def _on_before_motion(self, event):
         if getattr(self, "_loupe", None) is not None:
             self._loupe_move(event)
+        self._brush_cursor_indicator(event)
+
+    def _brush_cursor_indicator(self, event):
+        """Show a black-outlined circle at the cursor when the mask brush is
+        active, so the user can see the effective paint size before committing."""
+        if not self._brush_live():
+            self.c_before.delete("brush_cursor")
+            return
+        if getattr(self, "_stroke_pts", None):
+            # actively painting: the stroke preview already shows the size
+            self.c_before.delete("brush_cursor")
+            return
+        r = max(8, int(self.v_stroke_w.get()))
+        cx = event.x
+        cy = event.y
+        self.c_before.delete("brush_cursor")
+        self.c_before.create_oval(cx - r, cy - r, cx + r, cy + r,
+                                  outline="black", width=1,
+                                  tags="brush_cursor")
+
+    # -- the loupe: full-resolution magnifier for placing planar corners ----
+    def _loupe_show(self):
+        """Create the glass.  A canvas placed over the panel, not a Toplevel:
+        it only has to live while the cursor is over the before field, which
+        is inside this window, and a second window is chrome nobody asked for."""
+        if self._loupe is not None:
+            return
+        size, _crop, _off = layout.loupe()
+        w = tk.Canvas(self, width=size, height=size, bg=INK["cross"],
+                      highlightthickness=1, highlightbackground=INK["line"])
+        w.place(x=-2 * size, y=-2 * size)   # off-view until the first motion
+        # Raise via the raw window command: on a Canvas both `lift()` and
+        # `tkraise()` are the item-stacking commands (they need an item id), so
+        # neither raises the widget itself.  `raise <window>` does.
+        w.tk.call("raise", w._w)
+        # The loupe floats over c_before; without forwarding, clicks land on
+        # the loupe and are swallowed.  Relay button events to c_before at the
+        # equivalent coordinate so planar/mark/stroke gestures work through it.
+        def _forward(event):
+            lx = event.x_root - self.c_before.winfo_rootx()
+            ly = event.y_root - self.c_before.winfo_rooty()
+            self.c_before.event_generate(
+                event.type, x=int(lx), y=int(ly), buttons=event.buttons)
+        w.bind("<Button-1>", _forward)
+        w.bind("<ButtonRelease-1>", _forward)
+        w.bind("<B1-Motion>", _forward)
+        self._loupe = w
+        self._loupe_ph = None
+
+    def _loupe_hide(self):
+        if self._loupe is None:
+            return
+        self._loupe.destroy()
+        self._loupe = None
+        self._loupe_ph = None
+
+    def _loupe_move(self, event):
+        """Magnify the full-resolution image around the cursor.
+
+        The crop is centred on the pixel under the cursor and never clamped --
+        off-image runs show as dark -- so the crosshair at the window's centre
+        always marks exactly that pixel, even at the frame's edge.  Magnifying
+        the preview instead would show big soft pixels and buy nothing."""
+        if self._loupe is None or self.session is None:
+            return
+        size, crop, off = layout.loupe()
+        W, H = self.session.w, self.session.h
+        px = int(round((event.x - self._before_off[0]) / self._before_scale))
+        py = int(round((event.y - self._before_off[1]) / self._before_scale))
+        x0, y0 = px - crop // 2, py - crop // 2
+        buf = np.zeros((crop, crop, 3), dtype=np.uint8)
+        ix0, iy0 = max(0, x0), max(0, y0)
+        ix1, iy1 = min(W, x0 + crop), min(H, y0 + crop)
+        if ix1 > ix0 and iy1 > iy0:
+            buf[iy0 - y0:iy1 - y0, ix0 - x0:ix1 - x0] = \
+                self.session.bgr[iy0:iy1, ix0:ix1]
+        ph, _s = _to_photo(buf, (size, size))
+        c = self._loupe
+        c.delete("all")
+        c.create_image(0, 0, anchor="nw", image=ph)
+        self._loupe_ph = ph          # the canvas does not keep a reference
+        m = size // 2
+        for x1, y1, x2, y2 in ((m - 4, m, m + 4, m), (m, m - 4, m, m + 4)):
+            c.create_line(x1, y1, x2, y2, fill=INK["cross"], width=3)
+        for x1, y1, x2, y2 in ((m - 4, m, m + 4, m), (m, m - 4, m, m + 4)):
+            c.create_line(x1, y1, x2, y2, fill=INK["accent"])
+        # Follow the cursor without covering it: offset to the lower right,
+        # flip to the other side near a panel edge.
+        cx = event.x_root - self.winfo_rootx()
+        cy = event.y_root - self.winfo_rooty()
+        x, y = cx + off, cy + off
+        if x + size > self.winfo_width() - 2:
+            x = cx - off - size
+        if y + size > self.winfo_height() - 2:
+            y = cy - off - size
+        c.place(x=max(2, int(x)), y=max(2, int(y)))
 
     def _draw_planar_quad(self):
         """The quad and its numbered corners, over the before preview.
@@ -1110,17 +1673,25 @@ class ReviewPanel(tk.Frame):
         q = self.session.planar_quad
         pts = [(ox + px / self._before_scale, oy + py / self._before_scale)
                for px, py in q]
-        if len(pts) >= 2:
+        if len(pts) >= 3:
+            self.c_before.create_polygon(
+                *[c for pt in pts for c in pt], fill="#ff5fa218",
+                outline="#ff5fa2", width=2, tags="planar_fill")
+        elif len(pts) == 2:
             self.c_before.create_line(
                 *[c for pt in pts for c in pt], fill="#ff5fa2", width=2)
         for i, (sx, sy) in enumerate(pts):
             col = "#ff5fa2" if i < len(q) else "#7fd4ff"
-            self.c_before.create_oval(sx - 7, sy - 7, sx + 7, sy + 7,
-                                      outline=col, width=2)
-            self.c_before.create_text(sx, sy - 16, text=str(i + 1), fill=col)
+            self.c_before.create_oval(sx - 8, sy - 8, sx + 8, sy + 8,
+                                      fill=INK["field"], outline=col, width=2,
+                                      tags="planar_handle")
+            self.c_before.create_line(sx - 4, sy, sx + 4, sy, fill=col)
+            self.c_before.create_line(sx, sy - 4, sx, sy + 4, fill=col)
+            self.c_before.create_text(sx, sy - 18, text=str(i + 1), fill=col)
 
     def _clear_marks(self):
-        if self.session.clear_control_lines():
+        if self.session.clear_control_lines() or \
+                self.session.clear_control_lines(kind="h"):
             self._sync_from_session()
 
     def _clear_crop(self):
@@ -1131,24 +1702,26 @@ class ReviewPanel(tk.Frame):
         """Cut the padded band away instead of inventing something to put in it."""
         if self.session.auto_crop():
             self._refresh_crop()
-            self._set_status_extra("cropped to the largest rectangle with no "
-                                   "invented pixels in it")
+            kept = (1.0 - self.session.crop_loss()) * 100.0
+            self._set_status_extra(f"cropped -- keeps {kept:.0f}% of the frame, "
+                                   f"cuts {100.0 - kept:.0f}%")
         else:
             self._set_status_extra("nothing to trim -- the correction opened no "
                                    "band, or the plan had already cropped it")
 
     def _refresh_crop(self):
-        """Redraw the overlay for a changed crop, without re-rendering the image.
+        """Re-bake the veil for a changed crop, without re-rendering the image.
 
         The picture behind it cannot have changed -- the crop is applied on
         save, not in the preview -- so a full redraw would re-warp and, with a
         live fill, re-inpaint an image identical to the one already on screen.
-        That pause is itself a kind of jump.
+        That pause is itself a kind of jump.  Only the flat veil is recomposed from
+        the cached un-veiled frame, which is what ``_show_after`` does.
         """
         if getattr(self, "_ph_a", None) is None:
             self._schedule_redraw()      # nothing on screen to draw over yet
             return
-        self._draw_crop_persistent()
+        self._show_after(self.session.crop_rect)
         self._set_status(self.session.status_text())
 
     def _on_crop_press(self, event):
@@ -1157,23 +1730,59 @@ class ReviewPanel(tk.Frame):
         x = event.x - self._after_off[0]
         y = event.y - self._after_off[1]
         iw, ih = self._ph_a.width(), self._ph_a.height()
+        # Reference guides: grab an existing one or add a new one from the
+        # 15 px border zone.  Checked before crop so a press on a guide never
+        # starts a rectangle drag.
+        hit = self._after_guide_at(x, y, iw, ih)
+        if hit is not None:
+            kind, idx = hit
+            self._guide_drag = (kind, idx)
+            try:
+                self.c_after.grab_set()
+            except tk.TclError:
+                pass
+            return
+        border = 15
+        in_v_zone = (0 <= x < border or iw - border < x <= iw)
+        in_h_zone = (0 <= y < border or ih - border < y <= ih)
+        if in_v_zone and not in_h_zone:
+            self._after_guides.append(("v", max(0.0, min(iw, x))))
+            self._draw_after_guides()
+            return
+        if in_h_zone and not in_v_zone:
+            self._after_guides.append(("h", max(0.0, min(ih, y))))
+            self._draw_after_guides()
+            return
         x = max(0, min(iw, x))
         y = max(0, min(ih, y))
-        self._crop_drag_start = self._grab_corner(x, y, iw, ih) or (x, y)
+        grab = self._grab_handle(x, y, iw, ih)
+        if grab is not None:
+            self._crop_drag_start = grab
+            return
+        # A press inside the kept region pans the whole rectangle; a press in the
+        # cut-away area (or on an uncropped frame) draws a new one from scratch.
+        rect = self.session.crop_rect or (0.0, 0.0, 1.0, 1.0)
+        cx0, cy0, cx1, cy1 = (rect[i] * (iw if i % 2 == 0 else ih) for i in range(4))
+        if cx0 <= x <= cx1 and cy0 <= y <= cy1:
+            self._crop_drag_start = ("move", x - cx0, y - cy0)
+        else:
+            self._crop_drag_start = ("corner", x, y)
 
-    def _grab_corner(self, x, y, iw, ih, radius=14):
-        """Answer a press near a corner of the existing crop with the *opposite*
-        corner, or ``None`` when the press is not on a handle.
+    def _grab_handle(self, x, y, iw, ih, radius=14):
+        """Answer a press on a crop handle with what the drag should do.
 
-        That opposite corner then plays exactly the role the first click plays
-        when a rectangle is drawn from nothing, so adjusting an existing crop
-        and drawing a new one are one drag implementation rather than two.
-        Without handles a crop can only be redrawn, and nudging one edge means
-        re-placing all four.
+        A corner answers with the *opposite* corner: that point then plays
+        exactly the role the first click plays when a rectangle is drawn from
+        nothing, so adjusting an existing crop and drawing a new one are one
+        drag implementation rather than two.  An edge midpoint answers with
+        its own name; the drag then moves just that edge along its axis --
+        top and bottom vertically, left and right horizontally -- which is how
+        you nudge one side without re-placing the other three.
+
+        The same full-frame default `_show_after` draws, so the
+        handles it shows on an uncropped photograph are the handles this
+        grabs.  Drawing a handle nobody can pick up is worse than drawing none.
         """
-        # The same full-frame default `_draw_crop_persistent` draws, so the
-        # handles it shows on an uncropped photograph are the handles this
-        # grabs.  Drawing a handle nobody can pick up is worse than drawing none.
         x0, y0, x1, y1 = self.session.crop_rect or (0.0, 0.0, 1.0, 1.0)
         cx0, cy0, cx1, cy1 = x0 * iw, y0 * ih, x1 * iw, y1 * ih
         for (hx, hy), opposite in (((cx0, cy0), (cx1, cy1)),
@@ -1181,71 +1790,288 @@ class ReviewPanel(tk.Frame):
                                    ((cx0, cy1), (cx1, cy0)),
                                    ((cx1, cy1), (cx0, cy0))):
             if abs(x - hx) <= radius and abs(y - hy) <= radius:
-                return opposite
+                return ("corner",) + opposite
+        for name, hx, hy in (("top", 0.5 * (cx0 + cx1), cy0),
+                             ("bottom", 0.5 * (cx0 + cx1), cy1),
+                             ("left", cx0, 0.5 * (cy0 + cy1)),
+                             ("right", cx1, 0.5 * (cy0 + cy1))):
+            if abs(x - hx) <= radius and abs(y - hy) <= radius:
+                return ("edge", name)
         return None
 
+    def _edge_drag_rect(self, name, x, y, iw, ih):
+        """The rectangle a mid-edge drag produces: the stored crop with just
+        that edge moved to the cursor, clamped to the frame and so it cannot
+        cross its opposite edge.  The other three edges are untouched."""
+        x0, y0, x1, y1 = self.session.crop_rect or (0.0, 0.0, 1.0, 1.0)
+        rx0, ry0, rx1, ry1 = x0 * iw, y0 * ih, x1 * iw, y1 * ih
+        if name == "top":
+            ry0 = max(0.0, min(y, ry1))
+        elif name == "bottom":
+            ry1 = min(ih, max(y, ry0))
+        elif name == "left":
+            rx0 = max(0.0, min(x, rx1))
+        else:
+            rx1 = min(iw, max(x, rx0))
+        return rx0, ry0, rx1, ry1
+
+    def _move_drag_rect(self, offx, offy, x, y, iw, ih):
+        """The rectangle a drag-inside produces: the stored crop translated so the
+        grabbed point tracks the cursor, then clipped to the frame.  Push it past
+        an edge and that border becomes the new crop border -- what went outside
+        is cut away rather than dragging along for the ride."""
+        x0, y0, x1, y1 = self.session.crop_rect or (0.0, 0.0, 1.0, 1.0)
+        w = (x1 - x0) * iw
+        h = (y1 - y0) * ih
+        mx0, my0 = x - offx, y - offy
+        rx0 = max(0.0, min(iw, mx0))
+        ry0 = max(0.0, min(ih, my0))
+        rx1 = max(rx0, min(iw, mx0 + w))
+        ry1 = max(ry0, min(ih, my0 + h))
+        return rx0, ry0, rx1, ry1
+
+    def _on_crop_motion(self, event):
+        """Show the move cursor over the kept region so a pan is discoverable;
+        the default pointer everywhere else.  A handle keeps its own grab -- the
+        interior is where the whole rectangle moves."""
+        if getattr(self, "_ph_a", None) is None:
+            return
+        x = event.x - self._after_off[0]
+        y = event.y - self._after_off[1]
+        iw, ih = self._ph_a.width(), self._ph_a.height()
+        move = False
+        if 0 <= x <= iw and 0 <= y <= ih:
+            rect = self.session.crop_rect or (0.0, 0.0, 1.0, 1.0)
+            cx0, cy0, cx1, cy1 = (rect[i] * (iw if i % 2 == 0 else ih) for i in range(4))
+            not_full = (cx0 > 0 or cy0 > 0 or cx1 < iw or cy1 < ih)
+            if (cx0 <= x <= cx1 and cy0 <= y <= cy1 and not_full
+                    and self._grab_handle(x, y, iw, ih) is None):
+                move = True
+        cur = "fleur" if move else ""
+        if self.c_after.cget("cursor") != cur:
+            self.c_after.config(cursor=cur)
+
     def _on_crop_drag(self, event):
+        if self._guide_drag is not None:
+            self._on_guide_drag(event)
+            return
         if self._crop_drag_start is None or getattr(self, "_ph_a", None) is None:
             return
         self.c_after.delete("crop_overlay")
-        x0 = self._crop_drag_start[0]
-        y0 = self._crop_drag_start[1]
         x1 = event.x - self._after_off[0]
         y1 = event.y - self._after_off[1]
         iw, ih = self._ph_a.width(), self._ph_a.height()
         x1 = max(0, min(iw, x1))
         y1 = max(0, min(ih, y1))
-        ox, oy = self._after_off
-        self._draw_crop_overlay(ox + x0, oy + y0, ox + x1, oy + y1,
-                                ox, oy, iw, ih)
+        if self._crop_drag_start[0] == "edge":
+            rx0, ry0, rx1, ry1 = self._edge_drag_rect(self._crop_drag_start[1],
+                                                      x1, y1, iw, ih)
+        elif self._crop_drag_start[0] == "move":
+            rx0, ry0, rx1, ry1 = self._move_drag_rect(self._crop_drag_start[1],
+                                                      self._crop_drag_start[2],
+                                                      x1, y1, iw, ih)
+        else:
+            rx0, ry0, rx1, ry1 = (self._crop_drag_start[1], self._crop_drag_start[2],
+                                  x1, y1)
+        # Re-bake the veil with the in-progress rectangle; session.crop_rect is still
+        # the last settled one, so the live rect has to be passed as fractions.
+        self._show_after((rx0 / iw, ry0 / ih, rx1 / iw, ry1 / ih))
 
     def _on_crop_release(self, event):
+        if self._guide_drag is not None:
+            self._on_guide_release(event)
+            return
         if self._crop_drag_start is None or getattr(self, "_ph_a", None) is None:
             return
-        x0 = self._crop_drag_start[0]
-        y0 = self._crop_drag_start[1]
         x1 = event.x - self._after_off[0]
         y1 = event.y - self._after_off[1]
         iw, ih = self._ph_a.width(), self._ph_a.height()
         x1 = max(0, min(iw, x1))
         y1 = max(0, min(ih, y1))
+        kind = self._crop_drag_start[0]
+        start = self._crop_drag_start
         self._crop_drag_start = None
-        # A click that never moved is a click, not a failed crop.  Now that the
-        # rectangle is always live, saying "too small" on every stray press in
-        # the after pane would be noise, and noise is how a real warning gets
-        # ignored.
-        if abs(x1 - x0) < 3 and abs(y1 - y0) < 3:
-            self._refresh_crop()
-            return
-        ok = self.session.set_crop_rect(x0, y0, x1, y1, iw, ih)
+        cur = self.session.crop_rect or (0.0, 0.0, 1.0, 1.0)
+        if kind == "edge":
+            rx0, ry0, rx1, ry1 = self._edge_drag_rect(start[1], x1, y1, iw, ih)
+        elif kind == "move":
+            rx0, ry0, rx1, ry1 = self._move_drag_rect(start[1], start[2], x1, y1, iw, ih)
+        else:
+            rx0, ry0, rx1, ry1 = (start[1], start[2], x1, y1)
+        if kind == "corner":
+            # A click that never moved is a click, not a failed crop.  Now that
+            # the rectangle is always live, saying "too small" on every stray
+            # press in the after pane would be noise, and noise is how a real
+            # warning gets ignored.
+            if abs(x1 - start[1]) < 3 and abs(y1 - start[2]) < 3:
+                self._refresh_crop()
+                return
+        else:
+            # Edge or move: no edge translated means nothing happened, and "crop
+            # set" for a click would be noise in the same way a stray press used
+            # to read as "too small".
+            if max(abs(a - b) * (iw if i % 2 == 0 else ih)
+                   for i, (a, b) in enumerate(zip((rx0, ry0, rx1, ry1), cur))) < 3.0:
+                self._refresh_crop()
+                return
+        ok = self.session.set_crop_rect(rx0, ry0, rx1, ry1, iw, ih)
         self._refresh_crop()
         self._set_status_extra("crop set" if ok else "crop too small, ignored")
 
-    def _draw_crop_overlay(self, rx0, ry0, rx1, ry1, ox, oy, iw, ih):
-        """Shade everything outside the crop rectangle on the after canvas.
+    def _show_after(self, frac_rect, planar_on=False):
+        """Draw the whole after pane: the corrected frame with the outside-crop veil
+        baked in (``darken_outside_crop``), its grid and rulers, and the kept
+        rectangle's outline.
 
-        Stippled rather than alpha-blended: a Tk canvas item has no alpha
-        channel, and an eight-digit colour is not a colour spec but a TclError.
-        ``gray50`` is the dither that reads as a dimmed area at any zoom.
+        ``frac_rect`` is the crop as fractions of the frame, or ``None`` for the whole
+        frame.  Re-baking from the cached un-veiled array (``_after_base``) is cheap --
+        no re-warp, no re-inpaint -- so it can run on every drag tick and still feel
+        live, which a stipple overlay could not because Tk has no per-item alpha.
+        """
+        base = getattr(self, "_after_base", None)
+        if base is None:
+            return
+        box = self._after_box
+        arr = (darken_outside_crop(base, frac_rect)
+               if (frac_rect is not None and not planar_on) else base)
+        ph, _ = _to_photo(arr, box)
+        aox = (box[0] - ph.width()) // 2
+        aoy = (box[1] - ph.height()) // 2
+        self._after_off = (aox, aoy)
+        self.c_after.delete("all")
+        self.c_after.create_image(aox, aoy, anchor="nw", image=ph)
+        self._ph_a = ph
+        self._draw_grid(self.c_after, *self._after_off, ph.width(), ph.height())
+        self._draw_rulers(self.c_after, *self._after_off, ph.width(), ph.height())
+        self._draw_after_guides()
+        self._draw_after_lines(arr, ph.width(), ph.height())
+        if not planar_on:
+            iw, ih = ph.width(), ph.height()
+            x0, y0, x1, y1 = (frac_rect or (0.0, 0.0, 1.0, 1.0))
+            self._draw_crop_outline(aox + x0 * iw, aoy + y0 * ih,
+                                    aox + x1 * iw, aoy + y1 * ih)
+
+    def _draw_crop_outline(self, rx0, ry0, rx1, ry1):
+        """The kept rectangle's border and handles on the after canvas.
+
+        The shade that used to go here is now baked into the picture itself
+        (``darken_outside_crop``), so only the outline is drawn -- a Tk item has no
+        alpha for a flat veil, which is why the dimming lives in the array.
         """
         tag = "crop_overlay"
         x0, x1 = sorted((rx0, rx1))
         y0, y1 = sorted((ry0, ry1))
-        shade = dict(fill="#000000", stipple="gray50", outline="", tags=tag)
-        for sx0, sy0, sx1, sy1 in ((ox, oy, ox + iw, y0),
-                                   (ox, y1, ox + iw, oy + ih),
-                                   (ox, y0, x0, y1),
-                                   (x1, y0, ox + iw, y1)):
-            if sx1 > sx0 and sy1 > sy0:      # nothing outside an uncropped frame
-                self.c_after.create_rectangle(sx0, sy0, sx1, sy1, **shade)
+        self.c_after.delete(tag)
         self.c_after.create_rectangle(x0, y0, x1, y1, outline="#4da3ff",
                                       width=2, tags=tag)
-        # Corner handles.  Drawn because a grab region nobody can see is a
-        # feature nobody finds; sized to the radius `_grab_corner` accepts.
-        for hx, hy in ((x0, y0), (x1, y0), (x0, y1), (x1, y1)):
+        # Handles: the four corners and the midpoints of the four edges.
+        # Drawn because a grab region nobody can see is a feature nobody finds;
+        # sized to the radius `_grab_handle` accepts.  The midpoints are how an
+        # edge moves on its own -- top/bottom vertically, left/right
+        # horizontally -- instead of re-placing the whole rectangle.
+        for hx, hy in ((x0, y0), (x1, y0), (x0, y1), (x1, y1),
+                       (0.5 * (x0 + x1), y0), (0.5 * (x0 + x1), y1),
+                       (x0, 0.5 * (y0 + y1)), (x1, 0.5 * (y0 + y1))):
             self.c_after.create_rectangle(hx - 5, hy - 5, hx + 5, hy + 5,
                                           fill="#4da3ff", outline="#0b1017",
                                           width=1, tags=tag)
+
+    # -- After-pane reference guides -----------------------------------------
+    # Pure measurement aids: they show where true verticals/horizontals land
+    # after correction.  They never feed back into the warp or crop.
+
+    def _after_guide_at(self, x, y, iw, ih):
+        """Return (kind, index) of a guide within grab distance, else None."""
+        for i, (kind, pos) in enumerate(self._after_guides):
+            if kind == "v":
+                if abs(x - pos) <= 15 and 0 <= y <= ih:
+                    return ("v", i)
+            else:
+                if abs(y - pos) <= 15 and 0 <= x <= iw:
+                    return ("h", i)
+        return None
+
+    def _draw_after_guides(self):
+        """Redraw all reference guides in the ROI-ruler visual style.
+
+        Vertical guides: bold line (3 px), ticks every 20 px with major ticks
+        (longer, thicker) every 100 px; label at top.
+        Horizontal guides: slightly lighter weight (2 px), ticks every 20 px
+        with majors every 100 px; label at left.
+        """
+        self.c_after.delete("after_guide")
+        if not getattr(self, "_ph_a", None):
+            return
+        aox, aoy = self._after_off
+        iw, ih = self._ph_a.width(), self._ph_a.height()
+        C = "#9fd8ff"
+        for kind, pos in self._after_guides:
+            if kind == "v":
+                x = aox + pos
+                self.c_after.create_line(x, aoy, x, aoy + ih,
+                                         fill=C, width=3, tags="after_guide")
+                for ty in range(0, ih, 20):
+                    major = (ty % 100 == 0)
+                    half = 8 if major else 4
+                    wdt = 2 if major else 1
+                    self.c_after.create_line(x - half, aoy + ty, x + half, aoy + ty,
+                                             fill=C, width=wdt, tags="after_guide")
+                self.c_after.create_text(x, aoy - 8, text=str(int(pos)),
+                                         fill=C, font=("Courier", 9, "bold"),
+                                         anchor="s", tags="after_guide")
+            else:
+                y = aoy + pos
+                self.c_after.create_line(aox, y, aox + iw, y,
+                                         fill=C, width=2, tags="after_guide")
+                for tx in range(0, iw, 20):
+                    major = (tx % 100 == 0)
+                    half = 8 if major else 4
+                    wdt = 2 if major else 1
+                    self.c_after.create_line(aox + tx, y - half, aox + tx, y + half,
+                                             fill=C, width=wdt, tags="after_guide")
+                self.c_after.create_text(aox - 8, y, text=str(int(pos)),
+                                         fill=C, font=("Courier", 9, "bold"),
+                                         anchor="e", tags="after_guide")
+
+    def _on_guide_drag(self, event):
+        """Move the grabbed guide to follow the cursor (allow overshoot)."""
+        if self._guide_drag is None or getattr(self, "_ph_a", None) is None:
+            return
+        kind, idx = self._guide_drag
+        aox, aoy = self._after_off
+        iw, ih = self._ph_a.width(), self._ph_a.height()
+        if kind == "v":
+            pos = event.x - aox  # no clamp: overshoot enables delete-off-bounds
+        else:
+            pos = event.y - aoy
+        self._after_guides[idx] = (kind, pos)
+        self._draw_after_guides()
+
+    def _on_guide_release(self, event):
+        """Finalise or delete the guide based on whether it left the bounds."""
+        if self._guide_drag is None:
+            return
+        kind, idx = self._guide_drag
+        aox, aoy = self._after_off
+        iw, ih = self._ph_a.width(), self._ph_a.height()
+        pos = self._after_guides[idx][1]
+        margin = 20
+        if kind == "v":
+            if pos < -margin or pos > iw + margin:
+                del self._after_guides[idx]
+            else:
+                self._after_guides[idx] = ("v", max(0.0, min(iw, pos)))
+        else:
+            if pos < -margin or pos > ih + margin:
+                del self._after_guides[idx]
+            else:
+                self._after_guides[idx] = ("h", max(0.0, min(ih, pos)))
+        self._guide_drag = None
+        try:
+            self.c_after.grab_release()
+        except tk.TclError:
+            pass
+        self._draw_after_guides()
 
     def _on_click_before(self, event):
         # Empty cross: the before slot doubles as the pick target.  Returning
@@ -1258,6 +2084,18 @@ class ReviewPanel(tk.Frame):
             return "break"
         x = event.x - self._before_off[0]
         y = event.y - self._before_off[1]
+        # A press right on a visible ROI ruler grabs it for dragging rather than
+        # falling through to line-picking: the strip is set by hand, so its edges
+        # must be reachable wherever they land.  Checked first -- it is the most
+        # specific gesture (a click on a drawn line).
+        if getattr(self, "v_roi", None) is not None and self.v_roi.get():
+            hit = self._roi_ruler_at(event.x)
+            if hit is not None:
+                self._on_roi_drag_start(hit)
+                return
+        if getattr(self, "v_stroke", None) is not None and self.v_stroke.get():
+            self._stroke_start(x, y)
+            return
         if getattr(self, "v_planar", None) is not None and self.v_planar.get():
             self._on_planar_click(x, y)
             return
@@ -1274,34 +2112,484 @@ class ReviewPanel(tk.Frame):
             self._redraw()
 
     def _click_mark(self, x, y):
-        """Two clicks make one vertical control line; a click on an existing one
-        removes it.
+        """Two clicks make one control line; a click on an existing one removes
+        it.
 
         Removal shares the same gesture on purpose: the alternative is a
         modifier key nobody discovers, and a mark placed by mistake has to be as
-        easy to take back as it was to make.
+        easy to take back as it was to make.  The orientation (vertical or
+        horizontal) comes from the selector beside the Mark toggle, so pick/add/
+        remove all stay inside one array.
         """
-        hit = self.session.pick_control_line(x, y, display_scale=self._before_scale)
+        kind = self._mark_kind()
+        ep = self.session.pick_control_line_endpoint(x, y,
+                                                     display_scale=self._before_scale,
+                                                     radius=10.0, kind=kind)
+        if ep is not None:
+            self._pending_mark = None
+            self._mark_drag = (ep, kind)
+            return
+        hit = self.session.pick_control_line(x, y, display_scale=self._before_scale,
+                                             kind=kind)
         if hit is not None and self._pending_mark is None:
-            self.session.remove_control_line(hit)
+            self.session.remove_control_line(hit, kind=kind)
             self._sync_from_session()
             return
         if self._pending_mark is None:
             self._pending_mark = (x, y)
-            self._set_status("marking a vertical: click the other end\n"
+            what = "horizontal" if kind == "h" else "vertical"
+            self._set_status(f"marking a {what}: click the other end\n"
                              "(as far from the first point as the structure allows)")
             self._redraw()
             return
         x0, y0 = self._pending_mark
         self._pending_mark = None
         added = self.session.add_control_line(x0, y0, x, y,
-                                              display_scale=self._before_scale)
+                                              display_scale=self._before_scale,
+                                              kind=kind)
         if added is None:
-            self._set_status("too short to be trusted -- mark the full height of "
+            self._set_status("too short to be trusted -- mark the full length of "
                              "the structure, not a few pixels of it")
             self._redraw()
             return
         self._sync_from_session()
+
+    def _on_mark_drag(self, event):
+        """Drag an endpoint of a placed control line to refine its position."""
+        (line_idx, ep_idx), kind = self._mark_drag
+        x = event.x - self._before_off[0]
+        y = event.y - self._before_off[1]
+        self.session.move_control_line_endpoint(line_idx, ep_idx, x, y,
+                                                display_scale=self._before_scale,
+                                                kind=kind)
+        self._schedule_redraw()
+
+    # -- line brush ------------------------------------------------------
+    def _build_tools(self, parent):
+        """The lower-left tools field: line editing and masking. Built once by App
+        into a persistent frame (App._build runs a single time; `_add` only
+        refreshes the file list), so it survives every load.
+
+        Line brush -- drag a broad stroke over the before pane; every candidate
+        line the stroke crosses is erased (deactivated) at once, like a pencil.
+        The width doubles as the hit radius, so what you paint is what erases.
+        Masking -- moved here from the lower-right cell: source + BiRefNet model
+        picker.  The line detector and ROI x also live here now, moved out of the
+        lower-right adjustments panel: what-the-estimator-sees belongs beside the
+        input image, not with the angles that edit the result."""
+        # FIND controls, beside the input image: which detector feeds the
+        # estimator, and the ROI x strip that restricts its horizontal evidence.
+        det = ttk.Frame(parent)
+        det.pack(fill="x", pady=(0, 4))
+        self.v_detector = tk.StringVar(value=self.settings.detector)
+        ttk.Label(det, text="line detector", width=18).grid(row=0, column=0, sticky="w")
+        dbox = ttk.Combobox(det, textvariable=self.v_detector, width=11,
+                            state="readonly", values=list(DETECTORS))
+        dbox.grid(row=0, column=1, sticky="w", padx=(6, 6))
+        dbox.bind("<<ComboboxSelected>>", lambda e: self._apply_detector())
+        app = self._app()
+        if app is not None:
+            app.btn_weights = ttk.Button(det, text="weights...",
+                                         command=app._download_models)
+            app.btn_weights.grid(row=0, column=2, sticky="w", padx=(6, 0))
+            _attach_tooltip(app.btn_weights, "Download or check detector model weights")
+        det.columnconfigure(3, weight=1)
+
+        # ROI x: restrict horizontal evidence to a vertical strip of the frame,
+        # for corner views where one facade's horizontals would otherwise vote
+        # against the other.  Off by default (roi_x stays None = no change);
+        # the two spinboxes are fractions of the width in percent.
+        self.v_roi = tk.BooleanVar(value=False)
+        self._roi_chk = ttk.Checkbutton(det, text="ROI x", variable=self.v_roi,
+                                        command=self._apply_roi)
+        self._roi_chk.grid(row=1, column=0, sticky="w", pady=(6, 0))
+        _attach_tooltip(
+            self._roi_chk,
+            "Restrict which horizontal lines count, for corner views: pick the "
+            "strip covering one facade so its horizontals don't fight the other's. "
+            "Tick it on to draw two draggable rulers on the left image; drag them "
+            "to set the strip -- the greyed-out sides are ignored.")
+        # Default to a 20-80 % strip, not 0-100: the full frame restricts nothing,
+        # so the useless default is also the unhelpful one.  The two draggable
+        # rulers on the before pane (see `_draw_roi_rulers`) are the primary way to
+        # set this; these spinboxes stay as a numeric fine-tune beside them.
+        self.v_roi_x0 = tk.DoubleVar(value=20.0)
+        self.v_roi_x1 = tk.DoubleVar(value=80.0)
+        _s0 = ttk.Spinbox(det, from_=0, to=100, increment=5, width=4,
+                          textvariable=self.v_roi_x0, command=self._apply_roi)
+        _s0.grid(row=1, column=1, sticky="w", pady=(6, 0))
+        _s0.bind("<KeyRelease>", self._apply_roi)
+        _s1 = ttk.Spinbox(det, from_=0, to=100, increment=5, width=4,
+                          textvariable=self.v_roi_x1, command=self._apply_roi)
+        _s1.grid(row=1, column=2, sticky="w", pady=(6, 0))
+        _s1.bind("<KeyRelease>", self._apply_roi)
+
+        row = ttk.Frame(parent)
+        row.pack(fill="x", pady=(0, 4))
+        # Kept as an attribute so a test can press the real widget: the brush
+        # broke once because the checkbutton and the click handler were reading
+        # two different variables, and only pressing the box itself catches that.
+        self._brush_chk = ttk.Checkbutton(row, text="Mask brush",
+                                          variable=self.v_stroke,
+                                          command=self._on_stroke_toggle)
+        self._brush_chk.pack(side="left")
+        _attach_tooltip(self._brush_chk, "Paint a mask over regions to exclude from line detection. Right-click or Alt+click to erase.")
+        ttk.Spinbox(row, from_=8, to=160, increment=4, width=3,
+                    textvariable=self.v_stroke_w).pack(side="left", padx=(4, 0))
+
+        # Mark-vertical gesture and strike-slanted: moved from the lower-right
+        # control strip (2026-09-13) because they operate on the before image's
+        # line evidence, same as the detector/ROI above.
+        mrow = ttk.Frame(parent)
+        mrow.pack(fill="x", pady=(0, 4))
+        if getattr(self, "v_mark", None) is None:
+            self.v_mark = tk.BooleanVar(value=False)
+            self.v_mark_kind = tk.StringVar(value="vertical")
+        _cb = ttk.Checkbutton(mrow, text="Mark vertical",
+                              variable=self.v_mark, command=self._on_mark_toggle)
+        _cb.pack(side="left")
+        _attach_tooltip(_cb, "Click on the image to place a control line that anchors a known-vertical or horizontal edge. Drag endpoints to refine.")
+        self._mark_kind_cb = ttk.Combobox(mrow, textvariable=self.v_mark_kind,
+                                          state="readonly",
+                                          values=["vertical", "horizontal"], width=9)
+        self._mark_kind_cb.pack(side="left", padx=(4, 0))
+        self._mark_kind_cb.bind("<<ComboboxSelected>>", self._on_mark_kind)
+        _b = ttk.Button(mrow, text="Strike slanted",
+                        command=self._strike_slanted)
+        _b.pack(side="left", padx=(6, 0))
+        _attach_tooltip(_b, "Remove all lines that are neither vertical nor horizontal")
+
+        msk = ttk.Frame(parent)
+        msk.pack(fill="x")
+        self.v_maskmode = tk.StringVar(value=self.settings.mask_mode)
+        ttk.Label(msk, text="mask", width=18).grid(row=0, column=0, sticky="w")
+        self.cb_maskmode = ttk.Combobox(msk, textvariable=self.v_maskmode, width=8,
+                                        state="readonly",
+                                        values=["off", "file", "birefnet", "gdino"])
+        self.cb_maskmode.grid(row=0, column=1, sticky="w", padx=(6, 6))
+        self.cb_maskmode.bind("<<ComboboxSelected>>", lambda e: self._apply_mask())
+        _b = ttk.Button(msk, text="mask folder...", command=self._pick_mask_folder)
+        _b.grid(row=0, column=2, sticky="w")
+        _attach_tooltip(_b, "Choose the folder containing mask PNG files (one per image)")
+        _b = ttk.Button(msk, text="BiRefNet model...", command=self._pick_birefnet_model)
+        _b.grid(row=0, column=4, sticky="w", padx=(10, 0))
+        _attach_tooltip(_b, "Select the BiRefNet segmentation model to use")
+        _b = ttk.Button(msk, text="Mask Apply", command=self._apply_mask)
+        _b.grid(row=0, column=5, sticky="w", padx=(10, 0))
+        _attach_tooltip(_b, "Re-apply the current mask to filter detected lines")
+        self.v_maskinv = tk.BooleanVar(value=self.settings.mask_invert)
+        ttk.Checkbutton(msk, text="mask marks what to KEEP",
+                        variable=self.v_maskinv, command=self._apply_mask
+                        ).grid(row=0, column=3, sticky="w", padx=10)
+        self.lbl_mask = ttk.Label(msk, text="", wraplength=760, justify="left")
+        self.lbl_mask.grid(row=1, column=0, columnspan=4, sticky="w", pady=(4, 0))
+        self.v_alpha = tk.DoubleVar(value=0.28)
+        ttk.Label(msk, text="mask opacity", width=18).grid(row=2, column=0, sticky="w")
+        ttk.Scale(msk, from_=0.0, to=1.0, variable=self.v_alpha, orient="horizontal",
+                  command=lambda _v: self._on_alpha()
+                  ).grid(row=2, column=1, columnspan=3, sticky="ew", padx=6)
+        # The gdino prompt is the interactive half of that mask mode: type a word,
+        # press Enter, and the box (and the matte inside it) is re-found.  It is
+        # only read when the source combobox says gdino, so it stays inert in the
+        # other three modes rather than needing to be hidden.
+        self.v_gdino_prompt = tk.StringVar(value=self.settings.gdino_prompt or "building")
+        ttk.Label(msk, text="gdino prompt", width=18).grid(row=3, column=0, sticky="w", pady=(4, 0))
+        gentry = ttk.Entry(msk, textvariable=self.v_gdino_prompt, width=24)
+        gentry.grid(row=3, column=1, columnspan=3, sticky="ew", padx=6, pady=(4, 0))
+        gentry.bind("<Return>", lambda e: self._apply_mask())
+        msk.columnconfigure(3, weight=1)
+
+        # The Lines/Mask/Grid overlay switches used to live here.  They now sit on
+        # the image each one draws on -- Lines and Mask in the before pane's
+        # top-right, Grid in the after pane's -- built in `_build` beside those
+        # canvases (2026-09-13, user-directed).  A switch for an overlay belongs
+        # on the picture it changes, not in a box on the far side of the window.
+
+    def _on_before_b1motion(self, event):
+        if getattr(self, "_loupe", None) is not None:
+            self._loupe_move(event)
+        if getattr(self, "_roi_drag", None) is not None:
+            self._on_roi_drag_move(event)
+            return
+        if getattr(self, "_mark_drag", None) is not None:
+            self._on_mark_drag(event)
+            return
+        if getattr(self, "v_stroke", None) is not None and self.v_stroke.get():
+            self._on_stroke_drag(event)
+        else:
+            self._on_planar_drag(event)
+
+    def _on_before_b1release(self, event):
+        if getattr(self, "_roi_drag", None) is not None:
+            self._on_roi_drag_release()
+            return
+        if getattr(self, "_mark_drag", None) is not None:
+            self._mark_drag = None
+            self._sync_from_session()
+            return
+        if getattr(self, "v_stroke", None) is not None and self.v_stroke.get():
+            self._on_stroke_release(event)
+        else:
+            self._on_planar_release(event)
+
+    # -- roi x rulers ----------------------------------------------------
+    def _roi_strip(self):
+        """The ROI strip as fractions of frame width, or None when off/invalid.
+
+        Mirrors `_apply_roi`'s validity test so the rulers and the estimator
+        never disagree about whether a strip is in force."""
+        if not self.v_roi.get():
+            return None
+        try:
+            x0 = float(self.v_roi_x0.get()) / 100.0
+            x1 = float(self.v_roi_x1.get()) / 100.0
+        except ValueError:
+            return None
+        if not (0.0 <= x0 < x1 <= 1.0 and (x1 - x0) >= 0.02):
+            return None
+        return x0, x1
+
+    def _draw_roi_rulers(self):
+        """Two draggable vertical rulers on the before pane marking the ROI strip.
+
+        The spinboxes are a numeric fine-tune; these are the visual way to see
+        where the strip falls and drag it.  Only the sides *outside* the strip get
+        ignored, so they carry the wash -- the strip itself stays clean.  Ruler
+        look (stipple, #9fd8ff, tick + label) is shared with `_draw_rulers` on the
+        after pane; these are handles, so the lines are solid and a touch heavier
+        than a grid line."""
+        self.c_before.delete("roi_ruler")
+        strip = self._roi_strip()
+        if strip is None:
+            return
+        x0f, x1f = strip
+        ox, oy = self._before_off
+        iw, ih = self._ph_b.width(), self._ph_b.height()
+        px0 = ox + x0f * iw
+        px1 = ox + x1f * iw
+        wash = dict(fill=INK["field"], stipple="gray50")
+        self.c_before.create_rectangle(ox, oy, px0, oy + ih, **wash, tags="roi_ruler")
+        self.c_before.create_rectangle(px1, oy, ox + iw, oy + ih, **wash, tags="roi_ruler")
+        for pxf, pct in ((px0, x0f * 100.0), (px1, x1f * 100.0)):
+            self.c_before.create_line(pxf, oy, pxf, oy + ih, fill="#9fd8ff",
+                                      width=2, tags="roi_ruler")
+            self.c_before.create_line(pxf - 5, oy, pxf + 5, oy, fill="#9fd8ff",
+                                      width=2, tags="roi_ruler")
+            self.c_before.create_text(pxf, oy + 10, text=f"{pct:.0f}%",
+                                       anchor="s", fill="#9fd8ff",
+                                       font=("TkDefaultFont", 7), tags="roi_ruler")
+
+    def _roi_ruler_at(self, x):
+        """Which ROI ruler (0=left, 1=right) sits near canvas-x, or None.
+
+        An 8 px grab band either side of a line: wide enough to find by eye, narrow
+        enough that a click meant for the picture does not accidentally drag it."""
+        strip = self._roi_strip()
+        if strip is None or getattr(self, "_ph_b", None) is None:
+            return None
+        ox = self._before_off[0]
+        iw = self._ph_b.width()
+        for i, f in enumerate(strip):
+            if abs(x - (ox + f * iw)) <= 8:
+                return i
+        return None
+
+    def _on_roi_drag_start(self, idx):
+        self._roi_drag = idx
+        try:
+            self.c_before.grab_set()
+        except tk.TclError:
+            pass
+
+    def _on_roi_drag_move(self, event):
+        """Move the grabbed ruler, clamped to the frame and to the other edge.
+
+        The strip must stay >= 2 % wide (the same floor `_apply_roi` enforces) so a
+        drag can never collapse it into an invalid, ignored state.  Updates the
+        spinbox vars live; the refit happens once, on release."""
+        if self._roi_drag is None or self.session is None:
+            return
+        ox = self._before_off[0]
+        iw = self._ph_b.width()
+        if iw <= 0:
+            return
+        f = (event.x - ox) / iw
+        gap = 0.02
+        if self._roi_drag == 0:
+            f = min(max(f, 0.0), float(self.v_roi_x1.get()) / 100.0 - gap)
+            self.v_roi_x0.set(round(f * 100.0, 1))
+        else:
+            f = max(min(f, 1.0), float(self.v_roi_x0.get()) / 100.0 + gap)
+            self.v_roi_x1.set(round(f * 100.0, 1))
+        self._draw_roi_rulers()
+
+    def _on_roi_drag_release(self):
+        if self._roi_drag is None:
+            return
+        self._roi_drag = None
+        try:
+            self.c_before.grab_release()
+        except tk.TclError:
+            pass
+        self._apply_roi()
+
+    def _on_stroke_toggle(self):
+        # Leaving the mode clears any half-painted stroke so it never lingers.
+        if getattr(self, "v_stroke", None) is not None and not self.v_stroke.get():
+            self._stroke_release_grab()
+            self.c_before.delete("stroke_preview")
+            self.c_before.delete("brush_cursor")
+            self._stroke_pts = []
+        else:
+            if getattr(self, "v_mark", None) is not None and self.v_mark.get():
+                self.v_mark.set(False)
+                self._on_mark_toggle()
+            self._set_status("mask brush: drag to paint the ignored region, "
+                             "right-drag to erase it, Alt+right-drag sizes the pen")
+
+    def _stroke_release_grab(self):
+        # A stroke grabs the pointer so a release *outside* the pane still lands
+        # here and clears the preview -- without it, letting go off-canvas leaves
+        # the dashed line painted with no button held down.
+        if getattr(self, "_stroke_grabbed", False):
+            try:
+                self.c_before.grab_release()
+            except tk.TclError:
+                pass
+            self._stroke_grabbed = False
+
+    # -- brush: right erases, Alt+right sizes the pen ----------------------
+    def _brush_live(self):
+        return self.session is not None and bool(self.v_stroke.get())
+
+    def _on_pen_size_start(self, event):
+        """Remember where the sizing drag began, and how wide the pen was then.
+
+        Anchored rather than incremental so the width tracks the pointer: drag
+        back to where you started and you get the width you started with, which
+        an accumulating step does not give you.
+        """
+        if not self._brush_live():
+            return
+        self._pen_anchor = (event.x, int(self.v_stroke_w.get()))
+        return "break"
+
+    def _on_pen_size_drag(self, event):
+        anchor = getattr(self, "_pen_anchor", None)
+        if anchor is None or not self._brush_live():
+            return
+        x0, w0 = anchor
+        # Half a pixel of width per pixel of travel: the full 8..160 range then
+        # fits a comfortable drag rather than needing the whole screen.
+        self.v_stroke_w.set(max(8, min(160, w0 + (event.x - x0) // 2)))
+        self._set_status_extra(f"pen width {int(self.v_stroke_w.get())} px")
+        return "break"
+
+    def _on_alt_erase_press(self, event):
+        """Alt+Left-click erases mask paint (same as right-click)."""
+        if not self._brush_live():
+            return
+        self._stroke_erasing = True
+        self._stroke_start(event.x - self._before_off[0],
+                           event.y - self._before_off[1])
+        return "break"
+
+    def _on_erase_press(self, event):
+        if not self._brush_live():
+            return
+        self._stroke_erasing = True
+        self._stroke_start(event.x - self._before_off[0],
+                           event.y - self._before_off[1])
+        return "break"
+
+    def _on_erase_motion(self, event):
+        if getattr(self, "_pen_anchor", None) is not None:
+            return "break"                    # an Alt-drag that lost its modifier
+        if not self._brush_live():
+            return
+        self._on_stroke_drag(event)
+        return "break"
+
+    def _on_erase_release(self, event):
+        self._pen_anchor = None
+        if not self._brush_live():
+            return
+        self._on_stroke_release(event)
+        return "break"
+
+    def _stroke_start(self, x, y):
+        self._stroke_pts = [(x, y)]
+        try:
+            self.c_before.grab_set()
+            self._stroke_grabbed = True
+        except tk.TclError:
+            self._stroke_grabbed = False
+        self._draw_stroke_preview()
+
+    def _on_stroke_drag(self, event):
+        if self.session is None or not getattr(self, "_stroke_pts", None):
+            return
+        x = event.x - self._before_off[0]
+        y = event.y - self._before_off[1]
+        pts = self._stroke_pts
+        lx, ly = pts[-1]
+        if (x - lx) ** 2 + (y - ly) ** 2 < 4.0:      # sub-pixel jitter: skip
+            return
+        pts.append((x, y))
+        self._draw_stroke_preview()
+
+    def _on_stroke_release(self, event):
+        self._stroke_release_grab()
+        if self.session is None or not getattr(self, "_stroke_pts", None):
+            return
+        x = event.x - self._before_off[0]
+        y = event.y - self._before_off[1]
+        self._stroke_pts.append((x, y))
+        w = max(8, int(self.v_stroke_w.get()))
+        # The spinbox has always been the brush *radius*, not its diameter --
+        # "what you paint is what toggles" -- so it is passed through unhalved.
+        share = self.session.paint_ignore(self._stroke_pts,
+                                          display_scale=self._before_scale,
+                                          radius=w,
+                                          erase=bool(getattr(self, "_stroke_erasing", False)))
+        self._stroke_pts = []
+        self._stroke_erasing = False
+        self.c_before.delete("stroke_preview")
+        if self.session.mode == AUTO:
+            self._sync_from_session()
+        else:
+            self._redraw()
+        self._set_status_extra(f"mask brush: {share * 100:.0f}% of the frame ignored")
+
+    def _draw_stroke_preview(self):
+        """Show exactly what the stroke will paint, where it will paint it.
+
+        Three things were wrong and all three mattered.  The points are stored in
+        *image* coordinates (`_on_click_before` subtracts `_before_off`) but were
+        drawn straight onto the *canvas*, so the preview sat a whole offset away
+        from the pointer.  The width used was the radius, so the guide was half
+        the size of the mark it left.  And it was dashed yellow, which reads as a
+        selection marquee rather than as paint.  It is now solid dark red at the
+        true diameter: the same colour family as the wash it adds to, so what you
+        see under the pointer is what you get.
+        """
+        pts = self._stroke_pts
+        if not pts:
+            return
+        ox, oy = self._before_off
+        r = max(8, int(self.v_stroke_w.get()))      # the spinbox is the radius
+        self.c_before.delete("stroke_preview")
+        if len(pts) < 2:                       # a line needs two points; show a dot
+            x, y = pts[0]
+            self.c_before.create_oval(ox + x - r, oy + y - r,
+                                      ox + x + r, oy + y + r,
+                                      outline="", fill="#8b0f14",
+                                      tags="stroke_preview")
+            return
+        flat = [c for p in pts for c in (ox + p[0], oy + p[1])]
+        self.c_before.create_line(flat, width=2 * r, fill="#8b0f14",
+                                  capstyle="round", joinstyle="round",
+                                  tags="stroke_preview")
 
     # -- drawing ---------------------------------------------------------
     def _schedule_redraw(self):
@@ -1357,9 +2645,9 @@ class ReviewPanel(tk.Frame):
                          and self.v_planar.get())
             before = self.session.render_before(max_edge=max(box_b),
                                                 show_lines=self.v_show_lines.get())
-            # Un-cropped on purpose: `_draw_crop_persistent` shades what the
-            # crop discards, so the picture keeps one size and one scale for
-            # the whole session instead of leaping every time a corner moves.
+            # Un-cropped on purpose: `_show_after` bakes a veil over what the crop
+            # discards, so the picture keeps one size and one scale for the whole
+            # session instead of leaping every time a corner moves.
             after = None
             if planar_on and len(self.session.planar_quad) >= 4:
                 try:
@@ -1368,8 +2656,9 @@ class ReviewPanel(tk.Frame):
                     self._set_status(str(exc))
             if after is None:
                 after = self.session.render_after(max_edge=max(box_a), apply_crop=False)
+            self._after_base = after      # un-veiled, preview-sized; _show_after bakes it
+            self._after_box = box_a
             ph_b, s_b = _to_photo(before, box_b)
-            ph_a, _ = _to_photo(after, box_a)
             # scale from the *original* image to what is on screen
             self._before_scale = s_b * (before.shape[1] / self.session.w)
             self._before_off = ((box_b[0] - ph_b.width()) // 2,
@@ -1378,26 +2667,18 @@ class ReviewPanel(tk.Frame):
             self.c_before.create_image(self._before_off[0], self._before_off[1],
                                        anchor="nw", image=ph_b)
             self._ph_b = ph_b
-            self._draw_grid(self.c_before, *self._before_off,
-                            self._ph_b.width(), self._ph_b.height())
+            # No grid on this pane (2026-09-13, user-directed).  The grid is a
+            # ruler for judging the *corrected* frame -- a true vertical should
+            # run along a grid line -- so it belongs on the after pane only.  On
+            # the original it measures nothing and only competes with the lines
+            # the detector drew, which is what this pane is for.
             if planar_on:
                 self._draw_planar_quad()
             else:
                 self._draw_marks()
-            aox = (box_a[0] - ph_a.width()) // 2
-            aoy = (box_a[1] - ph_a.height()) // 2
-            self._after_off = (aox, aoy)
-            self.c_after.delete("all")
-            self.c_after.create_image(aox, aoy, anchor="nw", image=ph_a)
-            self._ph_a = ph_a
-            self._draw_grid(self.c_after, *self._after_off,
-                            self._ph_a.width(), self._ph_a.height())
-            if planar_on:
-                self.c_after.delete("crop_overlay")
-            else:
-                self._draw_crop_persistent()
+            self._draw_roi_rulers()
+            self._show_after(self.session.crop_rect, planar_on)
             self._set_status(self.session.status_text())
-            self._update_slider_labels()
         except Exception:
             tb = traceback.format_exc()
             try:
@@ -1410,12 +2691,98 @@ class ReviewPanel(tk.Frame):
             self._set_status("preview failed (full log: bpc_errors.log):\n" + tb)
 
     def _grid_step(self):
-        """Grid spacing from the dropdown: pixels per cell, or a division count."""
+        """Grid spacing from the field: pixels per cell, or a division count.
+
+        The field is editable so any pixel step works; a value that parses to
+        nothing falls back to quarters rather than crashing the redraw."""
         v = self.v_grid_step.get().strip().lower()
         if v.endswith("px"):
-            return max(10, int(v[:-2])), 0
+            try:
+                return max(10, int(v[:-2].strip())), 0
+            except ValueError:
+                return 50, 0
         n = {"thirds": 3, "quarters": 4, "sixths": 6}.get(v, 4)
         return 0, n
+
+    def _build_tool_palette(self):
+        """Fill the picture-corner palette with the drawing tools.
+
+        Toggle *buttons*, not checkboxes (`indicatoron=False`): a tool is either
+        the one in your hand or it is not, and a pressed-in button says that at a
+        glance where a tick box does not.  Stacked under the load icons in the
+        same column, so everything you can do to the original is in one place on
+        the original, rather than in a row across the far side of the window.
+        """
+        bar = getattr(self, "_addbar", None)
+        if bar is None or not bar.winfo_exists():
+            return
+        for w in getattr(self, "_palette_btns", []):
+            try:
+                w.destroy()
+            except tk.TclError:
+                pass
+        self._palette_btns = []
+
+        def tool(glyph, var, command, tip):
+            b = tk.Checkbutton(bar, text=glyph, variable=var, command=command,
+                               indicatoron=False, width=3, bd=0, relief="flat",
+                               font=("Segoe UI", 14), cursor="hand2",
+                               background=INK["field"], foreground=INK["dim"],
+                               activebackground=INK["line"],
+                               activeforeground=INK["text"],
+                               selectcolor=INK["line"])
+            b.pack(side="top", pady=(4, 0))
+            _attach_tooltip(b, tip)
+            self._palette_btns.append(b)
+            return b
+
+        tool("●", self.v_stroke, self._on_stroke_toggle,
+             "Mask brush - drag to paint the ignored region, right-drag to erase, "
+             "Alt+right-drag sizes the pen")
+        tool("│", self.v_mark, self._on_mark_toggle,
+             "Mark a line that is truly vertical (or horizontal) by hand")
+        tool("◱", self.v_planar, self._on_planar_toggle,
+             "Planar: place four corners of a flat face to rectify it")
+
+    def _draw_after_lines(self, arr, iw, ih):
+        """Re-detect lines on the *corrected* frame, as a check on the correction.
+
+        The grid says where vertical is; this says where the photograph actually
+        ended up.  Run on the result rather than the original, so a residual lean
+        shows as a line that still slopes -- the direct way to see that a
+        horizontal correction came out too weak, instead of inferring it from the
+        before pane.
+
+        Diagnostic, so it is off by default and deliberately cheap-ish: it runs
+        on the preview-sized array already in hand, not the full-resolution
+        frame, and only when the switch is on.
+        """
+        if not getattr(self, "v_after_lines", None) or not self.v_after_lines.get():
+            return
+        if arr is None or self.session is None:
+            return
+        try:
+            import cv2 as _cv2
+            from . import lines as _L
+            small = _cv2.resize(arr, (iw, ih), interpolation=_cv2.INTER_AREA)
+            gray = _cv2.cvtColor(small, _cv2.COLOR_BGR2GRAY)
+            min_len = max(8.0, self.session.settings.min_line_length_frac * min(iw, ih))
+            seg, _name = _L.detect_segments(gray, min_len,
+                                            self.session.settings.detector,
+                                            small, self.session.settings)
+        except Exception:
+            return                     # a diagnostic must never break the pane
+        if seg is None or not len(seg):
+            return
+        ox, oy = self._after_off
+        for x0, y0, x1, y1 in seg:
+            dx, dy = x1 - x0, y1 - y0
+            if abs(dy) >= abs(dx):     # vertical-ish: the ones being straightened
+                colour = "#39ff7a" if abs(dx) <= 1.5 else "#ff5a5a"
+            else:
+                colour = "#39ff7a" if abs(dy) <= 1.5 else "#ffb03a"
+            self.c_after.create_line(ox + x0, oy + y0, ox + x1, oy + y1,
+                                     fill=colour, width=1, tags="after_lines")
 
     def _draw_grid(self, canvas, ox, oy, iw, ih):
         """Soft reference grid over the preview, for checking corrections.
@@ -1446,74 +2813,109 @@ class ReviewPanel(tk.Frame):
                 y = oy + i * ih / n
                 canvas.create_line(ox, y, ox + iw, y, **kw)
 
+    def _draw_rulers(self, canvas, ox, oy, iw, ih):
+        """Numeric rulers along the top, left and right of the corrected frame.
+
+        The grid tells you *where the lines are*; the rulers tell you *what
+        number they sit at*, so a vertical you are checking can be read against
+        a coordinate instead of just a line.  Pixel mode only -- divisions have
+        no meaningful pixel label.  An overlay, not reserved space: it costs no
+        window height and never resizes the preview.  Minor ticks at every grid
+        step, a longer major tick with its pixel offset every fifth -- top and
+        left offset from the image's top-left corner, right offset from the
+        top-right corner (same y as the left ruler, so a feature's height can be
+        read off *both* sides and compared -- the point of the right ruler: a
+        level horizontal reads the same number on the left and the right, a
+        residual lean does not)."""
+        if not self.v_grid.get():
+            return
+        step, _n = self._grid_step()
+        if step == 0:
+            return
+        minor = dict(fill="#9fd8ff", width=1, stipple="gray50", tags="ruler")
+        for p, major in layout.ruler_ticks(iw, step):
+            ln = 10 if major else 5
+            canvas.create_line(ox + p, oy, ox + p, oy + ln, **minor)
+            if major and p > 0:
+                canvas.create_text(ox + p + 2, oy + ln + 6, text=str(p),
+                                   anchor="w", fill="#9fd8ff",
+                                   font=("TkDefaultFont", 7), tags="ruler")
+        for p, major in layout.ruler_ticks(ih, step):
+            ln = 10 if major else 5
+            canvas.create_line(ox, oy + p, ox + ln, oy + p, **minor)
+            if major and p > 0:
+                canvas.create_text(ox + ln + 2, oy + p, text=str(p),
+                                   anchor="w", fill="#9fd8ff",
+                                   font=("TkDefaultFont", 7), tags="ruler")
+            canvas.create_line(ox + iw, oy + p, ox + iw - ln, oy + p, **minor)
+            if major and p > 0:
+                canvas.create_text(ox + iw - ln - 2, oy + p, text=str(p),
+                                   anchor="e", fill="#9fd8ff",
+                                   font=("TkDefaultFont", 7), tags="ruler")
+
     def _draw_marks(self):
-        """Vertical control lines, over the preview.
+        """Control lines (vertical and horizontal), over the preview.
 
         Drawn by the canvas rather than burnt into the rendered image because
         they are interaction state, not detection: they have to appear the
         instant a click lands, without waiting for a re-render, and the pending
-        first point has to be visible while it is still only half a line.
+        first point has to be visible while it is still only half a line.  The
+        width scales with the displayed size so a mark stays even on a small
+        photograph instead of reading as a thick bar (see layout.mark_line_width).
         """
         ox, oy = self._before_off
-        active = self.session.control_active
-        for x0, y0, x1, y1 in self.session.control_lines_for_display(self._before_scale):
+        ph_b = getattr(self, "_ph_b", None)
+        short = min(ph_b.width(), ph_b.height()) if ph_b is not None else 0
+        lw = layout.mark_line_width(short)
+        active_v = self.session.control_active
+        for i, (x0, y0, x1, y1) in enumerate(
+                self.session.control_lines_for_display(self._before_scale)):
+            col = "#00e5ff" if active_v else "#ffb300"
             self.c_before.create_line(ox + x0, oy + y0, ox + x1, oy + y1,
-                                      fill="#00e5ff" if active else "#ffb300",
-                                      width=3, arrow="both", arrowshape=(9, 11, 4))
+                                      fill=col, width=lw)
+            for ex, ey in ((x0, y0), (x1, y1)):
+                self.c_before.create_oval(ox + ex - 4, oy + ey - 4,
+                                          ox + ex + 4, oy + ey + 4,
+                                          fill=col, outline="")
+            mx, my = (x0 + x1) / 2.0, (y0 + y1) / 2.0
+            self._draw_delete_handle(ox + mx, oy + my, col,
+                                     tag=f"mark_del_v_{i}")
+        active_h = len(self.session.control_hlines) >= 2
+        for i, (x0, y0, x1, y1) in enumerate(
+                self.session.control_lines_for_display(
+                    self._before_scale, kind="h")):
+            col = "#e040fb" if active_h else "#b39ddb"
+            self.c_before.create_line(ox + x0, oy + y0, ox + x1, oy + y1,
+                                      fill=col, width=lw, arrow="both",
+                                      arrowshape=(9, 11, 4))
+            for ex, ey in ((x0, y0), (x1, y1)):
+                self.c_before.create_oval(ox + ex - 4, oy + ey - 4,
+                                          ox + ex + 4, oy + ey + 4,
+                                          fill=col, outline="")
+            mx, my = (x0 + x1) / 2.0, (y0 + y1) / 2.0
+            self._draw_delete_handle(ox + mx, oy + my, col,
+                                     tag=f"mark_del_h_{i}")
         pend = getattr(self, "_pending_mark", None)
         if pend is not None:
             px, py = ox + pend[0], oy + pend[1]
+            col = "#e040fb" if self._mark_kind() == "h" else "#00e5ff"
             self.c_before.create_oval(px - 6, py - 6, px + 6, py + 6,
-                                       outline="#00e5ff", width=2)
+                                       outline=col, width=2)
 
-    def _draw_crop_persistent(self):
-        """Redraw the crop overlay from the session's stored fractions.
-
-        An uncropped photograph draws the frame itself, so the four handles are
-        always there to grab.  A crop tool that has to be switched on first is a
-        crop tool people drag at and nothing happens -- and the drag is then lost
-        silently, which is the one thing this project does not do.  Nothing is
-        cropped until a handle actually moves: the full-frame rectangle trims
-        every edge by zero.
-        """
-        self.c_after.delete("crop_overlay")
-        rect = self.session.crop_rect or (0.0, 0.0, 1.0, 1.0)
-        ox, oy = self._after_off
-        iw, ih = self._ph_a.width(), self._ph_a.height()
-        x0, y0, x1, y1 = rect
-        self._draw_crop_overlay(ox + x0 * iw, oy + y0 * ih,
-                                ox + x1 * iw, oy + y1 * ih,
-                                ox, oy, iw, ih)
+    def _draw_delete_handle(self, cx, cy, col, tag=""):
+        r = 8
+        kw = {"tags": tag} if tag else {}
+        self.c_before.create_oval(cx - r, cy - r, cx + r, cy + r,
+                                  fill=INK["field"], outline=col, width=2, **kw)
+        d = 4
+        self.c_before.create_line(cx - d, cy, cx + d, cy, fill=col, **kw)
+        self.c_before.create_line(cx, cy - d, cx, cy + d, fill=col, **kw)
 
     def _set_status(self, text):
-        self.status.delete("1.0", "end")
-        self.status.insert("1.0", text)
+        pass
 
     def _set_status_extra(self, text):
-        self.status.insert("end", "\n" + text)
-
-    def _status_key(self, event):
-        """Keep the status box read-only without killing copy.
-
-        A blanket ``<Key>`` -> ``"break"`` swallows every keypress, Ctrl+C
-        included, so an error message could be selected but never copied.  Let
-        Ctrl+C fall through (returning ``None`` hands the event to the next
-        bindtag, where the Text class binding runs ``tk::TextCopy``) and swallow
-        only actual typing.
-        """
-        if event.state & 0x4 and event.keysym.lower() == "c":   # 0x4 = Control
-            return None
-        return "break"
-
-    def _copy_status(self):
-        """Copy the status box to the clipboard -- the selection if there is
-        one, otherwise the whole thing."""
-        try:
-            text = self.status.get("sel.first", "sel.last")
-        except tk.TclError:
-            text = self.status.get("1.0", "end-1c")
-        self.clipboard_clear()
-        self.clipboard_append(text)
+        pass
 
     # -- output ----------------------------------------------------------
     def _save(self):
@@ -1529,9 +2931,42 @@ class ReviewPanel(tk.Frame):
         # now, not as they were when this window opened.
         self._sync_comfy()
         try:
-            self.session.save(dst)
+            # Planar mode with four placed corners writes the rectified view, not
+            # the roll/pitch correction -- otherwise Save would silently discard
+            # the quad.  Branch on the live toggle + corner count; `session.planar_active`
+            # is dead (never set) and must not be trusted.
+            if (getattr(self, "v_planar", None) is not None and self.v_planar.get()
+                    and len(self.session.planar_quad) == 4):
+                self.session.save_planar(dst)
+            else:
+                self.session.save(dst)
         except Exception as exc:
             messagebox.showerror("Save", str(exc), parent=self)
+            return
+        if self.on_saved:
+            self.on_saved(self.session.path, dst)
+        self._fire_closed()
+
+    def _save_as(self):
+        from tkinter import filedialog
+        base = os.path.basename(self.session.path)
+        default = os.path.splitext(base)[0] + "_corr.jpg"
+        dst = filedialog.asksaveasfilename(
+            parent=self, title="Save corrected image", defaultextension=".jpg",
+            initialfile=default,
+            filetypes=[("JPEG", "*.jpg *.jpeg"), ("PNG", "*.png"),
+                       ("All files", "*.*")])
+        if not dst:
+            return
+        self._sync_comfy()
+        try:
+            if (getattr(self, "v_planar", None) is not None and self.v_planar.get()
+                    and len(self.session.planar_quad) == 4):
+                self.session.save_planar(dst)
+            else:
+                self.session.save(dst)
+        except Exception as exc:
+            messagebox.showerror("Save As", str(exc), parent=self)
             return
         if self.on_saved:
             self.on_saved(self.session.path, dst)
@@ -1555,7 +2990,7 @@ class ReviewPanel(tk.Frame):
 class App(_ROOT_CLASS):
     def __init__(self, initial=None, start_maximized=True):
         super().__init__()
-        self.title("Batch Perspective Correction")
+        self.title(f"Batch Perspective Correction  v{__version__}")
         # The window opens maximized, so this is the size it *restores* to.
         # It used to be a hardcoded 1920x1080, which is too small on a 1440p or
         # 4K monitor and larger than the screen in both directions on a
@@ -1566,8 +3001,14 @@ class App(_ROOT_CLASS):
         sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
         gw, gh = layout.initial_window(sw, sh)
         self.geometry(f"{gw}x{gh}")
-        self.minsize(960, 640)
+        # Floor raised to 1920x1080 (user, 2026-09-13): below that the review
+        # controls under-subscribe -- the angle columns and status box clip.
+        # Note this alone does NOT fit the single-row Save/queue buttons: at
+        # 1920 wide the controls field is ~910px while that row needs ~1791px,
+        # so those stay unreachable until the btns sub-row split lands.
+        self.minsize(1920, 1080)
         apply_theme(self)
+        self._last_applied_theme = "Minimal Black"
         self._icon = _set_window_icon(self)
         self.queue = queue.Queue()
         self.worker = None
@@ -1577,7 +3018,6 @@ class App(_ROOT_CLASS):
         # value as their initial state rather than being set afterwards.
         self._remembered = prefs.load()
         self._build()
-        self._build_menu()
         if self._remembered.get("output"):
             self.v_output.set(self._remembered["output"])
         # The mask setup is machine configuration like the model path: a mode
@@ -1585,9 +3025,9 @@ class App(_ROOT_CLASS):
         # re-picked on every launch.  (The output folder stays offered, not
         # forced -- writing somewhere new is a decision; masking with a saved
         # mask is not.)
-        if self._remembered.get("mask_mode") in ("off", "file", "birefnet"):
+        if self._remembered.get("mask_mode") in ("off", "file", "birefnet", "gdino"):
             self.v_mask.set(self._remembered["mask_mode"])
-        key = "birefnet_model" if self.v_mask.get() == "birefnet" else "mask_file"
+        key = "birefnet_model" if self.v_mask.get() in ("birefnet", "gdino") else "mask_file"
         if self._remembered.get(key):
             self.v_maskpath.set(self._remembered[key])
         self._refresh_items()          # opens on the drop stage, not the work one
@@ -1617,101 +3057,77 @@ class App(_ROOT_CLASS):
         if hasattr(self, "v_fullscreen"):
             self.v_fullscreen.set(self._fullscreen)
 
+    def _switch_theme(self, theme_name):
+        """Swap the active palette: update INK in place, re-apply ttk styles,
+        then walk tk widgets whose explicit bg/fg still hold the old colours."""
+        old = dict(INK)
+        new = THEMES.get(theme_name)
+        if new is None or theme_name == getattr(self, "_last_applied_theme", None):
+            return
+        self._last_applied_theme = theme_name
+        INK.update(new)
+        apply_theme(self, new)
+        _retint_bg(self, old, new)
+
     def _build(self):
         pad = dict(padx=6, pady=2)
-        _brand_header(self)
-        top = ttk.Frame(self, padding=6)
-        top.pack(fill="x")
+        _, self._theme_var, self._theme_combo = _brand_header(self, on_select=self._switch_theme)
 
+        # Both are read by the review panel's <Configure>, which fires while
+        # `ReviewPanel(self)` is still constructing, so they exist before it.
         self.v_output = tk.StringVar()
         self.items = []                       # files and/or folders, in order
+        self._cur = -1                        # index into items the panel is on
 
-        # "+" icon, top-left: the primary add trigger -- images or folder.  A
-        # menu rather than two buttons keeps the corner to one glyph.
-        self.add_btn = tk.Button(top, text="+", font=("Segoe UI", 16, "bold"),
-                                 width=2, relief="flat", bd=0,
-                                 background=INK["field"], foreground=INK["accent"],
-                                 activebackground=INK["line"],
-                                 activeforeground=INK["text"], cursor="hand2")
-        self.add_btn.grid(row=0, column=0, sticky="w", **pad)
-        self._add_menu = tk.Menu(self.add_btn, tearoff=0)
-        self._add_menu.add_command(label="Add images…", command=self._add_files)
-        self._add_menu.add_command(label="Add folder…", command=self._add_folder)
-        self.add_btn.bind("<Button-1>",
-                          lambda e: self._add_menu.tk_popup(e.x_root, e.y_root))
-
-        hint = ("Drop photographs or a folder"
-                if HAVE_DND else
-                "Click to add photographs or a folder")
-        self.drop = tk.Label(top, text=hint, borderwidth=0, height=2,
-                             background=INK["field"], foreground=INK["dim"],
-                             cursor="hand2")
-        self.drop.grid(row=0, column=1, columnspan=2, sticky="ew", **pad)
-        # one drop, one photograph, straight into it -- see _add
-        self.drop.bind("<Enter>", lambda e: self.drop.configure(foreground=INK["accent"]))
-        self.drop.bind("<Leave>", lambda e: self.drop.configure(foreground=INK["dim"]))
-        self.drop.bind("<Button-1>", lambda e: self._add_files())
-        if HAVE_DND:
-            self.drop.drop_target_register(DND_FILES)
-            self.drop.dnd_bind("<<Drop>>", self._on_drop)
-
-        row = ttk.Frame(top)
-        row.grid(row=1, column=0, columnspan=3, sticky="ew", **pad)
-        ttk.Button(row, text="Remove", command=self._remove_selected).pack(side="left")
-        ttk.Button(row, text="Clear", command=self._clear).pack(side="left", padx=6)
-        self.lbl_items = ttk.Label(row, text="nothing yet", style="Dim.TLabel")
-        self.lbl_items.pack(side="left", padx=14)
-        ttk.Label(row, text="click a row to preview its analysis; double-click opens the review",
-                  style="Dim.TLabel").pack(side="right")
-
-        # A visible, selectable list.  Without it "review one image" had to guess
-        # which of several dropped photos was meant, and it guessed the first --
-        # so dropping a second one and clicking review opened the first again.
-        listrow = ttk.Frame(top)
-        listrow.grid(row=2, column=0, columnspan=3, sticky="ew", **pad)
-        self._w_listrow = listrow
-        self.lst = tk.Listbox(listrow, height=3, activestyle="none",
-                              exportselection=False, borderwidth=0,
-                              highlightthickness=0, background=INK["field"],
-                              foreground=INK["text"],
-                              selectbackground=INK["line"],
-                              selectforeground=INK["text"])
-        self.lst.pack(side="left", fill="both", expand=True)
-        sb = ttk.Scrollbar(listrow, orient="vertical", command=self.lst.yview)
-        sb.pack(side="right", fill="y")
-        self.lst.configure(yscrollcommand=sb.set)
-        self.lst.bind("<Double-1>", lambda e: self._review_single())
-        self.lst.bind("<<ListboxSelect>>", self._on_list_select)
-
-        self._w_out = [
-            ttk.Label(top, text="Output", style="Head.TLabel"),
-            ttk.Entry(top, textvariable=self.v_output, width=70),
-            ttk.Button(top, text="Browse", command=self._pick_out)]
-        self._w_out[0].grid(row=3, column=0, sticky="w", **pad)
-        self._w_out[1].grid(row=3, column=1, sticky="ew", **pad)
-        self._w_out[2].grid(row=3, column=2, **pad)
-        top.columnconfigure(1, weight=1)
-
-        # The review lives here, not in a second window: the photograph under
-        # the cursor is the one being reviewed, in the frame you are looking
-        # at.  A hint until the first double-click.  Review and results share
-        # the remaining height in a draggable split -- the review is where the
-        # eye is, so it starts with the larger share, and the sash means nobody
-        # is stuck with whatever ratio the code picked.
-        self._paned = ttk.PanedWindow(self, orient="vertical")
-        self._paned.pack(fill="both", expand=True, padx=8, pady=(0, 4))
-        self._sash_by_hand = False
-        self._paned.bind("<Configure>", self._on_paned_configure)
-        self._paned.bind("<ButtonRelease-1>", self._on_sash_release)
+        # The window is the brand header and the cross -- nothing else.  No
+        # paned split, no options strip, no start bar below: the results list
+        # lives in the cross's lower-left field and the batch controls in the
+        # lower-right one, so a resize grows four equal fields and re-decides
+        # nothing.
         self.review = ReviewPanel(self)
-        # weight 1 against the tree's 0: on any resize the *preview* takes the
-        # extra height and the results list keeps the size its rows need. That
-        # is the same rule layout.sash_position applies to the initial split --
-        # the tree's need is absolute, the photograph's is not.
-        self._paned.add(self.review, weight=1)
+        self.review.pack(fill="both", expand=True, padx=8, pady=(0, 4))
 
-        opt = ttk.Frame(self, padding=(14, 4, 14, 8))
-        opt.pack(fill="x")
+        # The loader is the cross's lower-left field, not a strip across the
+        # top of the window.  Four fields of the same size, previews above and
+        # the two controls below, is a layout that can be checked at a glance;
+        # a loader banner over a split pane is one that has to be learned.
+        # It is a child of the review panel but not of anything the panel
+        # rebuilds -- `load` destroys the other three fields, never this one.
+        # The field is one of four equal boxes; the *content* stays compact
+        # and top-aligned rather than stretching to fill it (the controls'
+        # field, by contrast, may use all its space).
+        # Tools field: the lower-left quarter hosts the review tools -- line
+        # editing now, masking next. Built once here (App._build runs a single
+        # time; `_add` only refreshes the file list), so it survives every load.
+        # Packed first so it sits above the file list.
+        tools = ttk.Frame(self.review.loader, padding=(6, 6, 6, 2))
+        tools._bpc_persistent = True
+        tools.pack(fill="x")
+        self.review._build_tools(tools)
+        # The detector combobox lives in the review panel's tools field; keep
+        # the App-level StringVar in sync so _settings() reads the right value.
+        self.review.v_detector.trace_add("write",
+                                         lambda *_a: self.v_detector.set(
+                                             self.review.v_detector.get()))
+
+        # The add triggers live in the before-image corner (grey +/folder icons);
+        # the file listbox is gone -- the queue lives in self.items and what will
+        # be processed shows in the results tree once a run has happened. The output
+        # destination row used to sit here too, but it is a batch concern and crowds
+        # the results tree; it now rides the Start/Stop bar (see `bar` below), which
+        # frees this space for the tree.
+
+        # The batch options are the lower-right field's own business, not a
+        # strip under the cross: packed side="bottom" they hold the foot of the
+        # controls whatever `load` rebuilds above them.
+        # Titled, because the same words appear twice in this window and nothing
+        # used to say which was which: "detector", "mask" and "fill" live here
+        # *and* in the panel above.  These are the values every photograph opens
+        # with (`_settings()` feeds them to each `review.load`); the panel's
+        # copies override them for the photograph on screen and nothing else.
+        opt = ttk.Labelframe(self.review.cell_ui, padding=(14, 4, 14, 8),
+                             text="defaults every photograph opens with")
+        opt._bpc_persistent = True
         self._w_opt = opt
         self.v_strength = tk.DoubleVar(value=1.0)
         self.v_conf = tk.DoubleVar(value=Settings.min_confidence)
@@ -1720,40 +3136,57 @@ class App(_ROOT_CLASS):
         self.v_recursive = tk.BooleanVar(value=False)
         self.v_overwrite = tk.BooleanVar(value=False)
         self.v_review = tk.BooleanVar(value=True)
-        self._spin(opt, 0, 0, "strength", self.v_strength, 0.0, 1.0, 0.05)
-        self._spin(opt, 0, 3, "min confidence", self.v_conf, 0.0, 1.0, 0.05)
-        self._spin(opt, 1, 0, "max pitch (deg)", self.v_maxpitch, 0.0, 45.0, 1.0)
-        ttk.Label(opt, text="mask").grid(row=0, column=6, sticky="e", padx=4)
-        self.v_mask = tk.StringVar(value=Settings.mask_mode)
-        mask_cb = ttk.Combobox(opt, textvariable=self.v_mask,
-                               values=["off", "file", "birefnet"],
-                               width=6, state="readonly")
-        mask_cb.grid(row=0, column=7, sticky="w")
-        mask_cb.bind("<<ComboboxSelected>>", self._on_mask_mode)
-        self.v_maskpath = tk.StringVar(value="")
-        ttk.Button(opt, text="mask source...", command=self._pick_mask_source
-                   ).grid(row=0, column=8, sticky="w", padx=(6, 0))
-        ttk.Label(opt, text="crop").grid(row=1, column=3, sticky="e", padx=4)
+        # The detector combobox and weights button moved to the lower-left
+        # tools field (_build_tools) beside the input image.  App.v_detector
+        # is set by the review panel's combobox; _settings() reads it back.
+        self.v_detector = tk.StringVar(value=Settings.detector)
+        self.v_jpegq = tk.IntVar(value=int(self._remembered.get("jpeg_quality", Settings.jpeg_quality)))
+        self.v_jpegq.trace_add("write", lambda *_a: prefs.save(jpeg_quality=self.v_jpegq.get()))
+        self._spin(opt, 0, 4, "max pitch (deg)", self.v_maxpitch, 0.0, 45.0, 1.0)
+        self._spin(opt, 1, 0, "strength", self.v_strength, 0.0, 1.0, 0.05)
+        ttk.Label(opt, text="crop").grid(row=1, column=4, sticky="e", padx=4)
         ttk.Combobox(opt, textvariable=self.v_crop,
                      values=["auto", "aspect", "inside", "none"],
-                     width=8, state="readonly").grid(row=1, column=4, sticky="w")
-        ttk.Label(opt, text="detector").grid(row=1, column=6, sticky="e", padx=4)
-        self.v_detector = tk.StringVar(value=Settings.detector)
-        ttk.Combobox(opt, textvariable=self.v_detector, values=list(DETECTORS),
-                     width=11, state="readonly").grid(row=1, column=7, sticky="w")
+                     width=8, state="readonly").grid(row=1, column=5, sticky="w")
+        self._spin(opt, 2, 0, "min confidence", self.v_conf, 0.0, 1.0, 0.05)
+        self._spin(opt, 2, 4, "jpeg quality", self.v_jpegq, 10, 100, 1)
+
+        ttk.Label(opt, text="mask").grid(row=0, column=7, sticky="e", padx=4)
+        self.v_mask = tk.StringVar(value=Settings.mask_mode)
+        mask_cb = ttk.Combobox(opt, textvariable=self.v_mask,
+                               values=["off", "file", "birefnet", "gdino"],
+                               width=6, state="readonly")
+        mask_cb.grid(row=0, column=8, sticky="w")
+        mask_cb.bind("<<ComboboxSelected>>", self._on_mask_mode)
+        self.v_maskpath = tk.StringVar(value="")
+        _b = ttk.Button(opt, text="mask source...", command=self._pick_mask_source)
+        _b.grid(row=0, column=9, sticky="w", padx=(6, 0))
+        _attach_tooltip(_b, "Choose the folder containing mask PNG files (one per image)")
         # Generating the band a rotation opens up is off by default and says so
         # when it cannot run: a batch that quietly writes padded frames because
         # the backend was missing is the silent failure this tool avoids.
-        ttk.Label(opt, text="fill gaps").grid(row=2, column=6, sticky="e", padx=4)
+        ttk.Label(opt, text="fill gaps").grid(row=1, column=7, sticky="e", padx=4)
         self.v_fill = tk.StringVar(value=Settings.fill)
         fbox = ttk.Combobox(opt, textvariable=self.v_fill,
                             values=["none", "telea", "lama", "comfyui"],
                             width=11, state="readonly")
-        fbox.grid(row=2, column=7, sticky="w")
+        fbox.grid(row=1, column=8, sticky="w")
         fbox.bind("<<ComboboxSelected>>", lambda e: self._check_fill())
+        # The ComfyUI address and workflow used to be reachable only from the
+        # Setup menu; with the menus gone they are one button away from the
+        # fill mode that needs them.  It opens the same small settings window
+        # as before -- there is one server, so there is one set of settings.
+        _b = ttk.Button(opt, text="server...", command=self._open_comfy)
+        _b.grid(row=1, column=9, sticky="w", padx=(6, 0))
+        _attach_tooltip(_b, "Configure the ComfyUI server address and inpainting workflow")
+        ttk.Checkbutton(opt, text="subfolders", variable=self.v_recursive
+                        ).grid(row=2, column=7, sticky="w")
+        ttk.Checkbutton(opt, text="overwrite originals", variable=self.v_overwrite
+                        ).grid(row=2, column=8, columnspan=2, sticky="w")
+
         self.lbl_fill = ttk.Label(opt, text="", style="Dim.TLabel", wraplength=900,
                                   justify="left")
-        self.lbl_fill.grid(row=3, column=0, columnspan=9, sticky="w", pady=(4, 0))
+        self.lbl_fill.grid(row=3, column=0, columnspan=12, sticky="w", pady=(4, 0))
 
         # The ComfyUI settings live in their own window rather than in this
         # panel.  Two reasons, both found by looking: the panel is hidden until
@@ -1788,36 +3221,64 @@ class App(_ROOT_CLASS):
         for var in (self.v_comfy_host, self.v_comfy_port):
             var.trace_add("write", lambda *_a: self._show_comfy_state(
                 "unknown", "the address changed -- press Test connection"))
-        ttk.Checkbutton(opt, text="subfolders", variable=self.v_recursive).grid(row=2, column=0, sticky="w")
-        ttk.Checkbutton(opt, text="overwrite originals", variable=self.v_overwrite).grid(row=2, column=1, sticky="w")
         ttk.Checkbutton(opt, text="offer manual review for unclear images",
-                        variable=self.v_review).grid(row=2, column=2, columnspan=3, sticky="w")
+                        variable=self.v_review).grid(row=2, column=0, columnspan=3, sticky="w")
 
-        bar = ttk.Frame(self, padding=8)
-        bar.pack(fill="x")
+        bar = ttk.Frame(self.review.cell_ui, padding=8)
+        bar._bpc_persistent = True
         self._w_bar = bar
-        self.btn_run = ttk.Button(bar, text="Start", command=self._start,
+        # Manual review is the product (2026-09-13, see "Project in one paragraph"),
+        # so the prominent gesture is the one that *asks*: it opens one window per
+        # photograph and writes only what was confirmed by hand. The unattended run
+        # stays reachable for anyone who wants it, demoted rather than removed --
+        # nothing about it changed except that it is no longer the default.
+        self.btn_run = ttk.Button(bar, text="Review each", command=self._review_each,
                                   style="Accent.TButton")
         self.btn_run.pack(side="left")
+        _attach_tooltip(self.btn_run, "Open one review window per photograph; write only what was confirmed by hand")
+        self.btn_batch = ttk.Button(bar, text="Unattended", command=self._start)
+        self.btn_batch.pack(side="left", padx=6)
+        _attach_tooltip(self.btn_batch, "Run the batch automatically without manual review")
         self.btn_stop = ttk.Button(bar, text="Stop", command=self._stop, state="disabled")
         self.btn_stop.pack(side="left", padx=6)
-        # The other way through a folder: no unattended writing at all, one
-        # window per photograph, each one confirmed by hand.
-        ttk.Button(bar, text="Review each...",
-                   command=self._review_each).pack(side="left", padx=(6, 0))
+        _attach_tooltip(self.btn_stop, "Abort the current batch run")
         self.progress = ttk.Progressbar(bar, mode="determinate")
-        self.progress.pack(side="left", fill="x", expand=True, padx=10)
         self.lbl_count = ttk.Label(bar, text="", style="Value.TLabel")
+        # The batch output destination moved here from the loader field: an output
+        # concern that belongs with the run controls, and the options frame above has
+        # no vertical headroom for another row (the cross fixes the field height). It
+        # rides this bar's existing height. No "Output" caption -- at 1280 the bar is
+        # already full of buttons, and the path the entry holds says enough.
+        _browse_btn = ttk.Button(bar, text="Browse", command=self._pick_out)
+        self._w_out = [
+            ttk.Entry(bar, textvariable=self.v_output, width=15),
+            _browse_btn]
+        _attach_tooltip(_browse_btn, "Choose the output folder for corrected images")
+        # Pack order is allocation priority in Tk: when the bar runs out of room at
+        # 1280 the *last* widget packed is the one that gets clipped.  So the path
+        # field packs before the progress bar and keeps its width; the progress bar
+        # is the expander, so it is what gives way (the count label and the results
+        # tree already report progress).
+        self._w_out[0].pack(side="right", padx=(6, 6))
+        self._w_out[1].pack(side="right")
         self.lbl_count.pack(side="right")
+        self.progress.pack(side="left", fill="x", expand=True, padx=10)
+        # Start row at the very foot of the field, options above it.  Both are
+        # packed side="bottom", so the frame `load` rebuilds -- packed
+        # side="top" with expand -- can never push them out of place.
+        bar.pack(side="bottom", fill="x")
+        opt.pack(side="bottom", fill="x")
 
-        self._w_tree = ttk.Frame(self)
+        # The results list is the lower half of the loader field: files and
+        # what happened to them in one place, under the list that names them.
+        self._w_tree = ttk.Frame(self.review.loader)
         cols = ("status", "file", "roll", "pitch", "conf", "note")
         self.tree = ttk.Treeview(self._w_tree, columns=cols, show="headings", selectmode="browse")
         for c, w in zip(cols, (80, 320, 70, 70, 60, 380)):
             self.tree.heading(c, text=c)
             self.tree.column(c, width=w, anchor="w")
         self.tree.pack(fill="both", expand=True)
-        self._paned.add(self._w_tree, weight=0)
+        self._w_tree.pack(fill="both", expand=True, pady=(6, 0))
         self.tree.bind("<Double-1>", lambda e: self._review_selected())
         for status, colour in STATUS_COLOUR.items():
             self.tree.tag_configure(status, foreground=colour)
@@ -1839,6 +3300,7 @@ class App(_ROOT_CLASS):
         # picked once, it applies to every later photograph and batch.
         if self._remembered.get("pad"):
             s.pad = self._remembered["pad"]
+        s.jpeg_quality = int(self.v_jpegq.get())
         s.pitch_strength = s.roll_strength = float(self.v_strength.get())
         s.min_confidence = float(self.v_conf.get())
         s.max_pitch_deg = float(self.v_maxpitch.get())
@@ -1854,11 +3316,14 @@ class App(_ROOT_CLASS):
             setattr(s, key, "" if chosen.startswith("(") else chosen)
         s.mask_mode = self.v_mask.get()
         path = self.v_maskpath.get() or self._remembered.get(
-            "birefnet_model" if self.v_mask.get() == "birefnet" else "mask_file", "")
+            "birefnet_model" if self.v_mask.get() in ("birefnet", "gdino") else "mask_file", "")
         if s.mask_mode == "file":
             s.mask_file = path
-        elif s.mask_mode == "birefnet":
+        elif s.mask_mode in ("birefnet", "gdino"):
             s.birefnet_model = path
+        if s.mask_mode == "gdino":
+            rp = getattr(self.review, "v_gdino_prompt", None)
+            s.gdino_prompt = (rp.get() if rp is not None else "") or "building"
         return s
 
     def _on_mask_mode(self, _e=None):
@@ -1866,7 +3331,7 @@ class App(_ROOT_CLASS):
         its path, so a restart finds the same mask the user left behind.  The
         path field keeps whichever path belongs to the newly chosen mode."""
         prefs.save(mask_mode=self.v_mask.get())
-        key = "birefnet_model" if self.v_mask.get() == "birefnet" else "mask_file"
+        key = "birefnet_model" if self.v_mask.get() in ("birefnet", "gdino") else "mask_file"
         remembered = self._remembered.get(key, "")
         if remembered:
             self.v_maskpath.set(remembered)
@@ -1896,50 +3361,22 @@ class App(_ROOT_CLASS):
             text = "fill will FAIL on every image -- " + text
         self.lbl_fill.configure(text=text)
 
-    def _build_menu(self):
-        """A menu bar for the things that are not a control on screen.
-
-        The ComfyUI entry no longer opens anything -- the settings are docked
-        along the bottom of this window -- so it raises the window and puts the
-        cursor in the address field. It stays because a user who has been told
-        "configure the server" looks in a menu before they look at a strip they
-        have been scrolling past.
-        """
-        bar = tk.Menu(self)
-        setup = tk.Menu(bar, tearoff=0)
-        setup.add_command(label="ComfyUI server...", command=self._open_comfy)
-        self._menu_dl = setup.add_command(
-            label="Download model files...", command=self._download_models)
-        setup.add_separator()
-        setup.add_command(label="Add images...", command=self._add_files)
-        setup.add_command(label="Add folder...", command=self._add_folder)
-        bar.add_cascade(label="Setup", menu=setup)
-        view = tk.Menu(bar, tearoff=0)
-        self.v_fullscreen = tk.BooleanVar(value=False)
-        view.add_checkbutton(label="Fullscreen (F11)", variable=self.v_fullscreen,
-                             command=self._toggle_fullscreen)
-        bar.add_cascade(label="View", menu=view)
-        try:
-            self.configure(menu=bar)
-        except Exception:                     # a platform without menu bars
-            pass
-        self._menu = bar
-
     def _download_models(self):
         """Fetch the DeepLSD weights (98 MB) into models/.
 
-        The menu label is the progress bar: a download is the one thing a user
-        will not start twice, so the second click is refused and the label
-        carries the megabytes instead of a second widget.
+        The button label is the progress bar: a download is the one thing a
+        user will not start twice, so the second click is refused and the label
+        carries the megabytes instead of a second widget.  It used to be a menu
+        entry; with the menus gone it lives next to the detector that needs it.
         """
         if getattr(self, "_dl_busy", False):
             return
         from . import deeplsd as DL
         self._dl_busy = True
-        item = self._menu_dl
+        item = self.btn_weights
 
         def finish(text, is_error):
-            item.configure(text="Download model files...")
+            item.configure(text="weights...")
             self._dl_busy = False
             (messagebox.showerror if is_error else messagebox.showinfo)(
                 "Download", text)
@@ -1974,6 +3411,7 @@ class App(_ROOT_CLASS):
         `_fill_model_lists` and the queue path are untouched.
         """
         win = tk.Toplevel(self)
+        win.configure(bg=INK["bg"])
         win.title("ComfyUI settings")
         win.transient(self)
         win.protocol("WM_DELETE_WINDOW", win.withdraw)
@@ -1990,6 +3428,7 @@ class App(_ROOT_CLASS):
         self.btn_comfy_test = ttk.Button(addr, text="Test connection",
                                          command=self._test_comfy)
         self.btn_comfy_test.pack(side="left", padx=8)
+        _attach_tooltip(self.btn_comfy_test, "Check that the ComfyUI server is reachable and the workflow loads")
         self.lbl_comfy_state = tk.Label(body, text="not checked",
                                         background=INK["bg"], foreground=INK["dim"])
         self.lbl_comfy_state.pack(anchor="w")
@@ -2275,26 +3714,28 @@ class App(_ROOT_CLASS):
             p = os.path.abspath(p)
             if not os.path.exists(p) or p in self.items:
                 continue
-            if os.path.isdir(p) or os.path.splitext(p)[1].lower() in READABLE:
+            if os.path.isdir(p):
+                files = self._expand(p)
+                if not files:
+                    continue
                 self.items.append(p)
                 added += 1
-        if added and hasattr(self, "lst"):
-            self.lst.selection_clear(0, "end")
+                for f in files:
+                    self.tree.insert("", "end", tags=(QUEUED,),
+                                     values=(QUEUED, os.path.basename(f), "", "", "", ""))
+            elif os.path.splitext(p)[1].lower() in READABLE:
+                self.items.append(p)
+                added += 1
+                self.tree.insert("", "end", tags=(QUEUED,),
+                                 values=(QUEUED, os.path.basename(p), "", "", "", ""))
+        if added:
+            # The newest entry is what the user just pointed at; put the panel on
+            # it so a single dropped photograph goes straight to work with no
+            # second click.  When several arrive at once, the first new one is the
+            # current item -- the question of which to look at is real there.
+            self._cur = first_new
+            self._preview_index(self._cur)
         self._refresh_items()
-        if added and hasattr(self, "lst"):
-            self.lst.selection_clear(0, "end")
-            self.lst.selection_set(first_new)
-            self.lst.see(first_new)
-            # _refresh_items already previewed the last new row; this points
-            # the panel at the first one when several arrived at once.  Tk does
-            # not fire <<ListboxSelect>> for a programmatic selection (measured
-            # on Tk 8.6: only user clicks do), so the handler is called by hand;
-            # its guard keeps a repeat from re-detecting.
-            self._on_list_select()
-        # One photograph dropped on an empty window means "work on this one":
-        # the selection it just got loads its analysis into the review panel,
-        # so no second click is needed.  A folder, or several files, still
-        # lands in the list: there the question is real.
         return added
 
     def _add_files(self):
@@ -2309,8 +3750,34 @@ class App(_ROOT_CLASS):
         if d:
             self._add([d])
 
+    def _paste_screenshot(self):
+        """Grab an image from the clipboard and load it into the queue.
+
+        Saved as a JPG in the output directory so the existing ``_add`` /
+        review path handles it without any special-casing."""
+        from PIL import Image, ImageGrab
+        img = ImageGrab.grabclipboard()
+        if img is None:
+            messagebox.showinfo("Paste", "no image on the clipboard")
+            return
+        if img.mode != "RGB":
+            img = img.convert("RGB")
+        out_dir = self.v_output.get() or os.getcwd()
+        os.makedirs(out_dir, exist_ok=True)
+        import time as _time
+        stamp = _time.strftime("%Y%m%d_%H%M%S")
+        path = os.path.join(out_dir, f"screenshot_{stamp}.jpg")
+        n = 1
+        while os.path.exists(path):
+            path = os.path.join(out_dir, f"screenshot_{stamp}_{n}.jpg")
+            n += 1
+        img.save(path, "JPEG", quality=int(self._settings().jpeg_quality),
+                 subsampling=0, optimize=True)
+        self._add([path])
+
     def _clear(self):
         self.items = []
+        self.tree.delete(*self.tree.get_children())
         self._refresh_items()
 
     def _on_drop(self, event):
@@ -2322,148 +3789,62 @@ class App(_ROOT_CLASS):
             paths = [event.data]
         n = self._add(list(paths))
         if n == 0:
-            self.drop.configure(text="nothing usable in that drop")
-            self.after(1800, self._refresh_items)
-
-    def _remove_selected(self):
-        for i in reversed(self.lst.curselection()):
-            del self.items[i]
-        self._refresh_items()
+            self.review._set_status("nothing usable in that drop")
 
     def _set_stage(self):
-        """Two stages in one window: open, then work.
+        """Make sure the one persistent layout is on screen. There are no stages.
 
-        With nothing loaded there is exactly one thing to do, and a screen of
-        sliders, an empty results table and a disabled Start button do not help
-        anyone do it -- they bury the drop target, which is the only control
-        that matters yet. So the empty window is the drop target, at four times
-        the height, plus the buttons that do the same thing for anyone who would
-        rather browse.
+        There used to be two -- an empty landing screen that was nothing but a
+        giant drop target, and a work screen that appeared when files arrived.
+        The cross layout replaced both: the two preview slots and the two
+        control columns build from the first frame, so an empty window is the
+        same window with nothing in it. The loader is the cross's lower-left
+        field rather than the whole screen, and the before slot doubles as the
+        drop target, so nothing is buried by keeping the rest visible.
 
-        Everything else appears the moment there is something to work on, and
-        goes away again on "Clear". Nothing is destroyed and rebuilt: the
-        widgets keep their state, so a folder chosen, a detector picked or a
-        ComfyUI address typed survives emptying the list.
+        What is left for this method is assembly, not reshaping: re-map
+        anything that is not yet mapped. Nothing is hidden and nothing is
+        destroyed, so widget state -- a folder chosen, a detector picked, a
+        ComfyUI address typed -- survives emptying the list, and the window
+        never changes shape underneath whoever is looking at it.
         """
         # One persistent layout: the work UI -- options, start bar, results
-        # list, output row and review -- is always on screen. There is no
-        # separate "empty" landing screen; an empty window shows the same
-        # controls with nothing in them, so the layout never changes shape when
-        # a folder arrives. The drop target stays as a thin strip up top.
-        self.drop.configure(height=3)
-        for w in (self._w_listrow, *self._w_out):
-            if not w.winfo_ismapped():
-                w.grid()
+        # list, output row and review -- is always on screen, all inside the
+        # cross. There is no separate "empty" landing screen; an empty window
+        # shows the same controls with nothing in them, so the layout never
+        # changes shape when a folder arrives. The drop target lives in the
+        # loader field. The output row now lives inside the persistent start bar,
+        # so it is mapped whenever that bar is -- nothing of its own to re-map here.
         for w in (self._w_opt, self._w_bar):
             if not w.winfo_ismapped():
-                w.pack(fill="x")
-        try:
-            self._paned.forget(self._w_tree)
-        except tk.TclError:
-            pass
-        self._paned.add(self._w_tree, weight=0)
-        self.after_idle(self._apply_sash)
-
-    def _apply_sash(self):
-        """Put the review/results sash where `layout` says, once per stage change.
-
-        ttk's `weight` governs how *extra* space is handed out on a resize, not
-        where the sash first lands -- that comes from the panes' requested
-        sizes, which is how a 1440p screen ended up giving 267 px to a results
-        list showing one row and 265 px to the image canvas beside it. So the
-        initial position is set explicitly, from the same rule the weights
-        express afterwards.
-
-        Deferred to `after_idle` because it needs the paned window's real
-        height, which is not known until the stage's widgets have been packed.
-        Silent on TclError: the sash does not exist until both panes are in,
-        and a layout nicety must never be able to break the window.
-        """
-        if getattr(self, "_sash_by_hand", False):
-            return                                  # the user has said otherwise
-        try:
-            available = self._paned.winfo_height()
-            if available <= 1:                      # not laid out yet; try later
-                self.after(60, self._apply_sash)
-                return
-            n = len(self.results) or len(self.items)
-            want = layout.sash_position(available, n)
-            if abs(self._paned.sashpos(0) - want) > 2:
-                self._paned.sashpos(0, want)
-        except tk.TclError:
-            pass
-
-    def _on_paned_configure(self, _e=None):
-        """Re-apply the split whenever the pane's height changes.
-
-        One `after_idle` is not enough: `_set_stage` packs the options row and
-        the start/stop bar *after* the tree is added, so the first attempt
-        measures the empty stage's taller pane and leaves the sash past the
-        window's real height -- which collapsed the results list to one pixel.
-        Following the configure event instead means the split is right after
-        the stage settles, after a resize, and after a move to another monitor.
-
-        It stops the moment the user drags the sash: a window that keeps
-        re-deciding a split someone has just set by hand is worse than one that
-        never helped.
-        """
-        self._apply_sash()
-
-    def _on_sash_release(self, _e=None):
-        """A drag on the sash is a decision; stop moving it afterwards."""
-        self._sash_by_hand = True
+                w.pack(side="bottom", fill="x")
 
     def _refresh_items(self):
-        keep = list(self.lst.curselection()) if hasattr(self, "lst") else []
-        if hasattr(self, "lst"):
-            self.lst.delete(0, "end")
-            for p in self.items:
-                self.lst.insert("end", ("[folder]  " if os.path.isdir(p) else "")
-                                + os.path.basename(p))
-            if self.items:
-                # select what was just added, which is what the user is looking at
-                idx = keep[0] if keep and keep[0] < len(self.items) else len(self.items) - 1
-                self.lst.selection_clear(0, "end")
-                self.lst.selection_set(idx)
-                self.lst.see(idx)
-                # Tk does not fire <<ListboxSelect>> for a programmatic
-                # selection (measured on Tk 8.6: only user clicks do), so the
-                # preview the binding promises has to be asked for by hand.
-                # The guard in _on_list_select makes a repeat a no-op, and this
-                # is what advances the panel to the next photograph after a save.
-                self._on_list_select()
-        n_files = sum(1 for p in self.items if os.path.isfile(p))
-        n_dirs = sum(1 for p in self.items if os.path.isdir(p))
-        if not self.items:
-            self.lbl_items.configure(text="nothing selected")
-        else:
-            bits = []
-            if n_files:
-                bits.append(f"{n_files} image" + ("s" if n_files != 1 else ""))
-            if n_dirs:
-                bits.append(f"{n_dirs} folder" + ("s" if n_dirs != 1 else ""))
-            self.lbl_items.configure(text=" + ".join(bits))
-        hint = ("drop photos or a folder here" if HAVE_DND
-                else "click to add photos or a folder   "
-                     "(pip install tkinterdnd2 for drag and drop)")
+        # The file listbox is gone, so there is no queue view to repaint here: the
+        # queue lives in self.items, and what will be processed shows in the results
+        # tree once a run has happened. All that remains is to keep the current-item
+        # index honest and make sure the one persistent layout is mapped.
+        if self._cur >= len(self.items):
+            self._cur = len(self.items) - 1
         self._set_stage()
-        if self.items:
-            hint += "\n" + os.path.basename(self.items[-1]) + \
-                    (f"  (+{len(self.items) - 1} more)" if len(self.items) > 1 else "")
-        self.drop.configure(text=hint)
+        self._update_run_label()
 
-    def _on_list_select(self, _e=None):
-        """One click previews. The list used to answer only to double-clicks,
-        so a photograph had to be clicked twice before anything about it was
-        visible -- and on a list of one the second click was the one nobody
-        made.  Selection now loads the analysis into the review panel; the
-        guard keeps a refresh that re-selects the same row from re-detecting."""
-        if not self.items:
+    def _update_run_label(self):
+        """The prominent button names what it will do. One loose photograph is a
+        single review; anything else walks the selection a photograph at a time.
+        The command is `_review_each` either way -- it opens one window per image
+        and writes only on Save -- so only the label changes to match."""
+        single = len(self.items) == 1 and os.path.isfile(self.items[0])
+        self.btn_run.configure(text="Review" if single else "Review each")
+
+    def _preview_index(self, i):
+        """Load the queue entry at ``i`` into the review panel.
+
+        A folder resolves to its first readable image. The guard keeps a refresh
+        that re-points at the same photograph from re-detecting it."""
+        if not self.items or not (0 <= i < len(self.items)):
             return
-        sel = self.lst.curselection()
-        if not sel:
-            return
-        item = self.items[sel[0]]
+        item = self.items[i]
         if os.path.isdir(item):
             inside = [f for f in self._expand(item) if os.path.isfile(f)]
             if not inside:
@@ -2476,17 +3857,16 @@ class App(_ROOT_CLASS):
                          on_saved=self._forget_saved)
 
     def _review_single(self):
-        """Open the *selected* image in the review window.
+        """Open the *current* image in the review window.
 
-        The batch list is the normal path, but a single photograph being checked
-        by hand should not need a run first.  It reviews what is selected in the
-        list -- picking the first entry regardless, as this used to, meant that
-        dropping a second photo and clicking review opened the first one again."""
+        The results tree is the normal path once a run has happened; this reviews
+        whatever the panel is currently on (the newest added by default) without
+        needing a run first."""
         if not self.items:
             messagebox.showinfo("Review", "add an image first")
             return
-        sel = self.lst.curselection()
-        item = self.items[sel[0]] if sel else self.items[-1]
+        i = self._cur if 0 <= self._cur < len(self.items) else len(self.items) - 1
+        item = self.items[i]
         if os.path.isdir(item):
             inside = [f for f in self._expand(item) if os.path.isfile(f)]
             if not inside:
@@ -2603,7 +3983,7 @@ class App(_ROOT_CLASS):
         """A batch with BiRefNet masking but no saved model would fail on every
         photo with the same message; ask at the door instead.  The two answers
         are the only two: point at a file, or fetch one into models/BiRefNet/."""
-        if self.v_mask.get() != "birefnet":
+        if self.v_mask.get() not in ("birefnet", "gdino"):
             return True
         path = self.v_maskpath.get() or self._remembered.get("birefnet_model", "")
         if path and os.path.isfile(path):
@@ -2651,7 +4031,9 @@ class App(_ROOT_CLASS):
         win.title("Downloading BiRefNet-HR")
         win.resizable(False, False)
         win.transient(self)
-        lbl = tk.Label(win, text="starting...", justify="left", padx=12, pady=8)
+        win.configure(bg=INK["bg"])
+        lbl = tk.Label(win, text="starting...", justify="left", padx=12, pady=8,
+                       bg=INK["bg"], fg=INK["text"])
         lbl.pack()
         bar = ttk.Progressbar(win, length=360, mode="determinate")
         bar.pack(padx=12, pady=(0, 10))
@@ -2692,7 +4074,11 @@ class App(_ROOT_CLASS):
         self.results.clear()
         self.progress.configure(maximum=len(files), value=0)
         self.stop_flag.clear()
+        # Both entry points go dark while the unattended run writes: starting a
+        # review walk over files a worker thread is rewriting is a race, and
+        # pressing Unattended twice would run the folder twice.
         self.btn_run.configure(state="disabled")
+        self.btn_batch.configure(state="disabled")
         self.btn_stop.configure(state="normal")
         settings = self._settings()
         self.worker = threading.Thread(target=self._run, args=(files, settings), daemon=True)
@@ -2730,6 +4116,7 @@ class App(_ROOT_CLASS):
                                                         "", "", "", msg), tags=(ERROR,))
                 elif kind == "done":
                     self.btn_run.configure(state="normal")
+                    self.btn_batch.configure(state="normal")
                     self.btn_stop.configure(state="disabled")
                     n_skip = sum(1 for r in self.results.values() if r.status == SKIPPED)
                     self.lbl_count.configure(text=f"{payload}: {len(self.results)} file(s)")

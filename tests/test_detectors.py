@@ -98,7 +98,7 @@ def test_every_detector_produces_a_usable_estimate():
     from bpc import deeplsd, mlsd
     sc = synth.Scene(w=1200, h=800, focal_35mm=28, pitch_deg=9, roll_deg=-2, seed=43)
     tr, tp = sc.true_roll_pitch()
-    names = ["lsd", "hough"] + (["mlsd", "hybrid", "union"] if mlsd.available() else [])
+    names = ["lsd"] + (["mlsd", "hybrid", "union"] if mlsd.available() else [])
     names += (["deeplsd", "deep-hybrid", "deep-union"] if deeplsd.available() else [])
     for name in names:
         st = Settings().replace(detector=name, focal_35mm=28)

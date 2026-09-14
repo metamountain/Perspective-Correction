@@ -137,3 +137,62 @@ def test_the_declared_dependencies_are_the_ones_the_core_check_requires():
         assert pkg in imports, f"undeclared core dependency {pkg!r}"
         got.add(imports[pkg])
     assert got == {r["name"] for r in deps.core_status()}
+
+
+def test_the_doctor_agrees_with_mask_info_about_birefnet():
+    """Two checks of one fact must not disagree.
+
+    `--doctor` gated BiRefNet on torch alone and reported "[yes] mask birefnet"
+    on an interpreter where `--mask-info` correctly said "loads: NO -- No module
+    named 'transformers'". The architecture is loaded through `transformers`, so
+    torch plus weights is not readiness; a user following the doctor got a green
+    light and a failure on the first photograph.
+
+    This asserts the doctor consults `transformers` at all -- the specific thing
+    it used to ignore -- rather than re-deriving the verdict, which would just
+    be the same mistake written twice.
+    """
+    from bpc import birefnet as BN
+    b = BN.backends()
+    assert "transformers" in b, "backends() no longer reports transformers"
+
+    report = deps.doctor_text() if hasattr(deps, "doctor_text") else None
+    if report is None:
+        import io, contextlib
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            deps.doctor()
+        report = buf.getvalue()
+    line = [ln for ln in report.splitlines() if "mask birefnet" in ln]
+    assert line, "the doctor no longer reports birefnet at all"
+    line = line[0]
+    # Assert the property, not the wording. An earlier version of this test
+    # pinned the literal "transformers=" and went red the moment the line was
+    # reworded -- the same mistake this file records elsewhere.
+    missing = BN.arch_missing()
+    if missing:
+        assert "[no " in line or "[no]" in line, (
+            f"the architecture cannot import {missing} but the doctor says "
+            f"yes: {line}")
+        # and it must name what is actually absent, so the reader can act
+        assert any(m in line for m in missing), (
+            f"the doctor does not say which of {missing} is missing: {line}")
+    else:
+        assert "[yes" in line, "everything imports but the doctor says no: " + line
+
+
+def test_birefnet_requirements_come_from_the_architecture_source():
+    """torch alone was never the requirement, and nor is transformers alone.
+
+    The architecture read from the weights folder does `from transformers
+    import PretrainedConfig`, `from timm.models.layers import DropPath`, `from
+    einops import rearrange` and uses torch/torchvision throughout. Checking a
+    subset passes an interpreter that dies one import later, which is how this
+    was found: --doctor checked torch, then torch+transformers, and the real
+    list is five names.
+    """
+    from bpc import birefnet as BN
+    for mod in ("torch", "torchvision", "transformers", "timm", "einops"):
+        assert mod in BN.ARCH_REQUIRES, f"{mod} dropped from ARCH_REQUIRES"
+    # the boolean and the list must not drift apart
+    assert BN.transformers_available() == (not BN.arch_missing())

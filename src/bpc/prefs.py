@@ -22,7 +22,7 @@ APP = "batch-perspective-correction"
 REMEMBERED = ("birefnet_model", "mask_file", "mask_mode", "output", "focal_35mm",
               "comfy_url", "comfy_workflow",
               "comfy_unet", "comfy_clip", "comfy_vae",
-              "pad")
+              "pad", "jpeg_quality")
 
 
 def path() -> str:

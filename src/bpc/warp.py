@@ -116,6 +116,69 @@ def inscribed_rect(quad: np.ndarray, aspect: float | None, centre: np.ndarray,
     return np.array([centre[0] - hw, centre[1] - hh, centre[0] + hw, centre[1] + hh])
 
 
+def max_inscribed_rect(quad: np.ndarray, aspect: float | None):
+    """Largest axis-aligned rectangle of the given aspect inside ``quad``.
+
+    Unlike :func:`inscribed_rect` the position is not anchored anywhere -- the
+    rectangle may sit wherever it fits best.  With the half-height written as
+    ``hh = hw / aspect`` every edge of the convex quad is one linear constraint
+    on ``(cx, cy, hw)``, so the maximum is a vertex of four half-planes and is
+    found by trying all C(4, 3) triples exactly.  No search, no local optimum:
+    the answer is the largest rectangle, period, which is what "maximise the
+    untouched pixels" means.
+
+    Returns ``[x0, y0, x1, y1]`` or ``None`` when nothing of positive area fits
+    (a degenerate quad).  The batch path keeps :func:`inscribed_rect` on
+    purpose: it anchors on the mapped image centre so the composition survives,
+    and that is worth a little area there.  A crop pressed by hand wants the
+    area.
+    """
+    if aspect is None or aspect <= 0:
+        aspect = 1.0
+    q = np.asarray(quad, dtype=float)
+    c = q.mean(axis=0)
+    n = len(q)
+    rows, bounds = [], []
+    for i in range(n):
+        a, b = q[i], q[(i + 1) % n]
+        e = b - a
+        nx, ny = float(e[1]), float(-e[0])
+        if nx * (c[0] - a[0]) + ny * (c[1] - a[1]) > 0:
+            nx, ny = -nx, -ny               # outward normal
+        d = nx * a[0] + ny * a[1]
+        # the farthest rect corner from the edge is at distance
+        # |nx|*hw + |ny|*hh along the normal, so the constraint is
+        #   nx*cx + ny*cy + (|nx| + |ny|/aspect)*hw <= d
+        rows.append((nx, ny, abs(nx) + abs(ny) / aspect))
+        bounds.append(d)
+    best = None
+    m = len(rows)
+    for i in range(m):
+        for j in range(i + 1, m):
+            for k in range(j + 1, m):
+                A = np.array([[rows[i][0], rows[i][1], rows[i][2]],
+                              [rows[j][0], rows[j][1], rows[j][2]],
+                              [rows[k][0], rows[k][1], rows[k][2]]])
+                if abs(np.linalg.det(A)) < 1e-12:
+                    continue
+                try:
+                    cx, cy, hw = np.linalg.solve(A, [bounds[i], bounds[j], bounds[k]])
+                except np.linalg.LinAlgError:
+                    continue
+                cx, cy, hw = float(cx), float(cy), float(hw)
+                if hw <= 0:
+                    continue
+                if all(r[0] * cx + r[1] * cy + r[2] * hw <= bnd + 1e-9
+                       for r, bnd in zip(rows, bounds)):
+                    if best is None or hw > best[2]:
+                        best = (cx, cy, hw)
+    if best is None:
+        return None
+    cx, cy, hw = best
+    hh = hw / aspect
+    return np.array([cx - hw, cy - hh, cx + hw, cy + hh])
+
+
 def _whole_frame(H, quad, img_w, img_h, settings, area_ratio):
     """The full warped quad on a canvas big enough to hold it.
 

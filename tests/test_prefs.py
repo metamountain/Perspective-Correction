@@ -33,7 +33,7 @@ def test_only_known_keys_survive():
         prefs.save(birefnet_model="/a.pth")
         with open(prefs.path(), "w", encoding="utf-8") as fh:
             json.dump({"birefnet_model": "/a.pth", "min_confidence": 0.01,
-                       "detector": "hough"}, fh)
+                       "detector": "lsd"}, fh)
         got = prefs.load()
         assert got == {"birefnet_model": "/a.pth"}
 

@@ -49,6 +49,18 @@ ADJUST_ROWS_H = 150
 # review pane that is never collapsible, measured as (pane - canvas) with the
 # control block shut.
 PANEL_FIXED_H = 200
+# Physical size of a correction/mask Scale. The track already fills its row
+# (sticky="ew"), so grabbability comes from thickness and thumb length, not from
+# the track's length. A default ttk.Scale is a few pixels thick -- easy to miss
+# at any zoom; these make it a chunk you can hit by eye.
+SLIDER_WIDTH = 28      # px, trough thickness (perpendicular to the track)
+SLIDER_THUMB = 30      # px, thumb length along the track (~circular with width)
+# Grid floor for the track column. The scale fills its column (sticky="ew"), but
+# on a narrow window the label + spinbox can squeeze it to a useless sliver; a
+# grid `minsize` is a hard floor the weighted column cannot shrink past (unlike
+# the Scale's own `length`, which yields under pressure). Wide windows still
+# stretch it far beyond this via sticky="ew".
+SLIDER_MIN = 80        # px, minimum track-column width
 
 
 def tree_height(n_rows, row_h=ROW_H, rows_max=TREE_ROWS_MAX, rows_min=TREE_ROWS_MIN):
@@ -59,6 +71,12 @@ def tree_height(n_rows, row_h=ROW_H, rows_max=TREE_ROWS_MAX, rows_min=TREE_ROWS_
     """
     rows = max(rows_min, min(int(rows_max), int(n_rows)))
     return int(rows * row_h + TREE_CHROME)
+
+
+# Superseded (2026-09-12, "the window is the cross"): the paned split and its
+# sash are gone -- the results list now lives in the cross's lower-left field
+# and sizes itself with the packer.  Kept, like LOADER_SHARE, only for its
+# tests; nothing in src/ calls these any more.
 
 
 def sash_position(available_h, n_rows, min_review=MIN_REVIEW_H):
@@ -123,3 +141,253 @@ def adjustments_start_open(review_h, adj_h=ADJUST_ROWS_H,
     if review_h <= 1:
         return True
     return review_h - int(fixed_h) - int(adj_h) >= int(min_canvas)
+
+
+# --------------------------------------------------------------------------
+# The cross: two previews on top, loader and controls compact beneath
+# --------------------------------------------------------------------------
+# The previews are the instrument; everything else is chrome around them. What
+# makes a preview *big* is not height alone but the box's **aspect**, and that
+# is the thing the side-by-side layout got wrong. Two boxes across a 2560 px
+# window are ~1263 px wide each; given only 361 px of height, a 3:2 photograph
+# paints about 540 px wide and leaves more than half the box empty. The picture
+# is height-starved while the width goes to waste.
+#
+# So the row is sized to make each box roughly 4:3. That is a compromise
+# chosen for this subject: architectural work arrives as 3:2 landscape and 2:3
+# portrait in similar numbers, and 4:3 is the box that wastes the least across
+# both. Wider than 4:3 starves the portraits; narrower starves the landscapes.
+PREVIEW_ASPECT = 4.0 / 3.0
+# Gap between the two preview boxes, and the frame's own padding.
+PREVIEW_GAP = 12
+# Below this a preview is not worth showing whatever the arithmetic says.
+MIN_PREVIEW_H = 150
+
+
+def preview_box(pane_w, gap=PREVIEW_GAP):
+    """Width available to *each* of the two side-by-side preview boxes."""
+    return max(1, (int(pane_w) - int(gap)) // 2)
+
+
+def preview_row_height(pane_w, pane_h, bottom_h, aspect=PREVIEW_ASPECT,
+                       min_h=MIN_PREVIEW_H):
+    """Height for the row holding the two previews.
+
+    As tall as the window allows, capped where each box reaches ``aspect`` --
+    past that point extra height only letterboxes the photograph, so it is
+    better spent below. Floored at ``min_h``: a window too short for both still
+    shows a picture, because the alternative is a layout with no instrument in
+    it.
+    """
+    each_w = preview_box(pane_w)
+    ideal = int(each_w / float(aspect))
+    avail = int(pane_h) - int(bottom_h)
+    if avail <= min_h:
+        return max(1, min(int(min_h), max(1, int(pane_h))))
+    return max(min_h, min(avail, ideal))
+
+
+def fill_fraction(box_w, box_h, img_w, img_h):
+    """Share of a preview box a photograph actually paints, 0..1.
+
+    The number the aspect choice is arguing about: fitting a 3:2 frame into a
+    1263x361 box covers 0.43 of it, and the same frame into a 4:3 box covers
+    0.75. It is the honest measure of "as big as possible", because pixels of
+    box nobody paints are not preview.
+    """
+    box_w, box_h = max(1, int(box_w)), max(1, int(box_h))
+    s = min(box_w / float(img_w), box_h / float(img_h))
+    return (img_w * s) * (img_h * s) / float(box_w * box_h)
+
+
+# --------------------------------------------------------------------------
+# The perfect cross: four equal fields
+# --------------------------------------------------------------------------
+# A later directive overrides the 4:3 cap above: **four fields of exactly the
+# same size**, previews on top, loader and controls in the two below. The cap
+# and the equal cross cannot both hold -- capping the preview row at 4:3 makes
+# the top row taller or shorter than the bottom, which is precisely the thing a
+# cross is not. Equal wins, and the reason is not geometry:
+#
+#   a layout you can verify at a glance costs nothing to learn.
+#
+# This is a simple program. A user who sees four equal fields knows immediately
+# where everything is and that nothing is hidden; a user who sees a 4:3-capped
+# top row and a residual bottom strip has to work out which parts are fixed,
+# which grew, and whether anything is missing. `fill_fraction` says the equal
+# field paints a little less of a photograph than a 4:3 one would -- that is the
+# price, it is paid once, and it buys a window that explains itself.
+#
+# The previews are still the point: they get half the height, which is far more
+# than the 361 px the old wide-and-short row gave them.
+
+# The lower field's need is not one number, because the control block collapses
+# (`adjustments_start_open`, wired to the review pane's <Configure>). Two
+# figures, and the distinction is what keeps a 1366x768 laptop working:
+#
+#   hard floor  -- the action row. Save / Keep / Close must be reachable at
+#                  every size; this is the one thing that may never be traded.
+#   preferred   -- action row plus the control block, i.e. the controls open.
+#
+# A window that cannot afford the preferred height does not get an uneven cross;
+# it gets an equal cross with the controls collapsed, which is the same layout
+# with one block folded away. Only a window too short even for the hard floor
+# plus a minimum preview falls back to an uneven split.
+ACTION_ROW_H = 48
+UI_HARD_MIN_H = ACTION_ROW_H
+MIN_UI_QUADRANT_H = ADJUST_ROWS_H + ACTION_ROW_H
+
+
+def quadrant(pane_w, pane_h, gap=PREVIEW_GAP):
+    """``(w, h)`` of each of the four fields -- exactly half the pane, both ways.
+
+    Integer division, so the two columns and two rows are the same size as each
+    other rather than one carrying a spare pixel: a cross that is one pixel off
+    reads as a mistake, and the leftover belongs in the gap.
+    """
+    return (max(1, (int(pane_w) - int(gap)) // 2),
+            max(1, (int(pane_h) - int(gap)) // 2))
+
+
+# The 2026-09-12 directive: the cross between the four equal fields and the
+# border around them are each a flat 20 px of dark, on every screen.
+CROSS_GAP = 20
+CROSS_BORDER = 20
+
+
+def perfect_cross_field(pane_w, pane_h, gap=CROSS_GAP, border=CROSS_BORDER):
+    """``(w, h)`` of each of the four equal fields inside a pane.
+
+    The pane carries a ``border`` margin on all four sides and one ``gap``
+    between the two columns and one between the two rows; what remains is
+    split in half both ways, so all four fields are exactly the same size.
+    """
+    usable_w = max(1, int(pane_w) - 2 * int(border) - int(gap))
+    usable_h = max(1, int(pane_h) - 2 * int(border) - int(gap))
+    return (usable_w // 2, usable_h // 2)
+
+
+# --------------------------------------------------------------------------
+# The loupe: a magnifier for placing planar corners
+# --------------------------------------------------------------------------
+# A corner clicked by eye on a preview scaled to 0.08 lands within ~12
+# full-resolution pixels of the intended point, and a homography does not
+# forgive that.  The loupe shows full-resolution pixels around the cursor with
+# a crosshair on the exact pixel under it.  The crop is odd so the cursor's
+# pixel sits exactly at the window's centre, and the magnification is integral
+# so one image pixel is a whole number of screen pixels: aiming within half a
+# pixel is then just looking at where the crosshair falls.
+
+LOUPE_CROP = 81      # full-resolution image px across the window (odd: centred)
+LOUPE_MAG = 2        # screen px per image px
+LOUPE_OFFSET = 24    # cursor-to-window distance, so the glass never covers the point
+
+
+def loupe():
+    """``(window_px, crop_px, offset_px)`` for the planar corner loupe."""
+    return LOUPE_CROP * LOUPE_MAG, LOUPE_CROP, LOUPE_OFFSET
+
+
+# --------------------------------------------------------------------------
+# Rulers: tick marks along the corrected frame's edges
+# --------------------------------------------------------------------------
+# The grid says where the lines are; the rulers say what number they sit at.
+# Ticks fall on whole multiples of the (user-chosen) step from the image's
+# top-left corner, and every fifth is a major tick that carries a label.  The
+# selection is pure geometry -- no window -- so it is tested like the rest of
+# the layout rather than rediscovered by eye.
+
+RULER_MAJOR_EVERY = 5
+
+
+def ruler_ticks(span, step):
+    """``[(position, is_major), ...]`` along an axis ``span`` px long.
+
+    A tick at every multiple of ``step`` from the origin up to (not beyond)
+    ``span``, with a major tick -- the ones that get a numeric label -- every
+    fifth.  Empty for a non-positive span or step: a ruler with no room draws
+    nothing rather than one cramped tick."""
+    if span <= 0 or step <= 0:
+        return []
+    n = int(span // step)
+    return [(i * step, i % RULER_MAJOR_EVERY == 0) for i in range(n + 1)]
+
+
+MARK_LINE_MIN, MARK_LINE_MAX = 1, 3
+
+
+def mark_line_width(short_edge):
+    """Screen-pixel width of a hand-drawn control line for an image shown with
+    ``short_edge`` px on its short side.
+
+    A fixed 3 px reads as heavy on a small photograph and hairline on a large
+    one, so it scales with the displayed size: 1 px up to ~250 px, 2 px past
+    ~500, capping at the old constant of 3.  Pure, so it is tested like the rest
+    of the layout instead of tuned by eye on one window."""
+    if short_edge <= 0:
+        return MARK_LINE_MIN
+    return max(MARK_LINE_MIN, min(MARK_LINE_MAX, int(short_edge) // 250))
+
+
+def cross_is_perfect(pane_h, gap=PREVIEW_GAP, min_ui=UI_HARD_MIN_H):
+    """Whether an equal split leaves the lower fields enough for the UI.
+
+    Below this the cross cannot be both equal and usable, and usable wins --
+    controls that do not fit are controls nobody can reach, which is a worse
+    failure than an uneven layout. `preview_row_height` handles the fallback.
+    """
+    return quadrant(1, pane_h, gap)[1] >= int(min_ui)
+
+
+def cross_rows(pane_h, gap=PREVIEW_GAP, min_ui=MIN_UI_QUADRANT_H):
+    """``(preview_row_h, ui_row_h)`` -- equal where it can be, honest where not.
+
+    Equal halves on any window tall enough. On a window too short, the UI row
+    takes the minimum it needs and the previews take the rest, so the controls
+    stay reachable; the split is then visibly unequal, which is the correct
+    signal that the window is too small rather than a layout that silently
+    hides a button.
+    """
+    pane_h = int(pane_h)
+    qh = quadrant(1, pane_h, gap)[1]
+    # Equal whenever the lower field can hold the controls *or* can hold the
+    # action row with the controls folded away -- both are the perfect cross.
+    if qh >= UI_HARD_MIN_H:
+        return qh, qh
+    ui = max(1, min(UI_HARD_MIN_H, max(1, pane_h - MIN_PREVIEW_H)))
+    return max(1, pane_h - ui - int(gap)), ui
+
+
+# --------------------------------------------------------------------------
+# The bottom row is not split down the middle, and that is a correction
+# --------------------------------------------------------------------------
+# Four exactly equal fields was the directive and it was tried. It failed on
+# contact with the content: the loader is a drop target and a short list, which
+# needs almost nothing, while the controls are four slider rows plus the
+# detector, mask and fill selectors, which need everything they can get. Equal
+# fields spent half the bottom row on the emptiest thing in the window.
+#
+# The 2026-09-12 directive supersedes this: the four fields are again exactly
+# equal (CROSS_GAP / CROSS_BORDER above), with the loader's *content* kept
+# compact and top-aligned inside its field instead of the field itself being
+# shrunk.  `bottom_split` is no longer called from the panel; it stays because
+# test_layout.py still pins its arithmetic.
+LOADER_SHARE = 0.28
+# Below this the loader stops being able to show a filename.
+MIN_LOADER_W = 180
+
+
+def bottom_split(pane_w, gap=PREVIEW_GAP, share=LOADER_SHARE, min_loader=MIN_LOADER_W):
+    """``(loader_w, controls_w)`` for the lower row.
+
+    The loader takes a fixed *share*, floored so it can still show a name, and
+    capped so it can never take more than the controls: on a narrow window the
+    thing that must survive is the sliders, because that is what the mode is
+    for.
+    """
+    pane_w = int(pane_w)
+    usable = max(1, pane_w - int(gap))
+    loader = int(usable * float(share))
+    loader = max(min(int(min_loader), usable // 2), loader)
+    loader = min(loader, usable // 2)
+    return loader, max(1, usable - loader)

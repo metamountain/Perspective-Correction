@@ -95,7 +95,8 @@ def resolve_model(path: str = "") -> str:
         return cand
     raise DeepLSDUnavailable(
         f"DeepLSD weights not found: {path or DEFAULT_MODEL}. They are not "
-        f"bundled (98 MB) -- use Setup > Download model files..., or:\n"
+        f"bundled (98 MB) -- use the 'weights...' button next to the detector "
+        f"selector, or:\n"
         f"    curl -L -o models/{DEFAULT_MODEL} {WEIGHTS_URL}")
 
 

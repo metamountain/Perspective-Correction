@@ -63,13 +63,22 @@ class ReviewSession:
         self.mode = AUTO
         self.show_mask = True
         self.mask_alpha = 0.28
+        # Hand-painted ignore region, analysis-image resolution, or None until
+        # the brush is first used.  `_paint_struck` remembers which lines this
+        # paint struck out, so erasing part of it can hand exactly those back
+        # without disturbing anything struck by other means.
+        self.paint = None
+        self._paint_struck = np.zeros(len(self.vert), dtype=bool)
         self.manual_roll = 0.0
         self.manual_pitch = 0.0
         self.manual_yaw = 0.0
         self.manual_focal_35mm = 0.0
         # Hugin-style vertical control lines, in analysis-image coordinates.
-        # (N, 4) of x0, y0, x1, y1.
+        # (N, 4) of x0, y0, x1, y1.  Two arrays: verticals drive roll/pitch,
+        # horizontals drive yaw -- the same "a person stated it" evidence, split
+        # by which vanishing plane the line belongs to.
         self.control_lines = np.zeros((0, 4))
+        self.control_hlines = np.zeros((0, 4))
         # Manual crop, as per-edge trims in fractions of the corrected canvas.
         # The preview is rendered at a few hundred pixels and the file is saved
         # at full size, so a rectangle in pixels would mean two different things;
@@ -115,6 +124,10 @@ class ReviewSession:
              self.detect_info) = L.prepare(self.gray, safe, self._small, self.path)
         # per-line manual state: True = may be used, False = struck out by the user
         self.enabled = np.ones(len(self.vert), dtype=bool)
+        # A re-detect rebuilds the mask from the automatic sources, so the
+        # hand-painted region has to be laid back over it -- otherwise switching
+        # detector or mask source silently discards what the user painted.
+        self._apply_paint()
 
     def set_mask(self, mode, path="", invert=None):
         """Switch the region mask and re-detect.
@@ -176,14 +189,22 @@ class ReviewSession:
             settings = settings.replace(min_vertical_lines=2)
         else:
             vert = self.vert.subset(self.enabled)
-        horiz = self.horiz
-        if self.roi_x is not None:
-            keep = L.in_xband(self.horiz.seg, *self.roi_x)
-            if keep.any():
-                horiz = self.horiz.subset(keep)
-            # else: the strip holds no horizontal evidence; fall back to the
-            # full frame rather than fitting nothing -- a selection that
-            # selects nothing must not silently zero the yaw
+        if len(self.control_hlines) >= 2:
+            # A person drew these; like the verticals they replace the detected
+            # pool rather than joining it, and the detector's support floor is
+            # dropped for them -- refusing a little hand-stated evidence because
+            # there is little of it is right for a detector and wrong here.
+            horiz = L.LineSet(self.control_hlines)
+            settings = settings.replace(min_horizontal_support=0.0)
+        else:
+            horiz = self.horiz
+            if self.roi_x is not None:
+                keep = L.in_xband(self.horiz.seg, *self.roi_x)
+                if keep.any():
+                    horiz = self.horiz.subset(keep)
+                # else: the strip holds no horizontal evidence; fall back to the
+                # full frame rather than fitting nothing -- a selection that
+                # selects nothing must not silently zero the yaw
         exif_px = IO.focal_px_from_exif(self.src, self.w, self.h) \
             if self.settings.use_exif_focal else None
         m = M.estimate(vert, horiz, gw, gh, settings,
@@ -238,6 +259,7 @@ class ReviewSession:
         self.mode = AUTO
         self.enabled[:] = True
         self.control_lines = np.zeros((0, 4))
+        self.control_hlines = np.zeros((0, 4))
         self._crop_edges = {k: (False, 0.0) for k in self._crop_edges}
         self.roi_x = None
         self.refit()
@@ -304,11 +326,18 @@ class ReviewSession:
     def auto_crop(self):
         """Trim to the largest rectangle that contains no invented pixel.
 
-        The same rectangle ``warp.plan`` computes for ``crop="auto"``, minus
-        the ``max_crop_loss`` gate: the gate exists to stop a batch quietly
-        throwing a quarter of every picture away, and a button pressed by hand
-        is not quiet.  It keeps the original aspect ratio and stays anchored on
-        the mapped centre, so the composition survives the trim.
+        The same frame ``warp.plan`` computes for ``crop="auto"``, minus the
+        ``max_crop_loss`` gate: the gate exists to stop a batch quietly throwing
+        a quarter of every picture away, and a button pressed by hand is not
+        quiet.  It keeps the original aspect ratio.
+
+        The rectangle itself is **not** the plan's: the plan anchors on the
+        mapped image centre so the composition survives, and pays for that in
+        area.  A crop pressed by hand wants the other trade -- the largest
+        rectangle that fits anywhere, which is ``warp.max_inscribed_rect``.
+        On an asymmetric correction (roll *and* pitch) the centred rectangle
+        is measurably smaller than the best one, and the difference is what
+        made this button read as "random" rather than "maximal".
 
         This is the answer to the padded band that does not involve inventing
         anything.  Filling the band -- telea, lama, comfyui -- makes up pixels
@@ -329,8 +358,10 @@ class ReviewSession:
             return False
         H_total, ow, oh, _, _ = planned
         quad = W.warped_quad(H_total, self.w, self.h)
-        centre = G.apply_h(H_total, np.array([[self.w / 2.0, self.h / 2.0]]))[0]
-        x0, y0, x1, y1 = W.inscribed_rect(quad, self.w / float(self.h), centre)
+        rect = W.max_inscribed_rect(quad, self.w / float(self.h))
+        if rect is None:
+            return False
+        x0, y0, x1, y1 = (float(t) for t in rect)
         # The plan may have cropped already, in which case the quad runs past
         # the canvas and the inscribed rectangle with it.  Clamping then gives
         # the whole frame back, and `set_crop_rect` is left to decide that a
@@ -339,7 +370,12 @@ class ReviewSession:
         y0, y1 = max(0.0, min(float(y0), oh)), max(0.0, min(float(y1), oh))
         if (x1 - x0) < 8 or (y1 - y0) < 8:
             return False
-        if (x1 - x0) >= ow - 1 and (y1 - y0) >= oh - 1:
+        # The tolerance is FRINGE, not one pixel: the warped quad's boundary is
+        # fuzzy by exactly that much (see below), so "does this rectangle cover
+        # the canvas" is only decidable within it.  A crop short of the frame by
+        # less than the fringe trims resampling noise, not content -- the saved
+        # file would differ by a couple of boundary rows at most.
+        if (x1 - x0) >= ow - W.FRINGE and (y1 - y0) >= oh - W.FRINGE:
             return False        # nothing was padded; nothing to trim
         # Inset by the same margin `warp.filled_region` grows the hole by, and
         # only once the guards above have decided there is a band at all -- the
@@ -425,8 +461,14 @@ class ReviewSession:
 
     MIN_CONTROL_LENGTH_FRAC = 0.08
 
-    def add_control_line(self, x0, y0, x1, y1, display_scale: float = 1.0):
-        """Assert that this segment is vertical in the world -- Hugin's ``t2``.
+    def _ctrl_attr(self, kind):
+        """Which array a control line of ``kind`` lives in."""
+        return "control_lines" if kind == "v" else "control_hlines"
+
+    def add_control_line(self, x0, y0, x1, y1, display_scale: float = 1.0,
+                         kind: str = "v"):
+        """Assert that this segment is level in the world -- Hugin's ``t2`` (a
+        vertical) or ``h2`` (a horizontal), chosen by ``kind``.
 
         Two points on one structure, and Hugin's own advice is to put them "as
         far apart from each other as possible": the direction of a short segment
@@ -444,34 +486,77 @@ class ReviewSession:
         if float(np.hypot(seg[0, 2] - seg[0, 0], seg[0, 3] - seg[0, 1])) < \
                 self.MIN_CONTROL_LENGTH_FRAC * min(gw, gh):
             return None
-        self.control_lines = np.vstack([self.control_lines, seg])
+        attr = self._ctrl_attr(kind)
+        setattr(self, attr, np.vstack([getattr(self, attr), seg]))
         self.refit()
-        return len(self.control_lines) - 1
+        return len(getattr(self, attr)) - 1
 
-    def remove_control_line(self, index: int):
-        if not (0 <= index < len(self.control_lines)):
+    def remove_control_line(self, index: int, kind: str = "v"):
+        attr = self._ctrl_attr(kind)
+        arr = getattr(self, attr)
+        if not (0 <= index < len(arr)):
             return False
-        self.control_lines = np.delete(self.control_lines, index, axis=0)
+        setattr(self, attr, np.delete(arr, index, axis=0))
         self.refit()
         return True
 
-    def clear_control_lines(self):
-        had = len(self.control_lines)
-        self.control_lines = np.zeros((0, 4))
+    def move_control_line_endpoint(self, index: int, endpoint_idx: int,
+                                   x: float, y: float,
+                                   display_scale: float = 1.0, kind: str = "v"):
+        """Move one endpoint of an existing control line to (x, y)."""
+        attr = self._ctrl_attr(kind)
+        arr = getattr(self, attr)
+        if not (0 <= index < len(arr)):
+            return False
+        inv = self.scale / max(display_scale, 1e-9)
+        col = endpoint_idx * 2
+        arr[index, col] = x * inv
+        arr[index, col + 1] = y * inv
+        setattr(self, attr, arr)
+        self.refit()
+        return True
+
+    def pick_control_line_endpoint(self, x: float, y: float,
+                                   display_scale: float = 1.0,
+                                   radius: float = 10.0, kind: str = "v"):
+        """(line_index, endpoint_idx) of the nearest endpoint within radius, or None."""
+        arr = getattr(self, self._ctrl_attr(kind))
+        if len(arr) == 0:
+            return None
+        inv = self.scale / max(display_scale, 1e-9)
+        px, py = x * inv, y * inv
+        best_dist = radius * inv
+        best = None
+        for i in range(len(arr)):
+            for e in (0, 1):
+                dx = arr[i, e * 2] - px
+                dy = arr[i, e * 2 + 1] - py
+                d = float(np.hypot(dx, dy))
+                if d < best_dist:
+                    best_dist = d
+                    best = (i, e)
+        return best
+
+    def clear_control_lines(self, kind: str = "v"):
+        attr = self._ctrl_attr(kind)
+        had = len(getattr(self, attr))
+        setattr(self, attr, np.zeros((0, 4)))
         if had:
             self.refit()
         return had
 
     def pick_control_line(self, x: float, y: float, display_scale: float = 1.0,
-                          radius: float = 12.0):
+                          radius: float = 12.0, kind: str = "v"):
         """Index of the control line nearest a click, or ``None``."""
-        return self._nearest(self.control_lines, x, y, display_scale, radius)
+        return self._nearest(getattr(self, self._ctrl_attr(kind)), x, y,
+                             display_scale, radius)
 
-    def control_lines_for_display(self, display_scale: float = 1.0):
+    def control_lines_for_display(self, display_scale: float = 1.0, kind: str = "v"):
         """The control lines in displayed-image pixels, for drawing."""
-        if len(self.control_lines) == 0:
+        arr = getattr(self, self._ctrl_attr(kind))
+        if len(arr) == 0:
             return np.zeros((0, 4))
-        return self.control_lines * (display_scale / max(self.scale, 1e-9))
+        return arr * (display_scale / max(self.scale, 1e-9))
 
     def _apply_crop(self, img):
         """Cut the manual rectangle out of a rendered result, at any size."""
@@ -528,6 +613,71 @@ class ReviewSession:
         i = int(np.argmin(d))
         return i if d[i] <= radius * inv else None
 
+    def paint_ignore(self, pts, display_scale: float = 1.0, radius: float = 24.0,
+                     erase: bool = False):
+        """Paint (or erase) a region of the ignore mask by hand.
+
+        The manual answer to a segmenter that picked the wrong subject: a stroke
+        across the parked car says "that is not the building" outright, instead
+        of arguing with a text prompt about it.
+
+        Unlike every automatic source this is a *decision*, so it deliberately
+        skips the two heuristics that second-guess a computed mask --
+        ``protect_structure``, which hands long straight lines back, and
+        ``credible``, which can refuse a mask wholesale.  What you paint is
+        ignored; what you erase comes back.
+
+        Returns the share of the frame painted, so the caller can say so.
+        """
+        if not pts:
+            return float(self.paint.mean()) if self.paint is not None else 0.0
+        h, w = self.gray.shape[:2]
+        if self.paint is None:
+            self.paint = np.zeros((h, w), dtype=bool)
+        inv = self.scale / max(display_scale, 1e-9)
+        r = max(1, int(round(radius * inv)))
+        buf = self.paint.astype(np.uint8)
+        for x, y in pts:
+            cv2.circle(buf, (int(round(x * inv)), int(round(y * inv))), r,
+                       0 if erase else 1, -1)
+        self.paint = buf.astype(bool)
+        self._apply_paint()
+        self.refit()
+        return float(self.paint.mean())
+
+    def _apply_paint(self):
+        """Merge the painted region into the shown mask and strike what it covers.
+
+        Re-derived from scratch each time rather than accumulated, so erasing is
+        just painting with a zero: the lines this paint had struck are handed
+        back first, then whatever the current region covers is struck again.
+        """
+        # getattr: `_detect` runs once from `__init__` before these exist
+        paint = getattr(self, "paint", None)
+        self._paint_struck = getattr(self, "_paint_struck", np.zeros(0, dtype=bool))
+        if len(self._paint_struck) == len(self.enabled):
+            self.enabled[self._paint_struck] = True     # release the old claim
+        self._paint_struck = np.zeros(len(self.vert), dtype=bool)
+        if paint is None or not paint.any():
+            return
+        shown = self.detect_info.get("mask")
+        self.detect_info["mask"] = (paint if shown is None
+                                    else np.logical_or(shown, paint))
+        seg = self.vert.seg
+        if len(seg):
+            ph, pw = paint.shape[:2]
+
+            def inside(xs, ys):
+                xi = np.clip(np.round(xs).astype(int), 0, pw - 1)
+                yi = np.clip(np.round(ys).astype(int), 0, ph - 1)
+                return paint[yi, xi]
+
+            # Both endpoints, matching `masks.drop_by_endpoints`: a line that
+            # merely crosses the painted edge still has real evidence outside it.
+            hit = inside(seg[:, 0], seg[:, 1]) & inside(seg[:, 2], seg[:, 3])
+            self._paint_struck = hit
+            self.enabled[hit] = False
+
     # -- current correction ----------------------------------------------
     def current_angles(self):
         """``(roll, pitch, focal_px)`` actually in force, limits applied."""
@@ -572,7 +722,8 @@ class ReviewSession:
         there is little of it is right when a detector produced it and wrong
         when a person did.
         """
-        if self.mode == MANUAL or self.control_active:
+        if self.mode == MANUAL or self.control_active \
+                or len(self.control_hlines) >= 2:
             return None
         if self.model is None:
             return "no model"
@@ -589,31 +740,34 @@ class ReviewSession:
 
     # -- rendering -------------------------------------------------------
     def render_before(self, max_edge=900, show_lines=True):
-        img = self.bgr
-        if not show_lines:
-            return _fit(img, max_edge)
-        struck = self.vert.subset(~self.enabled)
-        used = self.vert.subset(self.enabled)
-        m = self.model
         canvas = self.bgr.copy()
         inv = 1.0 / self.scale
         info = getattr(self, "detect_info", None) or {}
+        # The mask wash is independent of the line overlay: a region you excluded
+        # stays worth seeing -- and its opacity adjustable -- whether or not the
+        # detected lines are on screen.  Coupling it to show_lines made the whole
+        # opacity control dead the moment "Lines" was switched off.
         if self.show_mask and self.mask_alpha > 0.001:
             PV.tint_mask(canvas, info.get("mask"), alpha=self.mask_alpha)
+        if show_lines:
+            # A struck line is gone from view, not recoloured: the user excluded
+            # it on purpose (stroke, strike-slanted or a click), so drawing it in
+            # grey only argues for putting it back.  It stays out of the fit --
+            # `enabled` decides that -- and simply stops being shown.
+            used = self.vert.subset(self.enabled)
+            m = self.model
             dropped = info.get("masked_out")
             if dropped is not None and len(dropped):
                 PV._draw_lines(canvas, dropped * inv, PV.RED, 1)
-        if len(self.horiz):
-            PV._draw_lines(canvas, self.horiz.seg * inv, PV.BLUE, 1)
-        if len(struck):
-            PV._draw_lines(canvas, struck.seg * inv, PV.GREY, 1)
-        if len(used):
-            inl = m.vert_inliers[self.enabled] if m is not None else np.zeros(len(used), bool)
-            PV._draw_lines(canvas, used.seg[~inl] * inv, PV.YELLOW, 1)
-            PV._draw_lines(canvas, used.seg[inl] * inv, PV.GREEN, 2)
-        if m is not None and m.f:
-            K = G.intrinsics(m.f, self.w / 2.0, self.h / 2.0)
-            PV._draw_infinite_line(canvas, G.horizon_line(m.up, K), PV.MAGENTA, 2)
+            if len(self.horiz):
+                PV._draw_lines(canvas, self.horiz.seg * inv, PV.BLUE, 1)
+            if len(used):
+                inl = m.vert_inliers[self.enabled] if m is not None else np.zeros(len(used), bool)
+                PV._draw_lines(canvas, used.seg[~inl] * inv, PV.YELLOW, 1)
+                PV._draw_lines(canvas, used.seg[inl] * inv, PV.GREEN, 2)
+            if m is not None and m.f:
+                K = G.intrinsics(m.f, self.w / 2.0, self.h / 2.0)
+                PV._draw_infinite_line(canvas, G.horizon_line(m.up, K), PV.MAGENTA, 2)
         return _fit(canvas, max_edge)
 
     def render_after(self, max_edge=900, apply_crop=True):
@@ -687,7 +841,8 @@ class ReviewSession:
         conf = self.model.confidence if self.model else 0.0
         src = self.model.f_source if self.model else "-"
         head = ("MANUAL" if self.mode == MANUAL
-                else "MARKED" if self.control_active
+                else "MARKED" if (self.control_active
+                                  or len(self.control_hlines) >= 2)
                 else ("SKIP" if skip else "AUTO"))
         mask_note = ""
         if self.detect_error:
@@ -715,6 +870,12 @@ class ReviewSession:
         elif len(self.control_lines) == 1:
             parts.append("1 vertical control line -- one more is needed before "
                          "they take over, since two determine a vanishing point")
+        if len(self.control_hlines) >= 2:
+            parts.append(f"{len(self.control_hlines)} horizontal control line(s) in "
+                         f"force -- the detected horizontals are not being used")
+        elif len(self.control_hlines) == 1:
+            parts.append("1 horizontal control line -- one more is needed before "
+                         "they take over, since two determine a vanishing point")
         fill_mode = getattr(self.settings, "fill", "none")
         if fill_mode not in ("", "none"):
             from . import inpaint as FILL
@@ -726,8 +887,9 @@ class ReviewSession:
         # on screen is exactly the kind of thing that gets forgotten before the
         # save, and the save is where it becomes permanent.
         if self.crop_rect is not None:
+            loss = self.crop_loss() * 100.0
             parts.append(f"crop: the shaded area is cut on save "
-                         f"-- {self.crop_loss() * 100:.0f}% of the frame")
+                         f"-- keeps {100.0 - loss:.0f}%, cuts {loss:.0f}% of the frame")
             if fill_mode not in ("", "none"):
                 parts.append("fill and crop are two answers to the same band; "
                              "the crop discards what the fill invents")
@@ -812,11 +974,20 @@ class ReviewSession:
         H, w, h = t
         if max_edge and max(w, h) > max_edge:
             s = float(max_edge) / max(w, h)
-            M = np.array([[s, 0.0, 0.0], [0.0, s, 0.0], [0.0, 0.0, 1.0]])
+            S = np.array([[s, 0.0, 0.0], [0.0, s, 0.0], [0.0, 0.0, 1.0]])
+            # S H S^-1, not H S.  `H` maps full-resolution source pixels to the
+            # full-size canvas; here both ends are scaled by `s`, so the source
+            # has to be scaled *back up* before H sees it and the result scaled
+            # down again -- which is a similarity conjugation, not a product.
+            # `H @ S` scales twice and returns a different picture entirely:
+            # measured 154 grey levels of mean difference against the full-size
+            # warp, where the conjugation gives 8.5 (resampling noise). It made
+            # the corner drag preview show something the saved file would not,
+            # the same class of failure the always-live crop is built to avoid.
             img = cv2.resize(self.bgr,
                              (max(1, int(self.w * s)), max(1, int(self.h * s))),
                              interpolation=cv2.INTER_AREA)
-            return cv2.warpPerspective(img, H @ M,
+            return cv2.warpPerspective(img, S @ H @ np.linalg.inv(S),
                                        (max(1, int(w * s)), max(1, int(h * s))))
         return cv2.warpPerspective(self.bgr, H, (w, h))
 
@@ -867,3 +1038,26 @@ def _fit(img, max_edge):
         return img
     return cv2.resize(img, (max(1, int(img.shape[1] * s)), max(1, int(img.shape[0] * s))),
                       interpolation=cv2.INTER_AREA)
+
+
+def darken_outside_crop(bgr, rect, keep=0.25):
+    """A copy of ``bgr`` with everything outside ``rect`` dimmed to ``keep`` of its
+    original brightness -- a flat 75 % black veil for ``keep=0.25``.
+
+    ``rect`` is ``(x0, y0, x1, y1)`` as fractions of the frame; ``None`` leaves the
+    image untouched.  The preview bakes this into the displayed array because a Tk
+    canvas item has no alpha channel and a stipple dither reads lighter than the flat
+    fill it stands in for.  Each cut-away pixel is dimmed exactly once, so corners do
+    not compound.
+    """
+    if rect is None:
+        return bgr
+    h, w = bgr.shape[:2]
+    fx0, fy0, fx1, fy1 = (min(1.0, max(0.0, float(v))) for v in rect)
+    x0, x1 = sorted((int(round(fx0 * w)), int(round(fx1 * w))))
+    y0, y1 = sorted((int(round(fy0 * h)), int(round(fy1 * h))))
+    mask = np.ones((h, w), dtype=bool)      # True where the veil goes
+    mask[y0:y1, x0:x1] = False              # ...except the kept rectangle
+    out = bgr.copy()
+    out[mask] = (out[mask].astype(np.float32) * float(keep)).astype(np.uint8)
+    return out

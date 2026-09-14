@@ -4,6 +4,14 @@
     python tests/run_tests.py            all tests
     python tests/run_tests.py geometry   only modules matching "geometry"
     python tests/run_tests.py -v         show every test name
+    python tests/run_tests.py -s         run sequentially, in MODULES order
+
+Modules run in worker processes (up to one per core, capped at eight) because
+the suite is bound by a handful of long asset sweeps and wall time should be
+the slowest module, not the sum of all of them. Tests within a module still
+run in order inside their process and share that module's caches; no test
+reads another module's state, which is what makes the split safe. ``-s``
+restores the old sequential run for debugging.
 """
 import importlib
 import os
@@ -17,14 +25,28 @@ sys.path.insert(0, os.path.join(ROOT, "src"))
 sys.path.insert(0, HERE)
 
 MODULES = ["test_geometry", "test_lines", "test_layout", "test_warp", "test_estimation",
-           "test_pipeline", "test_review", "test_masks", "test_birefnet", "test_prefs",
-           "test_inpaint",
-           "test_detectors",
-           "test_planar",
+            "test_pipeline", "test_cli", "test_review", "test_masks", "test_birefnet", "test_prefs",
+             "test_inpaint",
+            "test_detectors",
+            "test_schemes",
+            "test_planar",
            "test_reference",
            "test_assets",
            "test_gui",
            "test_deps"]
+
+MAX_WORKERS = 8
+
+
+class _Skip(Exception):
+    pass
+
+
+# At top level on purpose: worker processes re-import this file before running
+# a module, and the test modules name SkipTest bare.
+import builtins  # noqa: E402
+builtins.SkipTest = _Skip
+sys.modules[__name__].Skip = _Skip
 
 
 def _unlisted():
@@ -42,47 +64,76 @@ def _unlisted():
     return sorted(found - set(MODULES))
 
 
+def _run_module(name):
+    """Run one module's tests; return ``(name, results, import_error)``.
+
+    Runs in a worker process, so everything that comes back must be plain
+    data: ``results`` is a list of ``(test, status, seconds, detail)`` with
+    status one of ok / skip / fail and detail the skip reason or traceback.
+    """
+    try:
+        mod = importlib.import_module(name)
+    except Exception:
+        return name, None, traceback.format_exc()
+    tests = [k for k in sorted(vars(mod)) if k.startswith("test_")]
+    out = []
+    for t in tests:
+        t1 = time.time()
+        try:
+            getattr(mod, t)()
+            out.append((t, "ok", time.time() - t1, None))
+        except _Skip as exc:
+            out.append((t, "skip", time.time() - t1, str(exc)))
+        except Exception:
+            out.append((t, "fail", time.time() - t1, traceback.format_exc()))
+    return name, out, None
+
+
 def main(argv):
     verbose = "-v" in argv
+    sequential = "-s" in argv
     stray = _unlisted()
     if stray:
         print("!! not in MODULES, so never run: " + ", ".join(stray))
     picks = [a for a in argv if not a.startswith("-")]
-    total = failed = skipped = 0
-    t0 = time.time()
-    failures = []
+    names = [n for n in MODULES if not picks or any(p in n for p in picks)]
 
-    for name in MODULES:
-        if picks and not any(p in name for p in picks):
-            continue
-        try:
-            mod = importlib.import_module(name)
-        except Exception:
+    t0 = time.time()
+    done = {}
+    if sequential or len(names) <= 1:
+        for n in names:
+            name, out, err = _run_module(n)
+            done[name] = (out, err)
+    else:
+        from concurrent.futures import ProcessPoolExecutor
+        workers = min(MAX_WORKERS, os.cpu_count() or 1, len(names))
+        with ProcessPoolExecutor(max_workers=workers) as ex:
+            for name, out, err in ex.map(_run_module, names):
+                done[name] = (out, err)
+
+    total = failed = skipped = 0
+    failures = []
+    for name in names:
+        out, err = done[name]
+        if out is None:
             print(f"!! cannot import {name}")
-            traceback.print_exc()
+            print(err)
             failed += 1
             continue
-        tests = [k for k in sorted(vars(mod)) if k.startswith("test_")]
-        if not tests:
+        if not out:
             continue
         print(f"\n{name}")
-        for t in tests:
+        for t, status, secs, detail in out:
             total += 1
-            fn = getattr(mod, t)
-            t1 = time.time()
-            try:
-                fn()
-            except _Skip as exc:
+            if status == "skip":
                 skipped += 1
-                print(f"  -  {t}  ({exc})")
-                continue
-            except Exception:
+                print(f"  -  {t}  ({detail})")
+            elif status == "fail":
                 failed += 1
-                failures.append((name, t, traceback.format_exc()))
+                failures.append((name, t, detail))
                 print(f"  FAIL {t}")
-                continue
-            if verbose:
-                print(f"  ok {t}  ({time.time() - t1:.2f}s)")
+            elif verbose:
+                print(f"  ok {t}  ({secs:.2f}s)")
             else:
                 print(f"  ok {t}")
 
@@ -91,16 +142,6 @@ def main(argv):
     print(f"\n{total} test(s), {failed} failed, {skipped} skipped, "
           f"{time.time() - t0:.1f}s")
     return 1 if (failed or stray) else 0
-
-
-class _Skip(Exception):
-    pass
-
-
-# make the skip helper importable from the test modules
-sys.modules[__name__].Skip = _Skip
-import builtins  # noqa: E402
-builtins.SkipTest = _Skip
 
 
 if __name__ == "__main__":

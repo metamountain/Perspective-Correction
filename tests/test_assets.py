@@ -24,11 +24,31 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ASSETS = os.path.join(HERE, "assets")
 
 
-def _files():
+def _horizontal_files():
+    """Inputs under ``assets/Horizontal`` (the yaw set).
+
+    Mixed extensions, and this tool's own ``*_corr.*`` outputs land in the same
+    folder -- those are results, not inputs, so a test that read one back would
+    be grading its own homework. Filter them out."""
     out = []
-    for f in sorted(glob.glob(os.path.join(ASSETS, "*"))):
-        if os.path.splitext(f)[1].lower() in READABLE:
+    for f in sorted(glob.glob(os.path.join(ASSETS, "Horizontal", "*"))):
+        name = os.path.basename(f)
+        if os.path.splitext(f)[1].lower() in READABLE and "_corr" not in name.lower():
             out.append(f)
+    return out
+
+
+def _files():
+    seen, out = set(), []
+    candidates = sorted(glob.glob(os.path.join(ASSETS, "*"))) + _horizontal_files()
+    for f in candidates:
+        if os.path.splitext(f)[1].lower() not in READABLE:
+            continue
+        k = os.path.abspath(f)
+        if k in seen:
+            continue
+        seen.add(k)
+        out.append(f)
     return out
 
 
@@ -50,14 +70,15 @@ def test_every_asset_is_processed_without_error():
 def test_corrections_stay_within_plausible_bounds():
     """Whatever it decides, it must not propose an angle no photographer
     would have produced, and must not throw the frame away."""
-    s = Settings()
     for f in _require():
-        m, _, _, _, _ = analyse(_load(f), s)
+        m = _analyse_default(f)
         assert abs(math.degrees(m.roll)) < 25.0, os.path.basename(f)
         assert abs(math.degrees(m.pitch)) < 35.0, os.path.basename(f)
 
 
 def test_results_are_repeatable_on_real_files():
+    # Deliberately bypasses _analyse_default: this test *is* the determinism
+    # check, so its two runs must both be fresh.
     s = Settings()
     for f in _require():
         img = _load(f)
@@ -112,6 +133,24 @@ def _load(path):
     if arr is None:
         arr = _LOAD_CACHE[(path,)] = load(path).bgr
     return arr.copy()
+
+
+_DEFAULT_ANALYSE = {}
+
+
+def _analyse_default(path):
+    """The default-settings model for one asset, computed once per run.
+
+    Four of the sweeps below ask the same question of every asset -- what does
+    a plain ``Settings()`` run make of it -- and the answer is deterministic,
+    which ``test_results_are_repeatable_on_real_files`` pins with two fresh,
+    uncached runs. Sharing it here turns three ~2.8 s re-runs into one; the
+    repeatability test is what keeps the sharing honest.
+    """
+    m = _DEFAULT_ANALYSE.get(path)
+    if m is None:
+        m = _DEFAULT_ANALYSE[path] = analyse(_load(path), Settings())[0]
+    return m
 
 
 def known_focal_35mm(path):
@@ -252,7 +291,7 @@ def test_a_known_rotation_is_recovered_on_real_photographs():
         e = _round_trip_error(f)
         if e is None:
             continue
-        m, _, _, _, _ = analyse(_load(f), s)
+        m = _analyse_default(f)
         if m.confidence >= s.min_confidence:
             errs.append(e)
     assert errs, "no measurable assets the tool would act on"
@@ -311,7 +350,7 @@ def test_every_photograph_it_is_confident_about_is_measured_accurately():
         e = _round_trip_error(f)
         if e is None:
             continue
-        m, _, _, _, _ = analyse(_load(f), s)
+        m = _analyse_default(f)
         if m.confidence >= s.min_confidence and e > 2.0:
             bad.append(f"{os.path.basename(f)}: conf {m.confidence:.2f}, error {e:.2f} deg")
     assert not bad, "confident but wrong: " + "; ".join(bad)
@@ -325,7 +364,7 @@ def test_the_confidence_gate_admits_most_of_a_good_set():
     architectural photographs, so most of them have to get through.
     """
     s = Settings()
-    conf = [analyse(_load(f), s)[0].confidence for f in _require()]
+    conf = [_analyse_default(f).confidence for f in _require()]
     admitted = sum(1 for c in conf if c >= s.min_confidence)
     assert admitted >= 0.7 * len(conf), (
         f"only {admitted}/{len(conf)} assets clear the confidence gate")

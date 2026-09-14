@@ -51,13 +51,32 @@ def resolve(mask_file: str, image_path: str) -> str:
     raise ValueError(f"no mask for {stem} in {mask_file}")
 
 
+def _imread(path: str, flags: int):
+    """``cv2.imread`` that also opens non-ASCII paths.
+
+    ``cv2.imread`` goes through the C runtime and mangles non-ASCII characters on
+    Windows, so a mask whose name carries an umlaut -- the stem of its own
+    photograph -- reads as None and ``--mask file`` dies on exactly the photos a
+    segmenter was pointed at.  ``np.fromfile`` opens through Python (Unicode-safe)
+    and ``cv2.imdecode`` decodes the same bytes; ASCII names take the fast path.
+    """
+    img = cv2.imread(path, flags)
+    if img is not None:
+        return img
+    try:
+        buf = np.fromfile(path, dtype=np.uint8)
+    except OSError:
+        return None                     # missing/unreadable -> caller reports it
+    return cv2.imdecode(buf, flags) if buf.size else None
+
+
 def load(path: str, shape, invert: bool = False) -> np.ndarray:
     """A painted PNG.  White means "ignore this region" unless ``invert``.
 
     ``invert`` exists because a segmenter naturally outputs the *subject* --
     SAM hands back the building in white -- which is the opposite convention.
     """
-    img = cv2.imread(path, cv2.IMREAD_GRAYSCALE)
+    img = _imread(path, cv2.IMREAD_GRAYSCALE)
     if img is None:
         raise ValueError(f"cannot read mask {path}")
     # ultralytics replaces cv2.imread with its own wrapper on import -- to
@@ -103,9 +122,135 @@ def protect_structure(mask: np.ndarray, seg: np.ndarray, min_len: float,
     return mask & ~(keep.astype(bool))
 
 
-def build(bgr: np.ndarray, settings, image_path: str = "", seg=None):
-    """``(mask_or_None, note)`` for whichever source is configured."""
-    mode = getattr(settings, "mask_mode", "off")
+GDINO_PAD_FRAC = 0.04   # pad around the detected box before cropping
+
+
+def default_gdino_dir() -> str:
+    """Where the vendored Grounding DINO model lives: ``models/GroundingDINO/``."""
+    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    return os.path.join(root, "models", "GroundingDINO")
+
+
+_GDINO_CACHE = {}
+
+
+def _gdino_load(model_dir: str):
+    """Load (and cache) the Grounding DINO processor + model for one directory."""
+    import torch
+    from transformers import AutoProcessor, AutoModelForZeroShotObjectDetection
+
+    key = os.path.abspath(model_dir)
+    if key not in _GDINO_CACHE:
+        dev = "cuda" if torch.cuda.is_available() else "cpu"
+        proc = AutoProcessor.from_pretrained(model_dir, local_files_only=True)
+        model = (AutoModelForZeroShotObjectDetection
+                 .from_pretrained(model_dir, local_files_only=True).to(dev).eval())
+        _GDINO_CACHE[key] = (proc, model, dev)
+    return _GDINO_CACHE[key]
+
+
+def gdino_box(bgr: np.ndarray, prompt: str, model_dir: str):
+    """The best ``prompt`` box in ``bgr`` pixels: ``(x0, y0, x1, y1), score``.
+
+    A full-frame fallback with score 0 when nothing clears the threshold, so a
+    miss degrades to "matte the whole frame" rather than crashing the run.
+    """
+    import torch
+    from PIL import Image
+
+    proc, model, dev = _gdino_load(model_dir)
+    h, w = bgr.shape[:2]
+    pil = Image.fromarray(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB))
+    inp = proc(text=[prompt], images=pil, return_tensors="pt").to(dev)
+    with torch.no_grad():
+        res = model(**inp)
+    det = proc.post_process_grounded_object_detection(
+        res, inp["input_ids"], threshold=0.20, text_threshold=0.20,
+        target_sizes=[(h, w)])[0]
+    scores = det["scores"].cpu().numpy()
+    if len(scores) == 0:
+        return (0, 0, w, h), 0.0
+    boxes = det["boxes"].cpu().numpy()
+    labels = [str(x) for x in det["text_labels"]]
+    want = prompt.lower()
+    keep = [i for i, lab in enumerate(labels) if want in lab.lower()]
+    if not keep:
+        keep = list(range(len(scores)))
+    best = int(max(keep, key=lambda i: float(scores[i])))
+    return (int(boxes[best][0]), int(boxes[best][1]),
+            int(boxes[best][2]), int(boxes[best][3])), float(scores[best])
+
+
+def _gdino_compose(h, w, x0, y0, x1, y1, crop_ignore: np.ndarray) -> np.ndarray:
+    """Full-frame ignore mask from a detected box and its matte.
+
+    Outside the (padded) box is not the subject, so it is ignored outright; inside,
+    the BiRefNet matte of the crop decides.  ``crop_ignore`` is True where the fit
+    should not look, at the crop's own resolution.
+    """
+    ignore = np.ones((h, w), bool)
+    ci = crop_ignore
+    if ci.shape[:2] != (y1 - y0, x1 - x0):
+        ci = cv2.resize(ci.astype(np.uint8), (x1 - x0, y1 - y0),
+                        interpolation=cv2.INTER_NEAREST).astype(bool)
+    ignore[y0:y1, x0:x1] = ci
+    return ignore
+
+
+def gdino_mask(bgr: np.ndarray, settings):
+    """``(ignore_mask, note)`` for ``--mask gdino``.
+
+    A text prompt finds the subject's box, BiRefNet mattes inside it, and
+    everything outside the box is dropped -- so a competing foreground object
+    that BiRefNet would otherwise grab on its own is cut away by the crop.
+    """
+    from . import birefnet as BN
+
+    weights = getattr(settings, "birefnet_model", "")
+    if not weights:
+        raise ValueError("--mask gdino needs --birefnet-model <weights> for the matte")
+    prompt = (getattr(settings, "gdino_prompt", "") or "building").strip() or "building"
+    model_dir = getattr(settings, "gdino_model", "") or default_gdino_dir()
+
+    h, w = bgr.shape[:2]
+    box, score = gdino_box(bgr, prompt, model_dir)
+    x0, y0, x1, y1 = box
+    px = int(GDINO_PAD_FRAC * w)
+    py = int(GDINO_PAD_FRAC * h)
+    x0 = max(0, x0 - px); y0 = max(0, y0 - py)
+    x1 = min(w, x1 + px); y1 = min(h, y1 + py)
+    if (x1 - x0) < 8 or (y1 - y0) < 8:
+        raise ValueError("--mask gdino: the detected box is too small to matte")
+
+    crop = bgr[y0:y1, x0:x1]
+    fg = BN.foreground(crop, weights,
+                       device=getattr(settings, "birefnet_device", ""),
+                       res=getattr(settings, "birefnet_res", 0))
+    ci = fg < float(getattr(settings, "birefnet_threshold", 0.5))
+    spx = BN.shrink_px_for(ci.shape, getattr(settings, "birefnet_shrink_frac", 0.008))
+    if spx > 0:
+        k = np.ones((2 * spx + 1,) * 2, np.uint8)
+        ci = cv2.erode(ci.astype(np.uint8), k).astype(bool)
+    ignore = _gdino_compose(h, w, x0, y0, x1, y1, ci)
+    return ignore, ("GDINO '{p}' box {b} score {s:.2f}; BiRefNet inside, "
+                    "{m:.0f}% of frame ignored".format(
+                        p=prompt, b=box, s=score, m=float(ignore.mean()) * 100))
+
+
+def gdino_available(model_dir: str = "") -> bool:
+    """Can this interpreter run ``--mask gdino``?  Needs transformers and the weights."""
+    import importlib.util
+
+    if importlib.util.find_spec("transformers") is None:
+        return False
+    d = model_dir or default_gdino_dir()
+    if not os.path.isdir(d) or not os.path.isfile(os.path.join(d, "config.json")):
+        return False
+    return any(f.endswith(".safetensors") for f in os.listdir(d))
+
+
+def _build_one(mode: str, bgr: np.ndarray, settings, image_path: str = ""):
+    """``(mask_or_None, note)`` for a single source name."""
     if mode in ("off", "auto"):
         # "auto" was the cheap texture heuristic; accepted and ignored rather
         # than raising, so an old command line or a remembered setting does not
@@ -125,7 +270,44 @@ def build(bgr: np.ndarray, settings, image_path: str = "", seg=None):
             device=getattr(settings, "birefnet_device", ""),
             res=getattr(settings, "birefnet_res", 0),
             shrink_frac=getattr(settings, "birefnet_shrink_frac", 0.008))
+    if mode == "gdino":
+        return gdino_mask(bgr, settings)
     return None, ""
+
+
+def build(bgr: np.ndarray, settings, image_path: str = "", seg=None):
+    """``(mask_or_None, note)`` for whichever source(s) are configured.
+
+    ``mask_mode`` is one name ("birefnet") or several, comma-joined
+    ("file,birefnet").  Several are **added**: a pixel is ignored when any
+    source ignores it, because each source is an independent claim about what
+    is not the building and dropping evidence twice costs nothing while keeping
+    clutter one source missed costs a wrong correction.
+
+    Note that gdino already runs BiRefNet inside its box, so ticking both it
+    and birefnet gives the full-frame matte union -- which is the plain
+    birefnet result, and throws away the crop that made gdino worth picking.
+    """
+    mode = getattr(settings, "mask_mode", "off")
+    parts = [p.strip() for p in str(mode).split(",") if p.strip()]
+    parts = [p for p in parts if p not in ("off", "auto")]
+    if not parts:
+        return None, ""
+    if len(parts) == 1:
+        return _build_one(parts[0], bgr, settings, image_path)
+
+    built, notes = [], []
+    for p in parts:
+        m, n = _build_one(p, bgr, settings, image_path)
+        if m is not None:
+            built.append(m)
+            notes.append(f"{p}: {n}" if n else p)
+    if not built:
+        return None, ""
+    out = built[0]
+    for m in built[1:]:
+        out = np.logical_or(out, m)
+    return out, " + ".join(notes) + f" -> {out.mean() * 100:.0f}% ignored"
 
 
 MAX_EVIDENCE_LOST = 0.55
