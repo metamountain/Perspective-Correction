@@ -223,37 +223,37 @@ def apply_theme(root, palette=None):
     st.configure("Dim.TLabel", foreground=p["dim"])
     st.configure("Head.TLabel", foreground=p["dim"], font=(ui, 9))
     st.configure("Value.TLabel", foreground=p["text"], font=(mono, 10))
-    st.configure("Title.TLabel", foreground=p["text"], font=(ui, 15))
+    st.configure("Title.TLabel", foreground=p["text"], font=(ui, 16))
 
     st.configure("TButton", background=p["panel"], foreground=p["text"],
-                 borderwidth=0, focusthickness=0, padding=(12, 6))
+                 borderwidth=0, focusthickness=0, padding=(16, 9))
     st.map("TButton",
            background=[("pressed", p["line"]), ("active", p["line"])],
            foreground=[("disabled", p["dim"])])
     st.configure("Accent.TButton", background=p["accent"], foreground="#0b1017",
-                 padding=(14, 7))
+                 padding=(18, 10))
     st.map("Accent.TButton", background=[("active", p["accent"]),
                                          ("disabled", p["line"])])
 
-    st.configure("TEntry", padding=6, borderwidth=0)
-    st.configure("TCombobox", padding=4, borderwidth=0, arrowcolor=p["dim"])
+    st.configure("TEntry", padding=7, borderwidth=0)
+    st.configure("TCombobox", padding=7, borderwidth=0, arrowcolor=p["dim"])
     st.map("TCombobox", fieldbackground=[("readonly", p["field"])],
            foreground=[("readonly", p["text"])])
     st.configure("TCheckbutton", background=p["bg"], foreground=p["text"],
-                 padding=4, indicatorwidth=24, indicatorheight=24)
+                 padding=6, indicatorwidth=24, indicatorheight=24)
     st.map("TCheckbutton", background=[("active", p["bg"])])
     st.configure("TScale", background=p["bg"], troughcolor=p["field"],
-                 sliderlength=16, thickness=8)
+                 sliderlength=20, thickness=10)
     st.map("TScale", background=[("active", p["bg"])])
     st.configure("TProgressbar", background=p["accent"], troughcolor=p["field"],
-                 borderwidth=0, thickness=4)
+                 borderwidth=0, thickness=6)
     st.configure("Treeview", background=p["field"], fieldbackground=p["field"],
-                 foreground=p["text"], borderwidth=0, rowheight=24)
+                 foreground=p["text"], borderwidth=0, rowheight=28)
     st.configure("Treeview.Heading", background=p["bg"], foreground=p["dim"],
                  borderwidth=0, font=(ui, 9))
     st.map("Treeview", background=[("selected", p["line"])],
            foreground=[("selected", p["text"])])
-    st.configure("TSpinbox", arrowcolor=p["dim"], borderwidth=0, padding=4)
+    st.configure("TSpinbox", arrowcolor=p["dim"], borderwidth=0, padding=6)
     st.configure("TLabelframe", background=p["bg"], bordercolor=p["line"])
     st.configure("TLabelframe.Label", background=p["bg"], foreground=p["dim"])
     st.configure("TSeparator", background=p["line"])

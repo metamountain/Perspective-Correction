@@ -747,3 +747,157 @@ def test_the_auto_crop_contains_no_invented_pixel():
         assert inside == 0, f"{inside} invented pixel(s) inside the crop at grow={grow}"
 
     assert s.crop_loss() < 0.5, "trimming half the frame is a crop nobody wanted"
+
+
+# --------------------------------------------------------------------------
+# Control-line coverage: the horizontal kind must match the vertical kind
+# property-for-property, not just work in the one happy-path test above.
+# --------------------------------------------------------------------------
+def test_a_control_line_of_either_kind_leaves_the_other_arrays_pool_untouched():
+    """The two kinds are stored in two separate arrays (`control_lines` for
+    vertical, `control_hlines` for horizontal) precisely so that stating one
+    never has any effect on the other. Adding a vertical must not create or
+    disturb anything in `control_hlines`, and adding a horizontal afterwards
+    must not disturb the vertical that is already sitting there."""
+    s, _ = _session_with_known_pose()
+    s.add_control_line(300, 60, 300, 540)            # vertical
+    assert len(s.control_lines) == 1
+    assert len(s.control_hlines) == 0, "a vertical must not touch the horizontal pool"
+
+    s.add_control_line(100, 100, 800, 100, kind="h")  # horizontal
+    assert len(s.control_hlines) == 1
+    assert len(s.control_lines) == 1, "a horizontal must not touch the vertical pool"
+    assert np.array_equal(s.control_lines[0], [300.0, 60.0, 300.0, 540.0]), \
+        "the pre-existing vertical must be exactly as it was, not merely the same count"
+
+
+def test_one_control_line_of_either_kind_leaves_the_detected_pool_in_charge():
+    """`refit` only replaces a kind's detected pool once that kind reaches two
+    lines (see the docstring on `ReviewSession.refit`): one of a kind is not
+    enough to determine a vanishing point, so the detector must still be the
+    one deciding. This is checked two ways: the fitted angle is bit-identical
+    to the no-control-line baseline (seeded RNG makes that a fair comparison),
+    and `model.diagnostics` -- which records the exact line count `estimate`
+    was called with -- still shows the large detected count, not 1."""
+    s, _ = _session_with_known_pose()
+    base_roll, base_pitch = s.model.roll, s.model.pitch
+    base_n_vertical = s.model.diagnostics["n_vertical"]
+    assert base_n_vertical > 2, "the detected pool must be the large one to start with"
+
+    s.add_control_line(300, 60, 300, 540)
+    assert not s.control_active
+    assert s.model.roll == base_roll and s.model.pitch == base_pitch, \
+        "one vertical control line must not move the fit at all"
+    assert s.model.diagnostics["n_vertical"] == base_n_vertical, \
+        "the estimator must still have been fed the detected pool, not the lone control line"
+
+    true_yaw = 6.0
+    sc = _horizontal_scene(yaw_deg=true_yaw)
+    hs = ReviewSession("x.jpg", Settings(correct_horizontal=True), image=sc.img)
+    base_yaw = hs.model.yaw
+    base_n_horizontal = hs.model.diagnostics["n_horizontal"]
+    assert base_n_horizontal > 2
+
+    a = sc.project((-6.0, -9.0, 16.0))
+    b = sc.project((6.0, -9.0, 16.0))
+    assert hs.add_control_line(a[0], a[1], b[0], b[1], kind="h") is not None
+    assert len(hs.control_hlines) == 1
+    assert hs.model.yaw == base_yaw, "one horizontal control line must not move the yaw"
+    assert hs.model.diagnostics["n_horizontal"] == base_n_horizontal, \
+        "the estimator must still have been fed the detected horizontal pool"
+
+
+def test_two_horizontal_control_lines_replace_the_detected_horizontal_pool():
+    """The horizontal twin of `test_two_control_lines_replace_the_detected_verticals`.
+    `model.diagnostics["n_horizontal"]` records exactly how many lines
+    `model.estimate` was called with, so it is a direct window onto whether the
+    detected pool (hundreds of candidates in a synthetic scene) or the two
+    hand-drawn lines were what actually got fitted."""
+    true_yaw = 6.0
+    sc = _horizontal_scene(yaw_deg=true_yaw)
+    s = ReviewSession("x.jpg", Settings(correct_horizontal=True), image=sc.img)
+    assert s.model.diagnostics["n_horizontal"] > 2
+    _add_facade_horizontals(s, sc)
+    assert len(s.control_hlines) == 2
+    assert s.model.diagnostics["n_horizontal"] == 2, \
+        "two horizontal control lines must replace the detected pool, not join it"
+
+
+def test_the_minimum_length_refusal_applies_to_horizontal_lines_too():
+    """`MIN_CONTROL_LENGTH_FRAC` guards against a mis-click landing two points
+    close together -- Hugin's own advice is to place them as far apart as
+    possible, because the direction of a short segment is poorly conditioned.
+    That guard is written once in `add_control_line` with no branch on `kind`,
+    so it must refuse a stubby horizontal exactly as it refuses a stubby
+    vertical. The lengths are derived from the constant itself, per this
+    project's rule against asserting a number merely observed."""
+    s, _ = _session_with_known_pose()
+    gh, gw = s.gray.shape[:2]
+    min_len_analysis = s.MIN_CONTROL_LENGTH_FRAC * min(gw, gh)
+    too_short = (min_len_analysis * 0.5) / s.scale
+    long_enough = (min_len_analysis * 1.5) / s.scale
+
+    assert s.add_control_line(100, 100, 100 + too_short, 100, kind="h") is None
+    assert len(s.control_hlines) == 0
+
+    assert s.add_control_line(100, 100, 100 + long_enough, 100, kind="h") is not None
+    assert len(s.control_hlines) == 1
+
+
+def test_clear_control_lines_is_kind_specific():
+    """Clearing one kind must leave the other exactly as it was -- a person who
+    decides their horizontal assertions were wrong should not have to re-draw
+    the verticals they got right."""
+    s, _ = _session_with_known_pose()
+    s.add_control_line(300, 60, 300, 540)
+    s.add_control_line(600, 60, 600, 540)
+    s.add_control_line(100, 100, 800, 100, kind="h")
+    s.add_control_line(100, 300, 800, 300, kind="h")
+    assert s.control_active and len(s.control_hlines) == 2
+
+    cleared = s.clear_control_lines(kind="h")
+    assert cleared == 2
+    assert len(s.control_hlines) == 0
+    assert len(s.control_lines) == 2, "clearing horizontals must not touch the verticals"
+    assert s.control_active, "the verticals are untouched, so they must still be driving the fit"
+
+
+def test_remove_control_line_is_kind_specific_in_both_directions():
+    """The mirror of `test_pick_and_remove_route_by_kind`, which only removed a
+    horizontal while checking the vertical survived: this removes a *vertical*
+    while checking the horizontals survive, so both directions of the
+    kind routing are actually exercised, not just one."""
+    s, _ = _session_with_known_pose()
+    s.add_control_line(300, 60, 300, 540)
+    s.add_control_line(600, 60, 600, 540)
+    s.add_control_line(100, 100, 800, 100, kind="h")
+    s.add_control_line(100, 300, 800, 300, kind="h")
+
+    assert s.remove_control_line(0, kind="v")
+    assert len(s.control_lines) == 1
+    assert len(s.control_hlines) == 2, "removing a vertical must not touch the horizontals"
+
+
+def test_pick_control_line_endpoint_only_finds_the_requested_kind():
+    """The strongest form of the kind-isolation check: place a vertical's
+    endpoint and a horizontal's endpoint at the *exact same pixel*, so that
+    proximity alone cannot tell them apart -- only the requested `kind` can.
+    `pick_control_line_endpoint(kind=...)` must resolve to the line of that
+    kind and never leak into the other array, even when the other array's
+    endpoint is equally close (here, coincident)."""
+    s, _ = _session_with_known_pose()
+    s.add_control_line(300, 60, 300, 540)             # vertical; endpoints (300,60),(300,540)
+
+    # Before any horizontal exists, asking for kind="h" at a point that sits
+    # exactly on the vertical's endpoint must find nothing -- an empty pool
+    # must not fall back to searching the other kind's array.
+    assert s.pick_control_line_endpoint(300, 60, kind="h") is None
+    assert s.pick_control_line_endpoint(300, 60, kind="v") == (0, 0)
+
+    # Now add a horizontal whose first endpoint exactly coincides with the
+    # vertical's second endpoint (300, 540).
+    s.add_control_line(300, 540, 800, 540, kind="h")
+    assert s.pick_control_line_endpoint(300, 540, kind="v") == (0, 1), \
+        "kind=v must resolve to the vertical's endpoint despite the coincident horizontal"
+    assert s.pick_control_line_endpoint(300, 540, kind="h") == (0, 0), \
+        "kind=h must resolve to the horizontal's endpoint despite the coincident vertical"
