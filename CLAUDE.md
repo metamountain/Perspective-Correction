@@ -136,11 +136,17 @@ everything else. The list below is not in that order; this is.
 
 **A. Tools and masking — small, visible, an afternoon or less each.**
 
-1. **Mark lines by rubberband.** `_click_mark` takes two clicks; press-drag-release
-   is wanted. The session layer already takes a whole segment in one call
-   (`add_control_line(x0, y0, x1, y1, display_scale, kind)`), so this is GUI-only.
-   **Trap**: a click that never moved must still mean "remove this mark", or the
-   removal gesture disappears with it.
+1. ~~**Mark lines by rubberband.**~~ **Done — it already worked.** `_mark_rubber` and
+   `_mark_commit` landed in `74da5a9` and are wired (`<B1-Motion>` and
+   `<ButtonRelease-1>` both dispatch on `_pending_mark`); the entry sat open here
+   anyway, which is the "two lists that must agree will not" failure again, this
+   time between the ledger and the code. **What was actually missing was the test**
+   — added 2026-09-15, `test_a_mark_is_dragged_out_in_one_gesture_and_a_still_click_still_removes`.
+   The trap is real and the code does handle it: a press that never moved falls
+   past `_mark_commit` (gated on `_mark_moved`) into `_click_mark`, so removal
+   survives — but only as a *first* click, since `pick_control_line` is guarded by
+   `_pending_mark is None`. Mid-placement, a click cannot delete. That is the
+   contract the test now pins.
 2. **Tool icons as one coherent set; bigger buttons; typography and spacing.** The
    window is judged by this. Do it as a **single pass** — icons, font sizes, button
    sizes and spacing share a visual language, and split across sessions they will

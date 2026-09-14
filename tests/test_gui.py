@@ -1154,3 +1154,56 @@ def test_jpeg_quality_spinbox_in_batch_options():
                 f"no 'jpeg quality' label found in batch options, got {labels}")
     finally:
         app.destroy()
+
+
+def test_a_mark_is_dragged_out_in_one_gesture_and_a_still_click_still_removes():
+    """Press-drag-release places one control line; a press that never moved removes.
+
+    Both halves are here because they share one binding, and that is the whole
+    risk: making the rubberband work is the easy part, keeping "click an
+    existing mark to delete it" alive beside it is the part that breaks.  The
+    drag landed in `74da5a9` with no coverage at all -- the ledger still called
+    it open while the code was already doing it -- so this asserts the wiring
+    (`_on_click_before` -> `<B1-Motion>` -> `<ButtonRelease-1>`), not the
+    helpers in isolation.
+    """
+    app = _app()
+    try:
+        _loaded(app, 1280, 800)
+        r = app.review
+        s = r.session
+        r.v_mark.set(True)
+        ox, oy = r._before_off
+
+        def ev(dx, dy):                       # image-origin -> canvas coords
+            return types.SimpleNamespace(x=dx + ox, y=dy + oy)
+
+        # How long a segment must be *in display pixels* to clear the session's
+        # own minimum -- derived rather than guessed, so the test does not break
+        # when the window size or the asset changes.
+        inv = s.scale / max(r._before_scale, 1e-9)
+        need = s.MIN_CONTROL_LENGTH_FRAC * min(s.gray.shape[:2]) / inv
+        top, bottom = 40, 40 + int(need * 1.5)
+
+        r._on_click_before(ev(60, top))
+        assert r._pending_mark is not None, "the press should start a mark"
+        r._on_before_b1motion(ev(62, bottom))
+        assert r._mark_moved, "motion should turn the press into a drag"
+        r._on_before_b1release(ev(62, bottom))
+        assert len(s.control_lines) == 1, "press-drag-release places one line"
+        assert r._pending_mark is None, "the gesture should be finished, not half-open"
+
+        mid = (top + bottom) // 2
+        r._on_click_before(ev(61, mid))       # on the line, and never moved
+        r._on_before_b1release(ev(61, mid))
+        assert len(s.control_lines) == 0, (
+            "a still click on a placed mark must still remove it -- that "
+            "gesture has nowhere else to live")
+
+        short = max(2, int(need * 0.2))
+        r._on_click_before(ev(200, top))
+        r._on_before_b1motion(ev(200, top + short))
+        r._on_before_b1release(ev(200, top + short))
+        assert len(s.control_lines) == 0, "a few pixels is not a control line"
+    finally:
+        app.destroy()
