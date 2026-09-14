@@ -103,14 +103,13 @@ declared `mlsd` extra) is installed in the **system** interpreter, so
 
 ## Ledger — the only place status lives
 
-**Suite 2026-09-14, `--full` at `0978371`: 299 tests, 2 failed, 2 skipped,
-51.5 s.** Both failures are the single receding-row photograph in the bug entry
+**Suite 2026-09-14, `--full` at `02277a4`: 301 tests, 2 failed, 2 skipped,
+55.5 s.** Both failures are the single receding-row photograph in the bug entry
 below (3.71° round-trip on one asset) — the long-standing limitation, nothing
-else. **The ruler regression this header carried is gone**: the test that failed
-with "the rulers drew nothing" was superseded when rulers became guides pulled
-from the cross (see Done), so the suite is back to its one known red. Note the
-wall time fell 160 s → 52 s in the same commit that split the runner — that is
-the parallel split, not tests disappearing, and `--full` is what produced 299.
+else, and the only red the suite has. The earlier ruler regression is gone for
+good: that test was superseded when rulers became guides pulled from the cross
+(see Done). Wall time fell 160 s → ~55 s when the runner was split in parallel;
+that is the split, not tests disappearing, and only `--full` produces 301.
 Re-run before trusting this — it is a measurement, not a
 promise, and no entry below may restate it. An item stays under **Open** until
 nothing is left to do; **Done** is only for finished work. `Pn` labels are short
@@ -125,10 +124,10 @@ handles for work packages; entries written out in full here stand on their own.
   not exist as bindings**, so point prompts — the thing "click-to-select the
   building" is about — are not reachable, whatever the box button does. Wire it
   or delete it; "a seam with tests is half a feature" applies exactly.
-- **[dead] Two genuinely dead helpers, safe to delete**: `sam2seg.predict_box`
-  (docstring says it exists for a test that does not call it; the live path is
-  the subprocess + PNG route) and `vanishing._plausible_horizontal` (a scalar
-  twin of the vectorised `_plausible_horizontal_rows` the RANSAC loop uses).
+*(The two dead helpers listed here — `sam2seg.predict_box` and
+`vanishing._plausible_horizontal` — are **gone**, deleted 2026-09-14 and verified
+absent from both files; `--full` stays at 301 tests, 2 failed, so nothing was
+using them. The deletion is uncommitted in the working tree.)*
 
 
 **Priority, re-sorted 2026-09-14 (user: "sort jobs, start with easy ones, first
@@ -302,15 +301,12 @@ everything else. The list below is not in that order; this is.
      `ArchitectureScheme.draw_preview`); what's missing is a GUI toggle and a decision
      on which of the two to show by default.
 
-- **[bug] The lens profile is picked essentially at random.** `distortion.py`
-  calls `db.find_lenses(cam, "", "")` with an **empty lens name** and takes
-  `lenses[0]`. The EXIF lens model *is* read (`_exif_lens_model`) and never
-  passed in, so on an interchangeable-lens body this selects an arbitrary
-  profile from everything known for that camera — and **a wrong distortion
-  profile bends straight lines the wrong way**, which is worse than leaving
-  them alone and against this project's own standard. The code comment calls it
-  "imperfect but better than nothing"; for distortion that is not true. Pass the
-  lens model, or refuse when the lens is unknown.
+*(The lens-profile bug that stood here — `find_lenses(cam, "", "")` with an empty
+name, then `lenses[0]` — was fixed in `02277a4` and is recorded in Done. Verified
+against the code before deleting the entry: `distortion.py:160` now passes the
+EXIF `lens_model`. It had been open here **and** closed in Done at the same time,
+which is the "two lists that must agree will not" failure, caught on a drift
+check rather than by the file itself.)*
 - **Rulers: simple grey lines, dragged out of the black cross** (09-14, user).
   Hover over the cross or the border reveals; drag pulls a guide onto Q2 and
   leaves it there. Done so far: `_draw_rulers` targets `c_after` (it guarded on
@@ -571,10 +567,12 @@ nothing is silently re-proposed and so a search still finds it.
 had been false for eight commits.** Actual state, measured:
 
 - `D:\Coding\Perspective-Correction` is the **live checkout**. `main` is at
-  `0978371` and **two commits ahead of `origin/main`** (`843a76b`) — `74da5a9`
-  (guides from the cross, both previews maximized, the fast/full runner split)
-  and `0978371` (ignore local `.bak`) are local only, so today's UI work is not
-  yet pushed. Uncommitted on top: `tests/test_review.py`, `tools/debug_ui.py`.
+  `02277a4` and **five commits ahead of `origin/main`** (`843a76b`): `74da5a9`
+  (guides from the cross, both previews maximized, the fast/full runner split),
+  `0978371` (ignore local `.bak`), `89677f0` (caps measured, buttons enlarged),
+  `35d646b` (dead-code sweep) and `02277a4` (the lens-lookup fix). All local
+  only — **a full day of work exists on one disk**, which is the one risk in this
+  note worth acting on. Working tree clean at the last check.
 - **`D:\Coding\Batch-Perspective-Correction` still exists.** The rescue section at
   the foot of this file says that folder "is gone"; it is not. It is a stale
   checkout one commit behind (`1dc2670`, still `src/bpc/`) with its own modified
@@ -623,9 +621,20 @@ had been false for eight commits.** Actual state, measured:
 
 ## Worker (local Qwen3.8-27B)
 
-**It can read, but cannot write or execute — a *generator and reviewer*, not an agent** (established
-2026-09-14, in its own words: *"in this session I have no tool to write the file
-or launch the process, so that's the blocker"*). `qwen -p` here has no file-editing and no shell,
+**The limit was never the model or the server — it is the client harness** (established
+2026-09-14). Hit llama.cpp under Unsloth Studio **directly** at
+`127.0.0.1:8888/v1/chat/completions` with an OpenAI `tools[]` array and it returns
+`finish_reason=tool_calls` with well-formed arguments in **1.6 s**; a two-turn loop
+(`write_file` then `run_shell` to read the file back) wrote the file, verified it
+and reported the match in **22.8 s** — it chose the verification step itself.
+**So the worker is agent-capable; it needs a client that executes the calls.**
+Measured with `enable_thinking:False`; thinking-mode tool calling is *unmeasured*.
+
+**`qwen -p` is the harness that has no tools**, and everything below describes only it
+(re-confirmed 2026-09-14: a write-one-file probe returned **nothing in 10 minutes**,
+matching the failure recorded here from the start). In its own words: *"in this session
+I have no tool to write the file or launch the process, so that's the blocker"*.
+`qwen -p` here has no file-editing and no shell,
 but it **can** read the repo: asked to triage six dead-code candidates it cited
 `pipeline.py` (line 223 against an actual 225), named the vectorised
 `_plausible_horizontal_rows` twin and the GUI's own `_sam_box` — all verified
@@ -649,13 +658,56 @@ produced code matching it exactly, first try. What it cannot do is find out what
 the names are, verify its own work, or notice that the file moved under it.
 Anything needing those is a metered subagent or the architect.
 
-If tool access is ever enabled in the CLI, re-test before trusting it with a
-multi-step package — everything above is about the harness, not the model.
+### How to actually use it — `tools/worker_agent.py` (2026-09-14, works)
+
+**Do not use the plugin and do not use `qwen -p`. Use the server.** `tools/worker_agent.py`
+is a ~150-line client: it POSTs to `/v1/chat/completions` with a `tools[]` array, executes
+the calls the worker returns, feeds the results back, and loops. The worker gets four
+repo-scoped tools — `read_file`, `grep`, `str_replace`, `run_tests` — and **no raw shell**.
+
+```
+python tools/worker_agent.py package.txt       # or  -  for stdin
+```
+
+**First real job, measured:** the two dead helpers below. It read both files, made two
+`str_replace` edits, grepped to confirm the *kept* twins (`predict_box_and_points`,
+`_plausible_horizontal_rows`) were still there, and stopped. `git diff` was 23 deleted
+lines and nothing else — no reformatting, no drift. Suite after: 301 / 2 failed / 2
+skipped, the standing baseline. **That is a real delegation, end to end.**
+
+**It refused to claim success it could not verify**, which is the property that makes it
+usable: when its test runs came back broken it said so rather than asserting green. The
+breakage was *this harness*, not the worker — `run_tests` returned the raw output tail,
+which was the `invalid command name ..._pump` Tk teardown noise that "Running things"
+documents as harmless. It retried eight times against garbage. **Never hand the worker a
+tool that returns an unparsed tail**; `run_tests` now returns the verdict line and strips
+that noise. Eight of its twelve turns were this bug.
+
+**Operationally — the server is the dependency, nothing else.**
+
+* Start it: `unsloth studio run --model unsloth/Qwen3.8-27B-GGUF:UD-IQ4_XS` (~45 s to load).
+* **Closing the console that started Studio kills the server.** Found the hard way: the
+  endpoint went to connection-refused mid-session. Restart with the line above; the API key
+  in `~/.qwen/settings.json` survives a restart, so the harness keeps working.
+* `unsloth start claude --as-subagent …` registers a *plugin* MCP server instead. It works,
+  but MCP servers attach at **session start** — running it inside a live session does
+  nothing for that session. And it launches its own Claude session, so it cannot be driven
+  from a non-interactive shell (it exits 1 on missing stdin). **The harness needs none of it.**
+* `UNSLOTH_STUDIO_URL` overrides the endpoint if Studio is not on localhost.
+
+**The limits are unchanged and still bind.** One package, two tool turns, four
+hand-written tools is a floor, not a licence. The architect still reads `git diff` before
+anything is committed — a green suite is evidence, not permission — and anything needing
+judgement (which of two designs, whether a seam should exist) is not a package at all.
 
 
-**Context is 125 056** (2026-09-14, from the running server's `/v1/models`
+**Context is 96 256** (2026-09-14, from the running server's `/v1/models`
 `context_length` — not the card, not the Studio panel, which shows the
-*requested* number). Reached with the KV cache at `q4_0` on both halves and
+*requested* number). The same response reports `native_context_length: 262144`,
+which is where the drifting figures come from: **the served window is the loaded
+quant's, not the model's.** This file has now carried 125 056, 94 848 and 96 256
+for one number — trust only a figure with a date beside it, and re-ask the server.
+Reached with the KV cache at `q4_0` on both halves and
 speculation off. **Qwen Code does not ask the server**: `contextLimit =
 model.contextWindowSize ?? tokenLimit(id)`, and an unknown id falls back to
 `DEFAULT_TOKEN_LIMIT = 200 000`, so it must be told via
@@ -700,7 +752,7 @@ running server and write the date beside the number.**
   never let Qwen grade Qwen's own code. The worker runs the project's tests; the
   architect reviews against them. Vendor evals are likewise objective-benchmark based
   (`QwenLM/Qwen3` `eval/`, resumable inference scripts).
-- Context is **94 848** (measured from the server, not the card). An agentic CLI
+- Context: see the dated figure above — do not restate it here. An agentic CLI
   re-prefills the whole context on every tool round trip, so the lever is removing
   exploration: look up names yourself (`correct_horizontal`, `Result.roll_deg`, …) and
   hand them over. The architect does the reading.
@@ -725,6 +777,10 @@ running server and write the date beside the number.**
 - `docs/worker-environment.md` — chat-template internals, the llama.cpp
   `reasoning_tokens`-always-0 bug, and the launcher/`.bat`/resume notes; the Worker
   section above only points here.
+- `docs/worker-anleitung.txt` — **German, for the user, not the architect**: how to
+  bring the worker up in a fresh session from nothing (start the server, write the
+  package, run `tools/worker_agent.py`, check the diff yourself) and the four
+  gotchas that have cost time. Read `tools/worker_agent.py` itself for the harness.
 - `.claude/skills/debug/SKILL.md` — benchmark / BiRefNet failure workflow, the
   two-Python setup, Windows pitfalls.
 - `.claude/skills/grounding-sam/SKILL.md` — Grounding DINO + SAM2 detect-then-segment masking,
