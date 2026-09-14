@@ -118,15 +118,6 @@ handles for work packages; entries written out in full here stand on their own.
 
 ### Open — do these
 
-- **[bug] `_exif_lens_model` is read and thrown away — wiring it up IS the
-  distortion fix** (09-14, dead-code sweep, triaged and verified).
-  `distortion.py` defines `_exif_lens_model` and **nothing calls it**, while
-  `undistort_map` looks the lens up as `db.find_lenses(cam, "", "")` — empty
-  name — and takes `lenses[0]`. `pipeline.py:225` calls `undistort_map`, so
-  `--undistort lensfun` runs today and can silently apply an arbitrary profile
-  from everything known for that camera. **The only one of six dead symbols that
-  makes a *live* feature wrong**, so it goes first: a wrong distortion profile
-  bends straight lines the wrong way, which is worse than not correcting at all.
 - **[seam] The SAM prompt layer in `review.py` is unreachable.**
   `set_sam_box`, `add_sam_point` and `clear_sam_prompts` have **no callers**:
   the GUI keeps its own `self._sam_box` / `_sam_points` and never routes through
@@ -354,6 +345,28 @@ everything else. The list below is not in that order; this is.
   they will not match.
 
 ### Done — rely on these
+
+- **[bug, fixed] The lens profile was picked essentially at random** (09-14).
+  Two defects in one path. `undistort_map` queried
+  `db.find_lenses(cam, "", "")` — empty name — and took `lenses[0]`, with a
+  comment calling it "imperfect but better than nothing"; on an
+  interchangeable-lens body that is an arbitrary profile out of everything known
+  for the camera, and **a wrong distortion profile bends straight lines the
+  wrong way**, which is worse than leaving them alone. And `_exif_lens_model`,
+  which reads the name that was never passed in, did `str(lm)` on piexif's
+  **bytes** — yielding the literal `b'NIKKOR 18-55mm'`, a string the database
+  can never match, so even a camera that records its lens fell through to the
+  generic path.
+  Now: decode properly, look the lens up **by name**, and when that finds
+  nothing accept a generic query **only if it returns exactly one lens** — a
+  fixed-lens body, where there is nothing to get wrong. More than one and it
+  declines and returns None, so the photograph is left alone. Pinned by
+  `test_the_lens_model_comes_back_as_text_not_a_bytes_repr` (asserts the *type*
+  of thing that comes out, which is the only way this bug is visible) and
+  `test_an_unknown_lens_is_refused_rather_than_guessed`. The stronger case —
+  a multi-lens body — needs lensfunpy and a real camera in the database and is
+  deliberately not faked.
+
 
 - **The two remaining batch-era caps, measured** (09-14, `analysis/measure_caps.py`,
   51 files / 49 after deduplication, 0 load errors).
