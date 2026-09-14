@@ -55,7 +55,7 @@ def read_file(path: str, start: int = 1, end: int = 0) -> str:
 
 
 def grep(pattern: str) -> str:
-    r = subprocess.run(["git", "grep", "-n", "-e", pattern, "--", "*.py"],
+    r = subprocess.run(["git", "grep", "-nE", "-e", pattern, "--", "*.py"],
                        cwd=REPO, capture_output=True, text=True)
     return (r.stdout or "(no matches)")[:3000]
 
@@ -87,7 +87,7 @@ def run_tests(full: bool = False) -> str:
 _TOOLS = [
     ("read_file", "Read a repo file with line numbers.",
      {"path": {"type": "string"}, "start": {"type": "integer"}, "end": {"type": "integer"}}, ["path"]),
-    ("grep", "Search every tracked .py file for a pattern.",
+    ("grep", "Search every tracked .py file. Extended regex: a|b works.",
      {"pattern": {"type": "string"}}, ["pattern"]),
     ("str_replace", "Replace one unique verbatim snippet in a file.",
      {"path": {"type": "string"}, "old": {"type": "string"}, "new": {"type": "string"}},
