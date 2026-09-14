@@ -17,7 +17,7 @@ Two kinds of dependency, treated differently on purpose:
 
 * **optional** -- the learned backends (M-LSD, DeepLSD, LaMa, ComfyUI, BiRefNet).
   These are only a problem when *asked for*.  A run left at the defaults
-  (`detector=auto`, `fill=telea`, `mask=off`) must stay runnable on a machine
+  (`detector=lsd`, `fill=telea`, `mask=off`) must stay runnable on a machine
   with nothing but the core installed; that is the point of them being optional.
   So the pre-flight fails only on a backend the command line explicitly selected,
   and says which flag pulled it in.
@@ -129,6 +129,17 @@ def preflight(settings):
         elif not BN.available(settings.birefnet_model):
             errs.append(f"--mask birefnet: weights do not load ({settings.birefnet_model}); "
                         f"run --mask-info for detail")
+    if settings.mask_mode == "gdino":
+        from . import masks as MK
+        if not MK.gdino_available(settings.gdino_model):
+            errs.append("--mask gdino needs transformers (pip install transformers timm einops) "
+                        "and a Grounding DINO model dir; run --doctor for detail")
+        if not settings.birefnet_model:
+            errs.append("--mask gdino needs --birefnet-model <weights> (or 'auto') for the matte")
+        else:
+            from . import birefnet as BN
+            if not BN.available(settings.birefnet_model):
+                errs.append(f"--mask gdino: BiRefNet weights do not load ({settings.birefnet_model})")
     return errs
 
 
@@ -177,10 +188,36 @@ def doctor() -> int:
             lines.append(f"  [{'yes' if ok else 'no ':>3}]  fill {mode:<8} {FILL.describe(mode, st)}")
         b = BN.backends()
         weights = BN.find_weights()
-        ok = bool(weights) and b.get("torch", False)
-        lines.append(f"  [{'yes' if ok else 'no ':>3}]  mask birefnet                "
-                     f"torch={'yes' if b.get('torch') else 'no'}, "
-                     f"weights={'found: ' + weights if weights else 'none found'}")
+        # torch is not enough. BiRefNet's architecture is loaded through
+        # `transformers`, so an interpreter with torch and the weights and no
+        # transformers reports ready and then fails on the first photograph.
+        # That is exactly what happened: `--doctor` said "[yes] mask birefnet"
+        # on the very interpreter where `--mask-info` said "loads: NO -- No
+        # module named 'transformers'". Two checks of one fact, disagreeing;
+        # this one now reads the same `backends()` dict that --mask-info does.
+        missing = BN.arch_missing()
+        ok = bool(weights) and not missing
+        if not missing:
+            why = "ready" if weights else "no weights found"
+        else:
+            # Name the bridge before the install. Opting in costs torch,
+            # torchvision, transformers, timm and einops -- gigabytes -- to buy
+            # 0.70 -> 0.65 deg. That is a fine trade for someone who already
+            # has them and a bad one for everybody else, so the line says so
+            # rather than reading as a broken requirement.
+            why = ("optional, not needed for a normal run; wants "
+                   + ", ".join(missing))
+        lines.append(f"  [{'yes' if ok else 'no ':>3}]  mask birefnet                {why}"
+                     + (f"; weights found: {weights}" if weights else ""))
+        if missing and weights:
+            lines.append("           (an existing ComfyUI python can write the masks once: "
+                          "--mask-export DIR, then --mask file DIR)")
+        from . import masks as MK
+        gok = MK.gdino_available(st.gdino_model)
+        lines.append(f"  [{'yes' if gok else 'no ':>3}]  mask gdino                   "
+                     + ("ready (transformers + Grounding DINO model present)" if gok
+                        else "needs transformers (pip install transformers timm einops) "
+                             "+ a Grounding DINO model dir"))
     else:
         lines += ["", "optional backends: cannot check -- cv2 or numpy missing (see core above)"]
 

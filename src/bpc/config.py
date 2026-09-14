@@ -12,10 +12,10 @@ from dataclasses import dataclass, asdict
 @dataclass
 class Settings:
     # ---- detection ----
-    # auto | lsd | fld | hough | mlsd | hybrid | union | deeplsd | deep-hybrid
+    # lsd | fld | mlsd | hybrid | union | deeplsd | deep-hybrid
     # | deep-union.  The deep-* pair is the mlsd hybrid/union with DeepLSD as
     # the guide instead of M-LSD; see lines.detect_segments.
-    detector: str = "auto"
+    detector: str = "lsd"
     hybrid_dist_tol: float = 8.0
     mlsd_model: str = ""                # path, or a name in models/
     mlsd_score_thr: float = 0.10
@@ -41,7 +41,7 @@ class Settings:
     # 0.61 deg off, 3.58 deg on.  See docs/accuracy.md.
     merge_lines: bool = False
     merge_horizontal: bool = False
-    mask_mode: str = "off"          # off | file | birefnet
+    mask_mode: str = "off"          # off | file | birefnet | gdino
     birefnet_model: str = ""        # path to BiRefNet weights
     birefnet_threshold: float = 0.5  # matte is near-binary; not a tuning knob
     birefnet_device: str = ""       # "" = cuda when available
@@ -49,6 +49,17 @@ class Settings:
     birefnet_shrink_frac: float = 0.008  # of the diagonal; ~15 px at 1600
     mask_file: str = ""             # a PNG, or a folder of <stem>.png
     mask_invert: bool = False       # set when white means "keep"
+    gdino_prompt: str = "building"  # text prompt for the --mask gdino detector
+    gdino_model: str = ""           # GDINO model dir; "" = models/GroundingDINO
+
+    # ---- line partitioning (ArchitectureScheme) ----
+    # Off by default: the classifier only ever *removes* evidence, and this is a
+    # batch tool that runs unattended -- so it stays opt-in until measured
+    # against the assets.  When on, detected lines are partitioned into the
+    # building's Manhattan planes before the VP search; a non-established frame
+    # filters nothing (a safe no-op), so the risk is bounded to frames where a
+    # second horizontal plane is confidently present.
+    use_scheme: bool = False
 
     # ---- vanishing point search ----
     ransac_iters: int = 800
@@ -69,9 +80,9 @@ class Settings:
     # ---- correction ----
     pitch_strength: float = 1.0
     roll_strength: float = 1.0
-    max_pitch_deg: float = 20.0
+    max_pitch_deg: float = 30.0        # raised from 20 (2026-09-13): admit steep corner shots
     refuse_beyond_limit: bool = True   # a capped correction is refused,
-                                     # not trimmed to fit
+                                      # not trimmed to fit
     max_roll_deg: float = 12.0
     min_correction_deg: float = 0.15    # below this: nothing worth doing
     correct_roll: bool = True
@@ -93,7 +104,16 @@ class Settings:
     # for the open design question (which plane, and who chooses it).
     correct_horizontal: bool = False
     horizontal_strength: float = 1.0
-    max_horizontal_deg: float = 8.0
+    # Raised 8 -> 30 on 2026-09-13 (user: "horizontal correction is often way too
+    # weak").  The 8 above was reasoned for an *unattended* batch, where a wrong
+    # yaw shears a frame nobody looks at.  Manual review is the product now, so
+    # that trade is gone: P9 measured the real single-VP yaw on this pool at
+    # 16-70 deg, which the old cap clamped to a fraction of what the geometry
+    # asked for.  30 matches the manual slider's range, so automatic and by-hand
+    # now reach the same place.  The risk the old comment describes is unchanged
+    # and real -- a weak horizontal VP still shears -- it is simply visible to
+    # the person reviewing the photograph before anything is written.
+    max_horizontal_deg: float = 30.0
     min_horizontal_support: float = 0.3
 
     # ---- gating ----

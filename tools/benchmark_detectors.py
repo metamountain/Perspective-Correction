@@ -64,7 +64,7 @@ from bpc.pipeline import analyse                                 # noqa: E402
 # roll-only, pitch-only and combined cases are all represented.
 DELTAS = [(2.0, 0.0), (-3.0, 0.0), (0.0, 4.0), (0.0, -5.0), (2.5, 3.5), (-1.5, -2.5)]
 
-ALL_DETECTORS = ("lsd", "fld", "hough", "mlsd", "hybrid", "union",
+ALL_DETECTORS = ("lsd", "fld", "mlsd", "hybrid", "union",
                  "deeplsd", "deep-hybrid", "deep-union")
 
 
@@ -127,7 +127,7 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("folder", help="a folder of photographs, or one file")
-    ap.add_argument("--detectors", default="lsd,fld,hough",
+    ap.add_argument("--detectors", default="lsd,fld",
                     help="comma separated; any of " + ", ".join(ALL_DETECTORS))
     ap.add_argument("--focal", type=float, default=24.0,
                     help="35mm-equivalent focal length, fixed in every pass "

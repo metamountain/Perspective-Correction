@@ -1,10 +1,15 @@
 """Line segment detection, merging, classification and weighting.
 
-The detector chain is LSD -> FastLineDetector -> Canny+HoughLinesP.  LSD is the
-accurate one and is what darktable's ashift uses; the other two only exist
-because OpenCV dropped and re-added LSD several times and because contrib
-builds are not always present.  Whichever runs, everything downstream sees the
-same ``(N, 4)`` endpoint array.
+The detector chain is LSD -> FastLineDetector.  LSD is the accurate one and is
+what darktable's ashift uses; FLD only exists because OpenCV dropped and
+re-added LSD several times and because contrib builds are not always present.
+Canny+HoughLinesP (`hough`) used to sit at the end of that chain as a silent
+last resort and was also a user-selectable mode; removed 2026-09-12 -- it is
+much noisier than LSD/FLD (no idea what a building is, votes on every seam and
+twig) and the silent fallback meant picking `lsd` explicitly could still hand
+back Hough's lines with no indication. The chain now returns an empty result
+rather than degrading to a worse detector; see CLAUDE.md's Ledger. Whichever
+detector runs, everything downstream sees the same ``(N, 4)`` endpoint array.
 """
 from __future__ import annotations
 
@@ -53,18 +58,6 @@ def _fld(gray: np.ndarray):
     if seg is None or len(seg) == 0:
         return None
     return np.asarray(seg, dtype=float).reshape(-1, 4), "fld"
-
-
-def _hough(gray: np.ndarray, min_len: float):
-    v = float(np.median(gray))
-    lo = int(max(0, 0.66 * v))
-    hi = int(min(255, 1.33 * v))
-    edges = cv2.Canny(gray, lo, hi, L2gradient=True)
-    seg = cv2.HoughLinesP(edges, 1, np.pi / 720.0, threshold=int(max(30, min_len * 0.6)),
-                          minLineLength=float(min_len), maxLineGap=float(max(3.0, min_len * 0.25)))
-    if seg is None or len(seg) == 0:
-        return None
-    return np.asarray(seg, dtype=float).reshape(-1, 4), "hough"
 
 
 def _mlsd(bgr, settings):
@@ -122,7 +115,7 @@ def gate_by(seg: np.ndarray, guide: np.ndarray, angle_tol_deg: float = 6.0,
     return seg[ok]
 
 
-def detect_segments(gray: np.ndarray, min_len: float, detector: str = "auto",
+def detect_segments(gray: np.ndarray, min_len: float, detector: str = "lsd",
                     bgr=None, settings=None):
     """Return ``(segments, detector_name)``; segments may be empty."""
     if detector in ("hybrid", "union", "deep-hybrid", "deep-union"):
@@ -155,14 +148,11 @@ def detect_segments(gray: np.ndarray, min_len: float, detector: str = "auto",
         if got is not None:
             return got
         return np.zeros((0, 4)), "mlsd"
-    chain = {"auto": (_lsd, _fld), "lsd": (_lsd,), "fld": (_fld,), "hough": ()}[detector]
+    chain = {"auto": (_lsd, _fld), "lsd": (_lsd,), "fld": (_fld,)}[detector]
     for fn in chain:
         got = fn(gray)
         if got is not None:
             return got
-    got = _hough(gray, min_len)
-    if got is not None:
-        return got
     return np.zeros((0, 4)), "none"
 
 

@@ -7,7 +7,7 @@ import numpy as np
 
 import synth
 from bpc.config import Settings
-from bpc.review import AUTO, MANUAL, ReviewSession
+from bpc.review import AUTO, MANUAL, ReviewSession, darken_outside_crop
 
 
 def _session(**kw):
@@ -63,6 +63,48 @@ def test_a_click_picks_the_nearest_segment_and_misses_return_none():
     mx, my = (seg[0] + seg[2]) / 2, (seg[1] + seg[3]) / 2
     assert s.pick_line(mx / s.scale, my / s.scale, display_scale=1.0) is not None
     assert s.pick_line(-500.0, -500.0, display_scale=1.0) is None
+
+
+def test_painting_the_mask_strikes_what_it_covers_and_erasing_hands_it_back():
+    """The brush paints the ignore region by hand -- "that car is not the
+    building" -- and a line is struck only when the paint covers it end to end,
+    the same `drop_by_endpoints` rule the automatic mask uses, so an edge that
+    merely crosses the painted area keeps its say.
+
+    Erasing is the same call with `erase=True`: the struck line must come back,
+    which is what proves the strike is re-derived from the region each time
+    rather than accumulated.
+    """
+    s, _ = _session()
+    assert s.enabled.all()
+    assert s.paint is None, "nothing is painted until the brush is used"
+    i = int(np.argmax(s.vert.length))
+    seg = s.vert.seg[i]
+    pts = [((seg[0] + t * (seg[2] - seg[0])) / s.scale,
+            (seg[1] + t * (seg[3] - seg[1])) / s.scale)
+           for t in (0.0, 0.25, 0.5, 0.75, 1.0)]     # displayed coords, scale=1
+
+    share = s.paint_ignore(pts, display_scale=1.0, radius=6.0)
+    assert 0.0 < share < 1.0, f"a stroke paints part of the frame, got {share}"
+    assert not s.enabled[i], "a line covered end to end is struck"
+    assert s.detect_info.get("mask") is not None, "and the shown mask includes it"
+
+    s.paint_ignore(pts, display_scale=1.0, radius=6.0, erase=True)
+    assert not s.paint.any(), "erasing the same stroke clears the region"
+    assert s.enabled[i], "and the line it struck comes back"
+
+
+def test_a_stroke_far_from_every_line_paints_but_strikes_nothing():
+    s, _ = _session()
+    before = s.enabled.copy()
+    s.paint_ignore([(2.0, 2.0), (6.0, 6.0)], display_scale=1.0, radius=3.0)
+    assert np.array_equal(s.enabled, before), "no line is under that corner"
+
+
+def test_an_empty_stroke_is_a_noop():
+    s, _ = _session()
+    assert s.paint_ignore([], display_scale=1.0) == 0.0
+    assert s.paint is None
 
 
 def test_manual_sliders_override_the_fit():
@@ -145,14 +187,25 @@ def test_mask_opacity_is_adjustable_and_zero_means_invisible():
     src = _with_painted_mask(sc, d)
     s = ReviewSession(src, Settings())
     s.set_mask("file", d)
-    s.mask_alpha = 0.0
-    plain = s.render_before(320)
-    s.mask_alpha = 0.9
-    tinted = s.render_before(320)
-    import shutil
-    shutil.rmtree(d, ignore_errors=True)
-    assert plain.shape == tinted.shape
-    assert not np.array_equal(plain, tinted), "the opacity slider must do something"
+    try:
+        # Lines on (the default): the wash must respond to the slider.
+        s.mask_alpha = 0.0
+        plain = s.render_before(320)
+        s.mask_alpha = 0.9
+        tinted = s.render_before(320)
+        assert plain.shape == tinted.shape
+        assert not np.array_equal(plain, tinted), "the opacity slider must do something"
+        # Lines off: the wash is independent of the line overlay, so the slider
+        # must still work -- it was dead whenever "Lines" was switched off.
+        s.mask_alpha = 0.0
+        plain_nl = s.render_before(320, show_lines=False)
+        s.mask_alpha = 0.9
+        tinted_nl = s.render_before(320, show_lines=False)
+        assert not np.array_equal(plain_nl, tinted_nl), \
+            "opacity must stay adjustable with the line overlay off"
+    finally:
+        import shutil
+        shutil.rmtree(d, ignore_errors=True)
 
 
 def test_the_mask_reports_how_many_lines_it_removed():
@@ -304,6 +357,75 @@ def test_marking_verticals_does_not_get_the_photo_skipped():
     assert "conf=n/a" in s.status_text(), "a confidence built on line count is not meaningful here"
 
 
+def _horizontal_scene(yaw_deg=6.0, seed=7):
+    """A facade seen at a known yaw; two points at the same world height but
+    different positions along the wall project to a genuine image horizontal --
+    ground truth for the yaw, not a detection."""
+    import synth
+    sc = synth.Scene(w=900, h=600, yaw_deg=yaw_deg, seed=seed)
+    return sc
+
+
+def _add_facade_horizontals(s, sc):
+    for v in (-9.0, 3.0):
+        a = sc.project((-6.0, v, 16.0))
+        b = sc.project((6.0, v, 16.0))
+        assert a and b
+        assert s.add_control_line(a[0], a[1], b[0], b[1], kind="h") is not None
+
+
+def test_horizontal_control_lines_drive_the_yaw():
+    """The horizontal twin of the verticals: two hand-drawn horizontals replace
+    the detected pool and steer the yaw to where the scene actually is.  This is
+    only reachable with correct_horizontal on -- you cannot straighten a yaw you
+    told it not to."""
+    true_yaw = 6.0
+    sc = _horizontal_scene(yaw_deg=true_yaw)
+    s = ReviewSession("x.jpg", Settings(correct_horizontal=True), image=sc.img)
+    _add_facade_horizontals(s, sc)
+    assert len(s.control_hlines) == 2
+    got = math.degrees(s.model.yaw)
+    assert abs(got - true_yaw) < 2.5, (
+        f"yaw off by {got - true_yaw:.2f} deg after stating the horizontals")
+
+
+def test_marking_horizontals_does_not_get_the_photo_skipped():
+    """The same trap as the verticals: a confidence built on a count of detected
+    lines would refuse two hand-stated horizontals.  Stating them is a decision,
+    not scarce evidence."""
+    sc = _horizontal_scene()
+    s = ReviewSession("x.jpg", Settings(correct_horizontal=True), image=sc.img)
+    _add_facade_horizontals(s, sc)
+    assert s.would_skip() is None, f"would skip: {s.would_skip()}"
+    st = s.status_text()
+    assert "MARKED" in st
+    assert "horizontal control line" in st
+
+
+def test_reset_to_auto_forgets_both_control_kinds():
+    s, _ = _session_with_known_pose()
+    s.add_control_line(300, 60, 300, 540)
+    s.add_control_line(600, 60, 600, 540)
+    s.add_control_line(100, 100, 800, 100, kind="h")
+    s.add_control_line(100, 300, 800, 300, kind="h")
+    assert s.control_active and len(s.control_hlines) == 2
+    s.reset_to_auto()
+    assert len(s.control_lines) == 0
+    assert len(s.control_hlines) == 0
+
+
+def test_pick_and_remove_route_by_kind():
+    """The two arrays must not bleed into each other: a point that lies on both
+    a vertical and a horizontal resolves to the line of the kind asked for."""
+    s, _ = _session_with_known_pose()
+    s.add_control_line(300, 60, 300, 540)           # vertical through x=300
+    s.add_control_line(100, 100, 800, 100, kind="h")  # horizontal through y=100
+    assert s.pick_control_line(300, 100, kind="v") == 0
+    assert s.pick_control_line(300, 100, kind="h") == 0
+    assert s.remove_control_line(0, kind="h")
+    assert len(s.control_hlines) == 0 and len(s.control_lines) == 1
+
+
 # --------------------------------------------------------------------------
 # manual crop, after the frame has been kept and padded
 # --------------------------------------------------------------------------
@@ -418,6 +540,24 @@ def test_reset_to_auto_forgets_the_crop_too():
     s.set_crop_rect(10, 10, 200, 150, shown_w=300, shown_h=200)
     s.reset_to_auto()
     assert s.crop_rect is None
+
+
+def test_the_veil_is_baked_into_the_array_not_drawn_as_an_item():
+    """A Tk canvas item has no alpha channel, so the flat 75 % black that recedes
+    the cut-away region is composited into the displayed array.  This pins the
+    compositing: inside the kept rectangle every pixel is untouched, outside it is
+    dimmed to exactly ``keep`` of its original value, and a corner -- where two
+    overlapping strips would have compounded to ``keep**2`` -- is dimmed once."""
+    img = np.full((40, 60, 3), 200, dtype=np.uint8)
+    out = darken_outside_crop(img, (0.25, 0.25, 0.75, 0.75), keep=0.25)
+    assert img[10, 10][0] == 200, "the input must not be dimmed in place"
+    assert (out[12:30, 18:45] == 200).all(), "inside the kept rectangle is untouched"
+    assert out[0, 30][0] == 50, "top strip mid-x is dimmed to a quarter"
+    assert out[20, 0][0] == 50, "left strip mid-y is dimmed to a quarter"
+    assert out[0, 0][0] == 50 and out[-1, -1][0] == 50, "corners are dimmed once, not twice"
+    assert darken_outside_crop(img, None) is img, "no crop returns the same array"
+    full = darken_outside_crop(img, (0.0, 0.0, 1.0, 1.0))
+    assert (full == 200).all(), "a full-frame rectangle veils nothing"
 
 
 def test_auto_returns_the_found_angles_without_undoing_the_rest():
