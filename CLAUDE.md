@@ -1,4 +1,4 @@
-# Batch Perspective Correction — working notes (live)
+# Perspective Correction — working notes (live)
 
 **Governance.** This file is the live working document, deliberately kept small so it
 fits a ~100k context window with room for the conversation. Together with
@@ -95,10 +95,12 @@ declared `mlsd` extra) is installed in the **system** interpreter, so
 
 ## Ledger — the only place status lives
 
-**Suite 2026-09-14: 285 tests, 2 failed, 2 skipped, ~171 s — NOT green.** Both
-failures are the single receding-row photograph in the bug entry below;
-everything else passes, including the three features the worker landed on 09-14
-(theme switch, paste button, JPEG-quality spinbox — see Done). Re-run
+**Suite 2026-09-14: 292 tests, 3 failed, 2 skipped, ~162 s — NOT green.** Two
+failures are the single receding-row photograph in the bug entry below. The
+third is new and is in newly-landed code:
+`test_distortion.test_apply_undistorted_identity_map_matches_warp` (see 0b).
+Everything else passes, including the worker's theme switch, paste button and
+JPEG-quality spinbox, and six of the seven distortion tests. Re-run
 before trusting this — it is a measurement, not a promise, and no entry below may
 restate it. An item stays under **Open** until
 nothing is left to do; **Done** is only for finished work. `Pn` labels are short
@@ -108,13 +110,18 @@ handles for work packages; entries written out in full here stand on their own.
 
 **Priority, set 2026-09-14.** The list below is not in order; this is.
 
-**0. Commit. Nothing else matters until this is done.** 47 files, ~5,966
-insertions and 55 untracked files sit uncommitted on a branch whose last commit
-predates all of it, 4 ahead of `origin` and never pushed. That is two agents'
-worth of a full day — the manual-first reshape, the mask brush, the overlay
-moves, Qwen's theme/paste/JPEG work — one bad `checkout` or crash from gone. Not
-a Ledger item, which is exactly why it kept being skipped. Commit in coherent
-chunks, then push.
+**0. ~~Commit.~~ Done 2026-09-14.** Four commits (weights excluded from git, the
+manual-first code, ASCII asset names, README) are on `origin/main` — `main` was
+fast-forwarded and pushed without touching the working tree, so the worker's
+in-flight edits were undisturbed. The day's work is no longer only local. What
+is *still* uncommitted is the distortion work below and this file.
+
+**0b. The suite is red on new code, not just the known photograph.**
+`test_distortion.test_apply_undistorted_identity_map_matches_warp` fails — an
+identity undistortion map should reproduce plain `warp`, and does not. That is
+the kind of failure worth fixing before building further on the module, because
+every later stage composes onto that map (Stage 5 is "compose undistortion + H
+into a single remap"). Fix it or say why it is expected.
 
 **1. Re-decide the batch-era caps as manual-first defaults.** Cheapest real
 improvement per hour, and it touches every photograph reviewed. `max_horizontal_deg`
@@ -230,10 +237,29 @@ them is what the product needs next.
   CC-BY-4.0 weights, ECCV'24, accepts focal prior, enters `model.py` prior table as
   one row); Stage 3 cross-check gate (free, multiplicative confidence); Stage 5
   compose undistortion map + H into a single `cv2.remap`. Pipeline order: detect →
-  undistort → correct. Trigger: monotonic angle drift in `merge_collinear` chains.
+  undistort → correct.
   Test case: `Aulendorf_Schloss_Fassade.jpg` (zero EXIF, fragmented lines). Must keep
-  the 8% border guard. **Blocked on**: user go-ahead to prototype — new dependency,
-  new pipeline stage.
+  the 8% border guard.
+  **Go-ahead given 2026-09-14** (user: lensfun where EXIF identifies the lens, an
+  estimator where it does not). Stage 0 is already in flight — `src/bpc/distortion.py`
+  is lensfunpy + EXIF make/model/focal/aperture with the usual `available()` guards.
+  **Trigger: measured 2026-09-14, it does NOT work — do not build it.** The proposal
+  was to suspect distortion when a `merge_collinear` chain's members show monotonic
+  angle drift. Scored over the whole pool (fraction of chains drifting one way, plus
+  angular span): **`Aulendorf` — the one asset known to be wide-angle and EXIF-free,
+  and this item's own named test case — scores 0.04, near the bottom.** Ordinary
+  facades and a phone snapshot score higher (hospital 0.10, `20260902_111335` 0.10).
+  It ranks the distorted photograph as *less* distorted than undistorted ones; no
+  threshold separates them. **Why it cannot work as specified**: `merge_collinear`
+  groups segments *by similar angle*, 2° tolerance (`lines.py:180`) — segments that
+  drift further never join the same chain, so drift within a chain is capped at ~2°
+  **by construction**. The grouper filters out exactly the signal the trigger wants
+  to read; the large spans in the data are clutter, not curvature (46° on
+  `bcbac1c1`, 40° on `35559_XXL`, both undistorted). **A real trigger would have to**
+  group by proximity and continuity rather than by angle, then measure residual
+  curvature — straight-line fit and look at the residual, or fit a circular arc.
+  Different mechanism, not a tuning of this one, and unmeasured. Until it exists both
+  stages run on every photograph or are switched on by hand.
 - **[open] Four research goals in `knowledge.md` — read that file before picking any
   of these up (2026-09-13).** Full analysis, existing-measurement citations and
   external sources live there; this is the pointer plus the one-line scope of each.

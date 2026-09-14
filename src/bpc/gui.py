@@ -59,6 +59,8 @@ STATUS_COLOUR = {OK: "#5ac37f", SKIPPED: "#e0b24c", ERROR: "#ef6b6b", QUEUED: "#
 DETECTORS = ("lsd", "fld", "mlsd", "hybrid", "union",
              "deeplsd", "deep-hybrid", "deep-union")
 
+RULER_MARGIN = 20
+
 # --------------------------------------------------------------------------
 # theme
 # --------------------------------------------------------------------------
@@ -520,7 +522,7 @@ def _brand_header(parent, on_select=None):
         cv.pack(side="left", padx=(2, 8), pady=4)
         cv.bind("<Configure>",
                 lambda e, c=cv: (c.delete("all"), _draw_eye_pyramid(c)))
-    title = ttk.Label(bar, text="Batch Perspective Correction", style="Title.TLabel")
+    title = ttk.Label(bar, text="Perspective Correction", style="Title.TLabel")
     title.pack(side="left", anchor="w")
     _attach_tooltip(title, "Batch perspective correction for architectural photographs")
     # Which copy of this repo is actually running: a stale second copy shows an
@@ -1839,15 +1841,22 @@ class ReviewPanel(tk.Frame):
         x = event.x - self._after_off[0]
         y = event.y - self._after_off[1]
         iw, ih = self._ph_a.width(), self._ph_a.height()
-        move = False
-        if 0 <= x <= iw and 0 <= y <= ih:
-            rect = self.session.crop_rect or (0.0, 0.0, 1.0, 1.0)
-            cx0, cy0, cx1, cy1 = (rect[i] * (iw if i % 2 == 0 else ih) for i in range(4))
-            not_full = (cx0 > 0 or cy0 > 0 or cx1 < iw or cy1 < ih)
-            if (cx0 <= x <= cx1 and cy0 <= y <= cy1 and not_full
-                    and self._grab_handle(x, y, iw, ih) is None):
-                move = True
-        cur = "fleur" if move else ""
+        # Border zone (ruler margin): show crosshair as ruler indicator
+        in_border = (event.x < RULER_MARGIN or event.y < RULER_MARGIN
+                     or event.x > self.c_after.winfo_width() - RULER_MARGIN
+                     or event.y > self.c_after.winfo_height() - RULER_MARGIN)
+        if in_border:
+            cur = "crosshair"
+        else:
+            move = False
+            if 0 <= x <= iw and 0 <= y <= ih:
+                rect = self.session.crop_rect or (0.0, 0.0, 1.0, 1.0)
+                cx0, cy0, cx1, cy1 = (rect[i] * (iw if i % 2 == 0 else ih) for i in range(4))
+                not_full = (cx0 > 0 or cy0 > 0 or cx1 < iw or cy1 < ih)
+                if (cx0 <= x <= cx1 and cy0 <= y <= cy1 and not_full
+                        and self._grab_handle(x, y, iw, ih) is None):
+                    move = True
+            cur = "fleur" if move else ""
         if self.c_after.cget("cursor") != cur:
             self.c_after.config(cursor=cur)
 
@@ -1934,9 +1943,10 @@ class ReviewPanel(tk.Frame):
         box = self._after_box
         arr = (darken_outside_crop(base, frac_rect)
                if (frac_rect is not None and not planar_on) else base)
-        ph, _ = _to_photo(arr, box)
-        aox = (box[0] - ph.width()) // 2
-        aoy = (box[1] - ph.height()) // 2
+        inset_box = (box[0] - 2 * RULER_MARGIN, box[1] - 2 * RULER_MARGIN)
+        ph, _ = _to_photo(arr, inset_box)
+        aox = RULER_MARGIN + (inset_box[0] - ph.width()) // 2
+        aoy = RULER_MARGIN + (inset_box[1] - ph.height()) // 2
         self._after_off = (aox, aoy)
         self.c_after.delete("all")
         self.c_after.create_image(aox, aoy, anchor="nw", image=ph)
@@ -2814,44 +2824,50 @@ class ReviewPanel(tk.Frame):
                 canvas.create_line(ox, y, ox + iw, y, **kw)
 
     def _draw_rulers(self, canvas, ox, oy, iw, ih):
-        """Numeric rulers along the top, left and right of the corrected frame.
+        """Numeric rulers in the static 20px border zone around the corrected frame.
 
-        The grid tells you *where the lines are*; the rulers tell you *what
-        number they sit at*, so a vertical you are checking can be read against
-        a coordinate instead of just a line.  Pixel mode only -- divisions have
-        no meaningful pixel label.  An overlay, not reserved space: it costs no
-        window height and never resizes the preview.  Minor ticks at every grid
-        step, a longer major tick with its pixel offset every fifth -- top and
-        left offset from the image's top-left corner, right offset from the
-        top-right corner (same y as the left ruler, so a feature's height can be
-        read off *both* sides and compared -- the point of the right ruler: a
-        level horizontal reads the same number on the left and the right, a
-        residual lean does not)."""
+        Ticks point inward from the canvas edge toward the image.  Top ruler
+        spans the full image width; left and right rulers span the full image
+        height.  Minor ticks at every grid step, a longer major tick with its
+        pixel offset every fifth -- top and left offset from the image's
+        top-left corner, right offset from the top-right corner."""
         if not self.v_grid.get():
             return
         step, _n = self._grid_step()
         if step == 0:
             return
+        m = RULER_MARGIN
         minor = dict(fill="#9fd8ff", width=1, stipple="gray50", tags="ruler")
+        # Top ruler: ticks hang down from y=0 into the top margin
         for p, major in layout.ruler_ticks(iw, step):
-            ln = 10 if major else 5
-            canvas.create_line(ox + p, oy, ox + p, oy + ln, **minor)
+            ln = m - 4 if major else (m - 8)
+            canvas.create_line(ox + p, 0, ox + p, ln, **minor)
             if major and p > 0:
-                canvas.create_text(ox + p + 2, oy + ln + 6, text=str(p),
-                                   anchor="w", fill="#9fd8ff",
+                canvas.create_text(ox + p, ln + 2, text=str(p),
+                                   anchor="s", fill="#9fd8ff",
                                    font=("TkDefaultFont", 7), tags="ruler")
+        # Left ruler: ticks point right from x=0 into the left margin
         for p, major in layout.ruler_ticks(ih, step):
-            ln = 10 if major else 5
-            canvas.create_line(ox, oy + p, ox + ln, oy + p, **minor)
+            ln = m - 4 if major else (m - 8)
+            canvas.create_line(0, oy + p, ln, oy + p, **minor)
             if major and p > 0:
-                canvas.create_text(ox + ln + 2, oy + p, text=str(p),
+                canvas.create_text(ln + 2, oy + p, text=str(p),
                                    anchor="w", fill="#9fd8ff",
                                    font=("TkDefaultFont", 7), tags="ruler")
-            canvas.create_line(ox + iw, oy + p, ox + iw - ln, oy + p, **minor)
+        # Right ruler: ticks point left from x=canvas_width into the right margin
+        cw = canvas.winfo_width()
+        for p, major in layout.ruler_ticks(ih, step):
+            ln = m - 4 if major else (m - 8)
+            canvas.create_line(cw, oy + p, cw - ln, oy + p, **minor)
             if major and p > 0:
-                canvas.create_text(ox + iw - ln - 2, oy + p, text=str(p),
+                canvas.create_text(cw - ln - 2, oy + p, text=str(p),
                                    anchor="e", fill="#9fd8ff",
                                    font=("TkDefaultFont", 7), tags="ruler")
+        # Bottom ruler: ticks point up from y=canvas_height into the bottom margin
+        ch = canvas.winfo_height()
+        for p, major in layout.ruler_ticks(iw, step):
+            ln = m - 4 if major else (m - 8)
+            canvas.create_line(ox + p, ch, ox + p, ch - ln, **minor)
 
     def _draw_marks(self):
         """Control lines (vertical and horizontal), over the preview.
@@ -2990,7 +3006,7 @@ class ReviewPanel(tk.Frame):
 class App(_ROOT_CLASS):
     def __init__(self, initial=None, start_maximized=True):
         super().__init__()
-        self.title(f"Batch Perspective Correction  v{__version__}")
+        self.title(f"Perspective Correction  v{__version__}")
         # The window opens maximized, so this is the size it *restores* to.
         # It used to be a hardcoded 1920x1080, which is too small on a 1440p or
         # 4K monitor and larger than the screen in both directions on a
