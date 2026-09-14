@@ -1,1622 +1,751 @@
-# Batch Perspective Correction — working notes
-
-Master / Worker
-
-You are the MASTER. Qwen3.8-27B is the WORKER.
-
-Use Qwen whenever a task can be implemented or investigated locally without requiring architectural decisions.
-
-MASTER responsibilities:
-
-architecture and overall strategy
-task decomposition
-interfaces and dependencies
-system-level debugging
-review and integration
-final validation
-
-WORKER responsibilities:
-
-implement small, clearly defined changes
-modify specific files/functions
-write tests
-fix localized bugs
-perform mechanical refactoring
-investigate specific errors
-
-TOKEN OPTIMIZATION:
-
-Never delegate the whole request.
-Break work into small, independent work packages.
-Give Qwen only the context and files needed for the current task.
-Do not make Qwen rediscover the project architecture.
-Keep worker responses concise.
-Do not delegate architectural decisions or complex cross-module debugging.
-Review each worker result before assigning the next task.
-Avoid overlapping worker tasks.
-
-For every delegation provide:
-
-GOAL – one concrete objective
-SCOPE – exact files/functions
-CONSTRAINTS – relevant restrictions
-VALIDATION – how to verify the result
-
-The MASTER owns the architecture and final result.
-The WORKER executes focused implementation tasks.
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-## How this file is maintained (standing rule)
-
-**Update this file after every successfully completed feature or problem fix.**
-Not "when there is time" — the update is part of the work, and a change that
-lands without its note here is not done. The note goes where the subject lives:
-the existing section on that topic, or a new one if there is none.
-
-**Wishes are added directly, the moment they are asked for.** A request —
-feature, fix, idea, complaint — gets an entry in "Feature requests, and where
-each stands" immediately, even while it is still open. The section is the source
-of truth; chat history is not, and a wish that exists only in the conversation
-is a wish that will be lost.
-
-Statuses used there: *done* (with a pointer to the section that records how),
-*half-wired*, *not started*, or a plain description of the current state.
-
-**Work runs to completion without check-ins.** When told to go on until the
-project is done, keep implementing -- wiring, flags, UI, tests -- and report
-back only when the full test suite has passed *and* every open item in the
-feature list is either closed or blocked on a decision that only the user can
-make. A half-wired feature is not a reason to stop; it is the next step.
-
-## What this is actually for
-
-**Straightening converging verticals in architectural photographs, in batch.**
-The metric is not "how much perspective did it remove" — it is **how many photos
-it ruined**, because a batch tool runs unattended over a folder someone cares
-about. A photo left alone costs nothing. A photo warped on a bad hypothesis is
-gone unless the original survives.
-
-Every default here follows from that asymmetry. When in doubt: do nothing, and
-offer it for manual review.
-
-## Where it came from
-
-`chsasank/Image-Rectification`, which implements a good paper (Chaudhury et al.,
-ICIP 2014) badly. It was **run and measured**, not just read — full write-up in
-`docs/reference-review.md`. The disqualifying finding:
-
-```
-compute_votes:  vp = model[:2] / model[2]
-```
-
-A level camera puts the vertical vanishing point **at infinity**, `model[2] == 0`,
-so the correct answer scores `nan` → zero votes. Measured: two exactly parallel
-verticals returned `[0., 0.]` votes. The code is therefore *biased towards
-inventing a correction for photographs that need none* — the exact failure this
-project cannot have. Five identical runs on one image put its "vertical"
-vanishing point 3 657 to 47 283 px from the truth, on a 600 px tall image, with
-no seed so a re-run changes the output.
-
-Nothing here dehomogenises a vanishing point in any path that must work for
-every image. `geometry.bearing_to_vp` is the fix and `test_reference.py` pins it.
-
-## The model is three numbers, and that is the point
-
-`roll`, `pitch`, `f`. The horizon is **not detected** — it is `K^-T u`, the polar
-line of the vertical vanishing point. Horizontal lines only pin down `f` and
-cross-validate; they never drive the vertical estimate, because windows,
-balconies and roof edges generate false horizontal candidates by the hundred.
-
-The consequence that matters most:
-
-| | depends on `f`? | measured accuracy |
-|---|---|---|
-| **roll** (levelling) | **no** — the `1/f` factors cancel in `atan2(u_x, -u_y)` | mean **0.018°** |
-| **pitch** (converging verticals) | **yes, linearly** — `atan2(f, \|v_z - c\|)` | 0.10° known `f`, 2.03° guessed |
-
-So levelling is free and exact. Correcting verticals is only as good as the
-focal length. **Roll is applied first** (`R = Rx(pitch) Rz(-roll)`) — pitching
-first would tilt the axis the roll is measured against.
-
-## Four ideas that measurement killed
-
-Full tables in `docs/accuracy.md`. Recorded because each one still *sounds*
-right, and will be re-proposed otherwise.
-
-1. **Focal length from the horizon position.** Beautiful: once `v_z` is known
-   the horizon has one unknown, `d = -f²/|a|`, and `pitch ≈ √(-d/|a|)` so it is
-   better conditioned than `f` itself. Measured **3.86° mean / 16.15° worst**
-   against 2.12/6.68 for the two-vanishing-point estimator. Two distinct
-   failures behind it — see below. Demoted to `--focal-estimate horizon`.
-2. **Merging collinear line fragments.** LSD splits a facade corner at every
-   balcony; rejoining them should help a length-weighted fit. It forces one
-   straight line through fragments that are not exactly collinear and replaces
-   many independent measurements with one: pitch mean **0.10° → 0.33°**, worst
-   **0.61° → 3.58°**. Default off, `--merge-lines` to enable.
-3. **Fitting `f` in the joint refinement unconditionally.** A horizontal
-   vanishing point near infinity carries *no* focal information (`K^-1 v` is
-   independent of `f` when `v[2] == 0`) but still moves the cost, because a
-   larger `f` shrinks every residual through the unit-norm normalisation. A true
-   28 mm scene came back as 42.5 mm. Now `f` is only fitted when `sigma_geo < 0.35`.
-4. **Hard switching between EXIF and geometry.** One badly conditioned
-   measurement won outright: 64 mm for a 28 mm scene, 8° of pitch error. Replaced
-   by inverse-variance blending in log space; worst case fell to 0.11°.
-
-The two horizon failures are worth keeping separate because the first hid the
-second. **(a)** Intersecting arbitrary pairs of horizontal lines — only lines
-parallel *in the world* meet on the horizon; a facade edge crossing a paving
-joint meets it mid-picture. ~7 000 meaningless crossings vs a few hundred real
-ones. **(b)** After fixing that with sequential-RANSAC consensus: a dominant
-horizontal vanishing point 3.1 million px away pins the horizon to no better
-than a few hundred px, because its positional uncertainty is `R·σ_θ`.
-
-**Lesson:** the elegant estimator lost to the dumb prior. Measure before
-believing, and keep the losing branch documented rather than deleted.
-
-## One idea measurement accepted
-
-**Damping pitch by 0.85 when the focal length is a guess.** The error is
-symmetric; its consequences are not. Verticals left slightly converging read as
-an ordinary photograph; verticals splayed outwards at the top read as a mistake.
-Over-corrections 15/40 → 9/40 at no cost in mean accuracy. Pitch only, and only
-when `f` was not supplied.
-
-## Fachwerk: it is the *shallow* brace that is dangerous
-
-Half-timbered facades are the adversarial case, and the intuition about why is
-backwards. The steep 45° brace is harmless — it falls outside any plausible
-candidate window. The killer is the **20° brace**, deep inside the window, and
-braces come in mirrored pairs at a consistent angle so they form a *coherent*
-false vanishing point rather than scattered noise. Worst pitch error by brace
-lean: 20° → **3.24°**, 25° → 1.68°, 28° → 0.66°, 31° → 0.37°, 45° → 1.40°.
-
-And the fix is **weighting, not gating**. Narrowing the vertical window from 32°
-to 18° moves the worst error by 0.04°. Sharpening `angular_softness` from 0.6 to
-0.35 cuts it 58 % (3.24° → 1.36°) at zero cost on plain facades. That is why the
-default is 0.35 and why the window is still a generous 32°.
-
-Roll survives all of it (worst 0.47°). And on Fachwerk *without* a known focal
-length the confidence diagnostics report `weakest: focal` in every single case —
-the diagonals are not what limits accuracy there, the focal prior is.
-
-## The front end: LSD stays, and it has now been beaten twice, narrowly
-
-Four alternatives have now been measured against LSD -- M-LSD, DeepLSD, FLD and
-Hough. None of them is the default, and the reasons differ enough to keep the
-two learned ones apart.
-
-### M-LSD: long and coarse loses to short and sharp
-
-The front end was the obvious suspect for the accuracy ceiling, and the
-diagnosis was right: on a real barn LSD returned 4823 raw segments with a
-**median length of 16 px** on a 1600 px grid, only 29 longer than a tenth of the
-short edge. M-LSD (Apache-2.0, 6.1 MB, vendored in `models/`) returns ~110
-segments with a median of **250–318 px** — 20× longer.
-
-**And it is less accurate.** Angular precision scales with length *and* endpoint
-precision, and M-LSD decodes endpoints from a 256×256 displacement map — about
-5.5 px of quantisation at 1400 px, i.e. ~1° on a 300 px line, where LSD's
-sub-pixel endpoints give ~0.1° on a 50 px fragment. **Long and coarse loses to
-short and sharp.**
-
-But the synthetic benchmark is biased for LSD (flat rendered lines are its home
-turf and out-of-distribution for a network trained on photographs), so the
-question was asked again on real photographs, with a **round-trip test**: warp by
-a known rotation `R_d`, and the warped copy's up must be `R_d @ u0` — real
-texture, exact ground truth, no need to know `u0`. That test is shipped as
-`tools/benchmark_detectors.py`.
-
-| | synthetic pitch mean | real round-trip mean | real p90 |
-|---|---|---|---|
-| **LSD** | **0.21°** | 0.94° | 3.44° |
-| M-LSD large | 1.42° | 1.44° | 2.55° |
-| hybrid (LSD gated by M-LSD) | 1.37° | **0.78°** | 2.41° |
-| union (LSD + M-LSD) | 0.48° | 1.25° | **2.23°** |
-
-The picture *inverts* between the benchmarks. LSD stays the default because it
-wins decisively on ground truth and loses only narrowly on 24 real samples, and
-because the hybrid's 7.9° worst-case roll on synthetic scenes shows it can gate
-away evidence it needed. Promoting on 24 measurements against a benchmark it
-loses would be exactly the mistake the rest of these notes documents.
-
-**If a user has real data, run the benchmark tool and let it decide.** That is
-the missing evidence, not more argument.
-
-**FLD had never been measured; it does not beat LSD.** It was in the chain only
-as a fallback for OpenCV builds without LSD, so it was worth measuring. On the
-seven assets, round-trip with the border guard, `f` fixed:
-
-| | mean | p90 | worst |
-|---|---|---|---|
-| **lsd, masked** | **0.65°** | **1.52°** | **2.02°** |
-| lsd, unmasked | 0.70° | 1.66° | 2.89° |
-| fld, unmasked | 0.99° | 2.13° | 3.19° |
-| fld, masked | 1.36° | 2.85° | 4.76° |
-| hough | 2.6-2.7° | ~4° | **36°** |
-
-LSD wins in both conditions and masking helps it further, so the default stands.
-Note that masking *hurts* FLD -- it returns fewer, cleaner segments and has less
-to spare. Hough is not competitive and its 36° worst case is the argument for
-keeping it a last resort.
-
-An earlier run of this table said FLD won unmasked. That was the border
-artifact; see the section on it below.
-
-The M-LSD rows above come from an interpreter that had a TFLite runtime; this
-one does not, so they cannot be re-run here. SOLD2 is reachable through
-`kornia.feature.sold2` with no extra install and is still unmeasured.
-
-### DeepLSD: judgement, not geometry
-
-The section above ends with "if a user has real data, run the benchmark
-tool and let it decide". This is that run. DeepLSD (Pautrat et al., CVPR 2023,
-MIT) is not another wireframe network -- it regresses a distance field and an
-angle field and hands *those* to LSD in place of the image gradient, so the
-endpoints still come from LSD's sub-pixel fit. That matters, because the reason
-M-LSD lost was endpoint quantisation, not judgement.
-
-Twelve photographs x six rotations, round trip with the border guard, `f` fixed
-at 24 mm, mask off:
-
-| | mean | p90 | worst | seconds |
+# Batch Perspective Correction — working notes (live)
+
+**Governance.** This file is the live working document, deliberately kept small so it
+fits a ~100k context window with room for the conversation. Together with
+**`knowledge.md`** — the analysis and external sources for the four remaining research
+goals (facade-outline-first, the dominant-edge hierarchy, SAM3, the found-geometry
+overlay), cited from the Ledger's "Four research goals" entry — it is the complete
+record. The former separate history archive `claude_save.md` was deleted 2026-09-13
+after its still-relevant content was carried forward into these two files, so there is
+no third file to follow; read a section of `knowledge.md` only when this file points at
+one. After every completed feature or fix, update
+*this* file — a change that lands without its note here is not done. **Status lives in
+exactly one place: the Ledger below.** Open, in-progress, done and merely-wished items
+are one list; a wish is recorded there the moment it is asked for. Never restate a
+status in a second section — two lists that must agree is how P11 and P12 stayed
+written as open and "asked, not started" for a day after they had landed. Work runs to
+completion without check-ins; report back only when tests pass and every open item is
+closed or blocked on a user decision.
+
+## Project in one paragraph
+
+Straightening converging verticals in architectural photographs (roll, pitch, f —
+three numbers; the horizon is `K^-T u`, never detected).
+
+**Direction change 2026-09-13 (user): manual review is the product; unattended
+batch is not.** If several photographs are processed, it is image by image with a
+person looking at each one — not fire-and-forget over a folder.
+
+This inverts the reasoning every current default was built on, so read those
+defaults with it in mind. The old premise was: *the metric is how many photos it
+ruined, because a batch tool runs unattended over a folder someone cares about; a
+photo left alone costs nothing, a photo warped on a bad hypothesis is gone;
+therefore when in doubt, do nothing.* That is why `max_pitch_deg` / `max_horizontal_deg`
+refuse rather than trim, why confidence is multiplicative so any factor can veto, and
+why P9 recommended refusing a whole correction over applying part of it. **With a
+person reviewing each image those costs are no longer asymmetric** — an attempt that
+is wrong gets rejected on sight, so refusing early now costs a correction the user
+wanted rather than saving them from one they didn't. The caps and gates are therefore
+open questions again, not settled ones; each should be re-decided as a *review-panel*
+default with its own measurement before anything is loosened.
+
+Implementation is done here directly (2026-09-13); the local Qwen3.8-27B worker is
+paused — why, and how to resume it, in `docs/qwen-knowledge.md`.
+
+## Running things (do not rediscover this)
+
+- Project root `D:\Coding\Batch-Perspective-Correction`, Windows, PowerShell 7,
+  Python 3.12.9 (python.org), 32 cores.
+- Compile: `python -m py_compile src/bpc/gui.py` (and anything else touched).
+- One module: `python tests/run_tests.py test_gui` — fast.
+- Full suite: `python tests/run_tests.py` — 282 tests, ~135 s, modules in worker
+  processes; `-s` for the old sequential run.
+- A new `test_*.py` must be added to `MODULES` in `run_tests.py` or `_unlisted()`
+  fails the run.
+- GUI off-screen pattern: `App(start_maximized=False)`, `geometry("<WxH>-4000+0")`,
+  pump with `update()` + `sleep(0.02)`, then `destroy()`. `invalid command name
+  ..._pump` on teardown is harmless Tk noise, not a failure.
+- `python tools/debug_ui.py` sweeps the window lifecycle; must end `FAILURES: none`
+  with `bpc_errors.log` clean.
+
+## Hard rules (the ones that bite)
+
+- **No pixel arithmetic in `gui.py`**; sizes live in `layout.py` and are tested at
+  five resolutions. `review.py` has no Tkinter import — pure state functions, tested
+  headlessly; `gui.py` is only the shell.
+- **Optional backends install with `--no-deps`.** `simple-lama-inpainting` downgrades
+  Pillow/numpy and breaks OpenCV in the same interpreter; a test bans `lama`/`ultralytics`
+  extras from `pyproject.toml`.
+- `H = K R K^-1`, always — a camera rotation, three DOF, cannot shear. Seeded RNG
+  everywhere (a batch that differs on re-run is unusable). Confidence is multiplicative,
+  so any single factor can veto.
+- **Beyond the limit means refuse, not trim** (`--clamp-beyond-limit` restores the old
+  cap behaviour). Magnitude test, not semantic: it cannot tell a ceiling from a wall,
+  only that one asks for something no photographer plausibly wanted.
+- `D:\Batch-Perspective-Correction` (a second, older copy) is **off-limits** per user
+  directive — do not write, sync or run tools there.
+- Anything fiddly belongs in Python, not in a `.bat`.
+
+## Environment split (short version)
+
+| | torch | transformers | tkinter | BiRefNet |
 |---|---|---|---|---|
-| **deep-hybrid** (LSD gated by DeepLSD) | **0.71°** | **1.65°** | 3.78° | 68.8 |
-| deep-union (LSD + DeepLSD) | 0.76° | 2.16° | **3.74°** | 55.4 |
-| lsd | 0.77° | 2.04° | 4.71° | **18.2** |
-| deeplsd alone | 0.86° | 2.41° | 7.10° | 48.4 |
-
-**The shape is the same as the M-LSD result and it is the interesting part.**
-The learned detector *alone* is the worst of the four -- worse than plain LSD on
-all three statistics, and its 7.10° worst case is a photograph ruined. Used as a
-*gate* over LSD it is the best of the four. Neither model is a better line
-detector; one of them knows which lines are structure and the other knows where
-they are, and the hybrid is the only arrangement that gets both.
-
-**LSD stays the default anyway**, for reasons that are not about the numbers:
-deep-hybrid costs torch, a 98 MB checkpoint, a research checkout that is not on
-PyPI, and `pytlsd`, which has no wheels and builds from source. That is a large
-bill for 0.06° of mean and it buys nothing on the machine of anyone who cannot
-pay it. It is a genuine option now, not a default, which is exactly what the
-M-LSD section argued for and could not deliver because no TFLite runtime was
-ever installed here.
-
-**And the reason is no longer only the dependency bill: the win does not
-survive a change of the fixed focal length.** The table above fixes `f` at
-24 mm, which is close to what these twelve photographs were actually shot at
-(16-33 mm). Repeating the identical run at 35 mm -- a *wrong* focal for all of
-them, which is the case the "known weakness" section says web JPEGs land in --
-inverts the order:
-
-| f fixed at 35 mm | mean | p90 | worst |
-|---|---|---|---|
-| **deep-union** | **1.05** | **2.02** | **9.55** |
-| lsd | 1.22 | 3.00 | 19.50 |
-| deep-hybrid | 2.37 | 5.71 | 22.91 |
-
-deep-hybrid goes from best to worst, and its worst case from 3.78° to **22.91°**.
-A gate that decides which lines are structure is apparently tuned to agree with
-the geometry only when the geometry is roughly right; when `f` is wrong it gates
-away evidence the fit needed -- the same failure the M-LSD hybrid showed as a
-7.9° worst-case roll on synthetic scenes. **A detector whose ranking depends on
-getting another parameter right is not a safer default, it is a second thing
-that can be wrong.**
-
-deep-union is the one that does not collapse: it beats LSD's worst case in both
-conditions (3.74 vs 4.71, and 9.55 vs 19.50). That is the arrangement to
-re-measure if the dependency bill ever becomes payable by default -- not the
-hybrid, despite the hybrid winning the headline table.
-
-Twelve photographs is still thin. The honest claim is "deep-hybrid did not lose
-on any of the three statistics", not "deep-hybrid is better".
-
-## Masking: BiRefNet, and the two knobs that are not knobs
-
-`--mask birefnet` (a segmenter) and `--mask file` (a folder of PNGs) go through
-one seam, `masks.build`. The producers are **not interchangeable**, and using
-one table for both was the mistake that hid a broken feature for a release.
-
-A third, `--mask auto`, was a cheap texture statistic and is **gone** -- the CLI
-no longer offers it and `masks.build` accepts the word only to keep an old
-preferences file from failing. Its measurement is why:
-
-| | pitch max |
-|---|---|
-| f known, mask off | 2.84° |
-| f known, auto mask on | **0.93°** |
-| f unknown, mask off | **5.58°** |
-| f unknown, auto mask on | 10.05° |
-
-It removed green, chaotic and sky-like *pixels* where the question is about
-*objects*, and on a stripped JPEG that took the horizontals the focal estimate
-needed. Never restore it without `--focal-35mm` or EXIF in front of it.
-
-`--mask birefnet` removes whole non-building *objects* and does not share that
-failure. Round-trip on the seven assets, with the border guard:
-
-| | mean | worst |
-|---|---|---|
-| mask off, f known | 0.70° | 1.68° |
-| **BiRefNet-HR, f known** | **0.65°** | **1.36°** |
-| mask off, f unknown | 1.12° | 2.25° |
-| **BiRefNet-HR, f unknown** | **0.88°** | **1.96°** |
-
-The gain is real but modest, and **larger where the focal length is unknown** --
-the opposite of how `--mask auto` behaves. Earlier drafts of this table claimed
-0.98° → 0.56°; that spread was the border artifact, not the mask.
-
-**It masks 40–70 % of the frame and 1–11 % of the line evidence**, because what
-it removes is sky, grass and road. That gap is the whole reason `masks.credible`
-judges on evidence rather than coverage, and it means the 55 % refusal threshold
-has a wide margin here.
-
-**A line is dropped only when both its endpoints are inside the mask.** No
-threshold, no weight. Anything crossing the boundary -- a facade edge running
-down into shrubbery, a roofline against the sky -- keeps its full say, because
-the half of it on the building is real evidence and the fit is length-weighted
-anyway.
-
-Two earlier rules were tried and both are worse or more complicated:
-
-* a **sampled threshold** dropping a segment once 60 % of five points along it
-  fell inside. It discarded straddling lines wholesale and which side of the
-  threshold a line landed on turned on a sample or two.
-* a **per-segment weight** equal to the visible fraction. Measurably slightly
-  better (0.558 deg mean / 1.01 worst against 0.556 / 1.15 for endpoints) but it
-  makes the segmenter a soft influence on every line rather than a decision
-  about a few, and it needs a third factor in the weight. The endpoint rule is
-  within noise of it and has nothing to tune.
-
-**The shrink is what makes the mask worth having at all.** BiRefNet cuts exactly
-along the silhouette, so the building's own corner and roof edges have both ends
-just inside the mask and are the first thing the endpoint rule throws away.
-Round-trip over ten assets, shrink as a fraction of the frame diagonal:
-
-| shrink | mean | worst |
-|---|---|---|
-| 0.000 (~0 px) | 0.663° | 1.95° |
-| 0.002 (~4 px) | 0.597° | 1.43° |
-| 0.004 (~8 px) | 0.575° | 1.43° |
-| **0.008 (~15 px, default)** | **0.556°** | **1.15°** |
-| 0.016 (~31 px) | 0.639° | 1.64° |
-| no mask at all | 0.661° | 1.69° |
-
-Read the first row against the last: **unshrunk, the mask buys nothing** --
-0.663° against 0.661° for not masking. It removes as much good evidence as
-clutter. Everything the segmenter is worth here is bought by handing the
-silhouette back. A fraction of the diagonal rather than a pixel count, so it
-does not change meaning with `--detect-max-edge`.
-
-**Two things that look like knobs and are not.** The matte is near-binary, so
-the threshold does nothing: 0.1 to 0.9 moves the masked share 50.5 % → 51.1 %.
-And *shrinking* the mask a few pixels, so silhouette lines survive
-`drop_masked`, measures worse — 0.556° → **0.839°** at **2 px**, and 16 px is
-barely worse than 2. It is a step, not a slope: a thin ring re-admits the
-*neighbouring building's* lines, which are long, straight, and converge
-somewhere else. The selective version of that rescue already exists and is
-load-bearing: without `masks.protect_structure` the same set measures
-0.906°/3.76°.
-
-**`--mask-export` writes the masks once.** It bridges the interpreter split
-(torch without tkinter, tkinter without torch) *and* turns a repeated run into a
-file read. `tests/assets/masks` is that cache, 155 KB for twenty-one photographs (four of
-them not yet in the asset folder), white meaning ignore. It must never be used for the round-trip test — the warped copy
-has moved and the cached mask has not (IoU 1.000 unwarped, 0.802 warped), which
-reports 0.69°/2.35° for an estimator that achieves 0.56°/1.40°.
-
-### Segment Anything was here, and what its failure teaches
-
-SAM is deleted. It needed an invented criterion to say which of its forty
-regions was the building, and a region survived on **either** line density (which
-works) **or** how straight its outline is (which has no signal: median 1.00 over
-42 real regions, 41 of 42 above the floor, rescuing the sky and the foreground
-grass). The broken half of an "either" test silently vetoed the working half, and
-`--mask sam` measured **worse than not masking** — 1.04°/3.52° against
-0.98°/2.80°.
-
-Three things to carry forward:
-
-1. **It was validated on synthetic shapes and both tests passed.** A drawn
-   rectangle scores 0.9+, a ragged blob under 0.6; real SAM regions are neither.
-   Synthetic fixtures are right for a *geometric* question with ground truth and
-   wrong for a *statistical* one about real texture.
-2. **Repaired SAM still won the worst case** (0.62°/1.18°) and the union of both
-   models won outright (0.52°/1.18°), because they fail on different
-   photographs. Six assets is too thin to justify two models, a checkpoint hunt
-   and an AGPL-3.0 dependency — but it is the first thing to re-measure if more
-   ground truth appears.
-3. **An optional dependency can change a required one.** `ultralytics` replaces
-   `cv2.imread`, returning `(h, w, 1)` for a greyscale read, which broke
-   `--mask file` for anyone who merely had it installed; `masks.load` now
-   insists on two dimensions. `simple-lama-inpainting` does it the other way
-   round, at install time -- its stale pins downgrade Pillow and numpy and
-   break OpenCV in the same interpreter. **Install optional backends with
-   `--no-deps`**; see the Environment section.
-
-## The confidence score: a gate, not a ranking
-
-This section used to say the score was *validated* because it ranked six barn
-photographs by their real error (rho = -0.68, asserted by a test). **That
-correlation was the border artifact.** With the guard in place it is **-0.11**:
-
-| photo | conf | real error |
-|---|---|---|
-| quaker | 0.75 | 0.45° |
-| 79cb3387… | 0.70 | 0.54° |
-| white sparrow | 0.66 | 0.33° |
-| hospital | 0.52 | 0.58° |
-| pole barn | 0.49 | 1.68° |
-| Alte Scheune | 0.44 | 1.11° |
-| XYZ | 0.40 | 0.19° |
-
-The honest reading is not "the score is broken". Once the artifact is gone the
-errors span 0.19° to 1.68° -- there is almost nothing left to rank, and a rank
-correlation over seven nearly-equal values is mostly noise. What the old test
-was ranking was how much of the frame each photograph filled.
-
-So the assertion moved to the property the skip-and-review design actually
-rests on, which is a **bound and not an ordering**: everything the gate admits
-must be measured accurately (`< 2°`), and the gate must still admit most of a
-set of ordinary architectural photographs, or "nothing it touches is wrong"
-could be satisfied by refusing everything. Both are asserted;
-`test_every_photograph_it_is_confident_about_is_measured_accurately` and
-`test_the_confidence_gate_admits_most_of_a_good_set`.
-
-Restore a ranking test only with assets that genuinely span a range of accuracy.
-Two traps when measuring a correction by re-analysing its output remain true:
-
-- **Cropping moves the principal point** away from the image centre, which the
-  model assumes coincide. It is a real limitation on any *previously cropped*
-  input -- web JPEGs.
-- **A re-estimated focal length makes the metric self-inconsistent.** Fix `f`
-  in both passes or the number means nothing.
-
-## The round trip measured itself for a while, and it cost two conclusions
-
-`tests/assets/_round_trip_error` warps a photograph by a known rotation and
-re-estimates. `warpPerspective` has to invent the band that rotates in from
-outside the frame, and `BORDER_REPLICATE` invents it by smearing edge pixels
-into **long, perfectly straight streaks**. Where a photograph's content reaches
-the frame edge -- the ordinary architectural case -- the detector reads those
-streaks as lines.
-
-It hid for as long as every asset was a barn with sky at its edges, where the
-smear is bland. One modern facade that fills the frame exposed it:
-
-| | mean | worst |
-|---|---|---|
-| harness as it was | 1.71° | 6.08° |
-| **with the border guard** | **0.66°** | **1.68°** |
-
-`hospital-nikon-d60_f27.jpg` went **6.08° → 0.33°**, from the worst photograph in
-the set to one of the best. Both passes are now cropped by 8 % before analysis,
-which also keeps them the same size and therefore the same focal length in
-pixels. Pinned by `test_the_border_guard_is_what_makes_the_measurement_honest`.
-
-**It produced two confident wrong conclusions before it was found**, and both
-are worth remembering as a shape:
-
-1. **"Wide-angle lens distortion."** It had a mechanism, a camera that fits (an
-   18-55 kit zoom at 18 mm), and a crop experiment that appeared to confirm it
-   (full frame 6.08°, centre 80 % 0.53°). It was wrong. Implementing Hugin's
-   radial model and sweeping the `b` coefficient moved 6.08° to 5.70° at a
-   realistic value -- while discarding the invented band moved it to 0.33°. The
-   crop "confirmed" the hypothesis because cropping the base also removes the
-   content that gets smeared.
-2. **"FLD beats LSD."** Measured 0.84° against 0.98° unmasked. With the guard,
-   LSD wins in both conditions (0.70/2.89 against 0.99/3.19 unmasked;
-   0.65/2.02 against 1.36/4.76 masked). FLD was simply biting less on the
-   artifact.
-
-**A benchmark that is wrong in the incumbent's disfavour is the dangerous kind**,
-because it reads as a discovery rather than a bug.
-
-## Beyond the limit means refuse, not trim
-
-`--max-pitch` and `--max-roll` used to be caps: an estimate past them was
-clamped to the cap and applied. That turns "I do not believe this" into "I will
-do as much of it as I am allowed to", which is the opposite of every other
-decision in this tool.
-
-What exposed it was a photograph of a railway station ceiling, added while
-filling in the asset wishlist. A coffered ceiling has a strong, clean bundle of
-parallel lines and a perfectly good vanishing point, so the estimator found it
-correctly and every confidence factor scored well — **0.57**, better than most
-of the barns. Nothing in the model can tell that the bundle it locked onto is
-the ceiling grid rather than the world vertical. The result was pitch pinned to
-the `-20 deg` clamp and 41 % of the frame thrown away, at high confidence.
-
-**Confidence cannot catch this and is not built to.** Every factor it scores —
-share, count, spread, horizon support, focal, stability — measures *how well the
-lines agree*, never *whether they are the right lines*. On a ceiling they agree
-beautifully.
-
-The magnitude of the correction can, and does. Two ceilings wanted 24 and 26
-degrees of pitch; the most extreme genuine facade in the asset set, a modern
-hospital shot from below, wants 16.6 and is untouched by the rule. So
-`refuse_beyond_limit` is on by default and `--clamp-beyond-limit` restores the
-old behaviour for anyone who wants it.
-
-It is a magnitude test, not a semantic one, so it does not *understand* the
-difference between a ceiling and a wall — it only notices that one of them asks
-for something no photographer plausibly wanted. That is enough here and it is
-the kind of guard this project prefers: cheap, and wrong in the safe direction.
-
-**Masking catches the same case independently**, which is worth knowing: with
-`--mask birefnet` the Prague ceiling falls to confidence 0.09, because a
-segmenter looking for a salient object finds almost nothing in a ceiling texture
-(95 % of the frame masked). A semantic check in front of a geometric one.
-
-## Generating the band the rotation opens up
-
-`--fill telea`, `--fill lama` and `--fill comfyui` (`src/bpc/inpaint.py`) replace
-the padded corners with generated pixels. Read that against the first section of
-this file: those pixels were never photographed, so the feature is the most
-dangerous thing in the tool by construction, and the containment is where the
-design lives.
-
-**The three are on one scale, not two.** It is tempting to file `telea` under
-"harmless" because it loads no model and downloads nothing — `cv2.inpaint`
-marches colour and gradient inwards from the boundary and that is all it does.
-But a pixel nobody photographed is invented whether a network or a fast-marching
-solver put it there, so it lives under the same containment as the other two:
-same hole, same `--fill-max-share`, same default of `none`. What it buys is that
-it is **deterministic and dependency-free**, which makes it the honest choice for
-a thin band of sky or road and the wrong one for anything a viewer would read as
-content. It sits *below* lama and comfyui on the invention scale, not outside it.
-
-**There is no `--fill color`, and that is deliberate.** A flat colour in the band
-is what `--pad` has always meant, and a second flag saying the same thing would
-be a second place to configure one fact — the failure this file keeps warning
-about. The review window's colour picker therefore writes `settings.pad`, and
-its swatch reads `pad` back rather than showing black over a setting that says
-`edge`.
-
-* **The default is `telea`, and it changed.** It was `none`, on the argument
-  that a generated band is content the camera never saw. That argument still
-  holds -- a pixel nobody photographed is invented whether a network or a
-  fast-marching solver put it there -- so what changed is not the principle but
-  which backend can carry a default at all. `telea` needs no model, no
-  download, no network and no GPU; it is deterministic, so two runs of the same
-  batch on two machines agree; and it costs milliseconds. `lama` and `comfyui`
-  stay off, because a batch that silently waits on a 196 MB download or on a
-  server that is not running is exactly the failure this project is built
-  against.
-
-  What makes it tolerable rather than merely convenient is what surrounds it.
-  With `crop="auto"` a correction under about 1.5 degrees is *cropped*, so
-  there is no band and the fill never runs. Above that the band is a few per
-  cent of frame at the very edge, `--fill-max-share` refuses anything over 35 %,
-  and `--fill none` is one flag away. Pinned by
-  `test_the_default_fill_is_the_one_that_needs_nothing`, which asserts both the
-  value and that it is a backend needing no download.
-* **Only the hole is touched.** `warp.filled_region` warps a white frame and
-  marks where no source pixel landed; the composite ramps its alpha *inside*
-  that mask and multiplies by it again, so a photographed pixel comes through
-  bit for bit. Asserted, with exact equality, by
-  `test_the_fill_touches_nothing_that_was_photographed`.
-* **A missing backend is an error for that image, never a silent pass-through.**
-  A batch that quietly writes un-filled frames when the user asked for a fill is
-  the failure mode this whole project is built against.
-* **`--fill-max-share` (0.35) refuses to invent most of a picture.** The band a
-  plausible correction opens is a few per cent; a 60 % hole means the answer was
-  a crop, not a fill.
-* Generation runs at `--fill-max-edge` (2048) and only the hole is scaled back
-  up. What is being invented is sky, wall and road at the frame edge -- low
-  frequency -- and every photographed pixel stays at full resolution.
-* **The manual save runs the same seam.** `review.py` `save()` calls the identical
-  `warp.filled_region` + `inpaint.fill`, behind the same `fill not in ("", "none")`
-  guard, so a photograph corrected by hand gets generated corners rather than an
-  un-filled frame. The live preview (`render_after`) deliberately does *not* fill --
-  a model load and inference per slider tick is too expensive; only the saved file
-  does, which is exactly what the batch does. Pinned by
-  `test_single_image_save_runs_the_fill_when_a_mode_is_set` (it hands the warp's own
-  hole to `inpaint.fill`) and
-  `test_single_image_save_does_not_load_a_backend_when_fill_is_off`.
-
-**What ComfyUI receives in the hole is primed, not padded.** Left alone the
-band arriving at the sampler is either black or `BORDER_REPLICATE`'s long
-straight streaks, and both are bad starting points in opposite ways: black is an
-edge a sampler will treat as content, and the streaks are the very artifact that
-cost this project two confident wrong conclusions. `_prime_for_generation` runs
-TELEA over the hole and then pulls it halfway to mid grey. The TELEA half hands
-over the right colours and rough gradient to continue; the grey half destroys
-the *structure* TELEA invents alongside them, so nothing in the band reads as an
-edge worth preserving. It is a starting point, not an answer -- the generator
-replaces it -- and it touches nothing outside the hole.
-
-**Which is why `BPC_MASK` is optional.** A whole family of edit models takes an
-image and an instruction and has nowhere to put a mask; for those the priming
-*is* the signal, and the prompt ("remove the grey border") does the rest. Only
-`BPC_IMAGE` is required. Nothing about BPC's own guarantee rests on the
-workflow honouring a mask in any case: `_composite` puts the returned image back
-through the hole and nowhere else, so a model that repaints the entire frame
-still cannot move a photographed pixel. The mask is uploaded when the graph has
-a node for it and quietly skipped when it does not, and `--fill-info` says which
-of the two modes it is in rather than calling the second one broken.
-
-Note the priming reads differently depending on what the padding left. Over a
-flat grey pad it *adds* variation -- measured on a real corrected frame, the
-band's spread went 7.3 to 11.8 as the sky continued into it. Over `edge`
-padding's streaks it removes structure instead. Both are the point: what
-reaches the sampler is boundary colour with no edges in it, whichever pad
-produced the band.
-
-LaMa is the right default backend: no prompt, ~3 s, and it *continues* structure
-rather than inventing objects. ComfyUI is there for the wide band and for anyone
-who would rather their own Flux graph did it; the workflow is a file
-(`workflows/flux2-klein-edit-nomask.json`), the contract is three node titles
-(`BPC_IMAGE`, `BPC_MASK`, `BPC_PROMPT`), and the most likely user error -- posting
-an editor export instead of an API export to `/prompt` -- is caught with the fix
-in the message.
-
-**The batch window now has the address and a "Test connection" button**, because
-`comfyui` was selectable there and unconfigurable: the URL and the workflow
-existed only as command-line flags, so choosing it in the window could only ever
-mean the default port and the shipped workflow, and finding out otherwise meant
-running a batch. `inpaint.describe` already answered the question in two
-independently readable halves -- *server up, ComfyUI 0.3.x* and *workflow: 12
-nodes, sockets [BPC_IMAGE, BPC_MASK]* -- so the button is wiring, not new logic.
-A dead port and a live one are both asserted, the second against a stub server.
-
-**The model filenames are resolved, then chosen.** A workflow names three
-checkpoints and those names are the first thing that is wrong on somebody
-else's machine: the shipped graph says `flux2-klein-9b.safetensors` where a
-real install has `flux-2-klein-9b-fp8.safetensors`. ComfyUI answers with three
-`Value not in list` errors and ignores the output -- a correct message about
-the wrong problem, and one nothing in BPC could have prevented.
-
-Two layers, in this order. `apply_model_choices` writes whatever the user
-picked in the window, and `resolve_models` then matches anything still absent
-against what `/object_info` reports, by shared filename tokens. A match below
-0.34 is left alone: better ComfyUI's own error than a silent swap to the wrong
-file. Every substitution is *returned*, never merely done -- it is a guess
-about which of forty-six text encoders was meant, and a guess nobody is told
-about is how a batch quietly produces something else.
-
-**A filename match can be the wrong model, and nothing in the matcher can
-know.** The shipped inpainting workflow named
-`mistral_3_small_flux2_fp8_scaled.safetensors`; the server had
-`mistral_3_small_flux2_fp8.safetensors`, which is an excellent name match and
-the wrong text encoder for Klein 9B -- that wants Qwen3. ComfyUI failed with
-`mat1 and mat2 shapes cannot be multiplied (512x15360 and 12288x4096)`, a
-text-embedding width, at `txt_in`. It reads like a VAE problem and is not one.
-Compatibility is not visible in a filename, so the matcher must never be
-trusted silently: that is the whole argument for reporting every substitution
-and for the amber light.
-
-**The guess is not enough on its own, which is why there is a selector.** With
-sixteen UNETs, forty-six text encoders and twenty-seven VAEs installed -- the
-normal case -- two candidates are routinely equally plausible. The three
-dropdowns are filled from the server on a successful connection test (the same
-round trip that answers "is it there", so it is asked once), default to
-"(from the workflow)", and are remembered like any other address. They must
-skip nodes titled `BPC_*` and every `LoadImage`: their `image` is a COMBO too,
-so an unguarded resolver helpfully rewrites the photograph about to be uploaded
-into somebody else's leftover PNG. That bug existed for one commit and is
-pinned by `test_the_workflow_is_pointed_at_files_the_server_actually_has`.
-
-**The ComfyUI settings are docked along the bottom of the main window.** They
-have been in three places and the first two were both wrong for the same
-reason. A row in the options panel: that panel is hidden until a folder is
-loaded -- the two-stage window above -- so the server could not be configured
-*before* the work, which is the only time anyone wants to, and every route in
-lived inside the hidden panel, including the fill selector. Then a `Toplevel`,
-which fixed reachability and cost a second window for a tool that is otherwise
-one.
-
-`side="bottom"` gets both. The dock claims the bottom strip once, outside
-everything `_set_stage` hides and re-packs, so it is on screen with nothing
-loaded and stays put when the list fills. `Setup > ComfyUI server...` and the
-review window's button no longer *open* anything -- they raise the window and
-focus the address field, which is what "let me at the settings" means when the
-settings are already visible. Choosing `comfyui` in a fill selector does the
-same and tests immediately: a mode that silently needs six settings nobody was
-shown is the quiet failure this file keeps arguing against.
-
-The dock owns no state. Host, port, workflow and the three model choices are
-`StringVar`s on the App, so `_settings()` reads them whether or not anything is
-drawn, and `_comfy_open()` -- which used to ask "is the dialog up" -- now only
-asks whether `_build` has run yet.
-
-**Two workflows shipped, and the one that ran was whichever nobody chose.**
-`--comfy-workflow` defaulted to `flux-klein-outpaint.json` and the window's
-label read "shipped workflow", singular, while two of them shipped for two
-*incompatible* model shapes. So a FLUX.2 [klein] **edit** model -- picked
-explicitly in the model selector, present on the server under exactly that
-name -- was fed through an `InpaintModelConditioning` + `KSampler` graph. The
-band came back wrong and **the light was green**, correctly: every checkpoint
-the workflow named was installed. Nothing was missing. The wrong graph was
-running.
-
-**The inpainting graph is now deleted, not demoted**, so only the edit-model
-one ships and the default is at least the right *shape*. That does not retire
-the naming: `--comfy-workflow` takes any file, and an indicator that says
-"connected" without saying to what is the same failure waiting on a graph
-nobody here wrote. The cost is that `BPC_MASK` -- still uploaded whenever a
-graph has the node -- has no shipped example left, so
-`test_a_masked_workflow_still_gets_its_mask` builds one; a branch no bundled
-file exercises is one nobody notices breaking.
-
-This is the same shape as the text-encoder failure above and one level up from
-it. There the guess was about *which file*; here it was about *which graph*,
-and the four-state light said nothing because none of its four states is about
-the workflow. The fix is not a fifth colour -- the default is a graph that
-runs, so red would be wrong, and `models` is labelled "models missing", which
-would be a correct colour on the wrong problem. **The fix is that every state
-names the file and says whether anybody chose it**, and that the window offers
-the two by shape rather than a "choose..." button onto a folder. Pinned by
-`test_the_indicator_names_the_workflow_and_says_when_nobody_chose_it`.
-
-The general rule, which this project keeps re-learning: *a default that is
-invisible is a decision nobody made.* `--fill telea` is a defensible default
-because it is named, deterministic and cheap. An unnamed choice between two
-mutually exclusive graphs is not a default, it is a coin toss with a green
-light on it.
-
-**And the contract is not optional just because the graph works.** A user's own
-API export ran perfectly by hand and BPC refused it: no `BPC_IMAGE`. That
-refusal is right -- on a graph with two `LoadImage` nodes a guess would be
-silent and wrong half the time -- but the message has to name the file, because
-"the workflow has no node titled BPC_IMAGE" reads as a bug in the shipped one.
-
-**The review window could select `comfyui` and configure nothing.** Every
-control -- address, light, workflow, the three model selectors -- lived on the
-batch window only, so picking the mode in a review window meant the default
-address and the unnamed default workflow, silently. It now opens the same
-dialog (there is one server) and listens for the same verdict rather than
-polling for it, and `_sync_comfy` re-reads the App's settings at save time --
-without that, choosing a workflow while a review is open would move the light
-and not the file, which is worse than not offering the control at all.
-
-**The light has four states, and the last two are the point.** `down` (red):
-nothing will run -- no answer, or a workflow `/prompt` cannot take. `ok`
-(green): every model name resolves as written. `models` (amber): the server
-answered and the graph is sound, but the checkpoints it names are not the ones
-installed, so a *guess* is in force. `unknown` (grey, "not checked"): nobody has
-asked yet, or the address or workflow changed since anyone did -- red there
-would be a claim, and a wrong one. Two states would have to fold that into one
-of the others and both readings are wrong -- green hides the guess, red refuses
-something that works. The judgement lives in `inpaint.status`, not the window,
-so it is asserted without a display.
-
-**Host and port are two fields, and the verdict expires.** The port is the half
-that actually gets changed -- a second instance, a tunnel, a container -- and
-hunting for it inside a URL is how it gets mistyped. Only the joined form is
-ever stored, so `inpaint.split_url` / `join_url` have to round-trip anything a
-user might type and tolerate what they are halfway through typing; they live in
-`inpaint.py` rather than the window because they are pure, which is the same
-rule that keeps `review.py` free of Tkinter. Beside them a label reads
-*connected* / *disconnected* / *not checked*, and **editing the address or the
-workflow puts it back to "not checked"** -- a green light next to a port nobody
-has asked yet is an answer to a question that is no longer on screen.
-
-Two things it must not do. It must not run on the UI thread: `describe` makes
-two network round trips at three seconds each, and a window frozen mid-click
-reads as a crash rather than as a slow server. And it must not post its result
-with `after()` from the worker -- Tk is not thread-safe and that raises "main
-thread is not in main loop" outright. It goes through `self.queue`, the same
-one the batch run already uses.
-
-`comfy_url` and `comfy_workflow` joined `--remember`. They are **addresses**,
-like the checkpoint and the mask folder -- where the generator lives, not how
-hard to correct -- so they do not breach the rule that correction parameters
-never persist. `comfy_url` needs a different test from the others in
-`apply_prefs`, because it has a real default rather than an empty one and
-"unset" cannot be read as falsy. Pinned by
-`test_the_comfyui_address_is_remembered_but_the_correction_is_not`.
-
-**`pip install simple-lama-inpainting` downgrades Pillow to 9.5 and numpy to
-1.26 and breaks OpenCV in the same interpreter.** Install it with `--no-deps`.
-This is the third time an optional dependency has moved a required one (see
-`ultralytics` replacing `cv2.imread`), and it is worth treating as a rule:
-install optional backends with `--no-deps` and let the failure be an ImportError
-rather than a silently changed numpy.
-
-## Vertical control lines, taken from Hugin
-
-The manual mode has three ways in, and this is the third: the user clicks two
-points on something they *know* is vertical in the world — a door jamb, a
-downpipe, a building corner. It is Hugin's `t2` control point, and Hugin's own
-advice carries over: place the two points as far apart as the structure allows,
-because the direction of a short segment is badly conditioned. A segment under
-8 % of the short edge is refused rather than quietly accepted, since a mis-click
-would otherwise steer the whole fit.
-
-**They replace the detected pool rather than joining it.** A user who marks two
-door jambs is not adding two votes to three hundred, they are saying the three
-hundred were beside the point. Adding them with a large weight instead would
-mean choosing how large, and the answer would be "large enough to win", which is
-the same thing with a fudge factor in it. Two is the threshold because two lines
-determine a vanishing point — Hugin needs two as well — so `min_vertical_lines`
-drops from 4 to 2 while they are in force.
-
-This is the case that striking lines out cannot fix: on a corner view every line
-the detector found may be real and still belong to the wrong plane. There is
-then nothing to delete, only something to state.
-
-**The trap it walks into, and the fix.** Confidence is largely a count of
-supporting lines, so two of them scored **0.04** and the photograph came back
-`SKIP, weakest: count` — the feature refusing its own input. Control lines now
-count as a decision, exactly like moving a slider, and `would_skip` returns
-`None` while they are active. Refusing evidence for being scarce is right when a
-detector produced it and wrong when a person did. Pinned by
-`test_marking_verticals_does_not_get_the_photo_skipped`; validated against a
-synthetic scene's exact pose by
-`test_a_control_line_that_is_really_vertical_recovers_the_true_pose`.
-
-## The manual crop is always live, and that is the whole design
-
-The corrected pane carries a crop rectangle at all times. On an uncropped
-photograph it *is* the frame, so the four corner handles sit in the frame
-corners and there is nothing to switch on. Dragging a handle crops; dragging
-anywhere else draws a new rectangle; "Reset crop" puts it back.
-
-**It used to be behind a checkbox and that was the bug.** With the mode off,
-`_on_crop_press` returned immediately, so a drag did nothing, produced no
-message, and the file saved uncropped — a user action swallowed in silence,
-which is the one failure this project does not permit anywhere else. The crop
-itself was never broken: `save()` applies it, and did before.
-
-Two things follow from the always-live rectangle and both are load-bearing:
-
-* **A corner grab answers with the *opposite* corner.** That corner then plays
-  exactly the role the first click plays when a rectangle is drawn from
-  nothing, so adjusting an existing crop and drawing a new one are one drag
-  implementation rather than two. `_grab_corner` and `_draw_crop_persistent`
-  share the same `crop_rect or (0, 0, 1, 1)` default, because a handle that is
-  drawn but cannot be picked up is worse than no handle.
-* **A click that never moved is a click.** With the rectangle always live, a
-  stray press in the pane would otherwise report "crop too small, ignored" on
-  every mis-click, and noise is how a real warning gets ignored.
-
-The rectangle is applied to the *rendered result*, after the correction and
-after any fill, in fractions rather than pixels — the preview is a few hundred
-pixels and the file is full size, so a pixel rectangle would mean two different
-things. Stored as four independent edges: a pitch correction opens the band at
-the top and leaves the bottom alone, and trimming only that band should not
-require re-placing the other three sides.
-
-**The preview shades the crop, it does not cut it, and that is not cosmetic.**
-`render_after(apply_crop=False)` is what the review window asks for. Cutting it
-made the after image come back a different size, which `_to_photo` then fitted
-into the pane at a different scale — the picture leapt under the cursor the
-instant a corner was released. The leap was the visible half. The other half:
-the *next* drag was measured against a frame already smaller than the one the
-fractions are stored against, and `set_crop_rect` filed it as fractions of the
-full canvas, so a second rectangle landed somewhere nobody had dragged, in
-silence. Shading keeps one coordinate system for the whole session. Pinned by
-`test_the_preview_keeps_its_size_while_the_crop_is_drawn`, which asserts the
-returned dimensions after two successive crops.
-
-Two consequences. `_refresh_crop` redraws the overlay *only* — never
-`_schedule_redraw` — because the image behind it cannot have changed, and a
-re-warp plus a live `telea` fill of a pixel-identical frame is its own kind of
-jump. And `status_text` now has to state the crop and what fraction it costs: a
-rectangle that exists only as a dimmed area is exactly the thing that gets
-forgotten before the save, and the save is where it becomes permanent.
-
-## "Auto crop" is the answer to the band that invents nothing
-
-The band a rotation opens up has two honest answers. Fill it — `telea`, `lama`,
-`comfyui` — and pixels the camera never saw end up in the file. Or cut to the
-largest rectangle that contains none of it, and pay in frame instead. `Auto
-crop` is the second, and it needs no model, no checkpoint and no ComfyUI.
-
-`ReviewSession.auto_crop` is `warp.plan`'s own `crop="auto"` arithmetic —
-`inscribed_rect` on the warped quad, original aspect ratio, anchored on the
-mapped centre so the composition survives — **minus the `max_crop_loss` gate**.
-That gate exists to stop a batch quietly throwing a third of every picture away;
-a button pressed by hand is not quiet, and refusing there would be refusing the
-thing that was asked for. On the 33 %-loss synthetic scene the plan pads and the
-button trims, which is
-`test_auto_crop_does_by_hand_what_the_batch_gate_refuses_to_do_alone`.
-
-When the plan already cropped (`crop="inside"`/`"aspect"`, or `"auto"` inside
-the gate) the quad runs past the canvas, the clamp yields the whole frame, and
-`auto_crop` returns `False` and says so rather than storing a rectangle that
-trims nothing. A button that appears to do nothing is worse than one that says
-why — same rule as the swallowed drag above.
-
-**"No invented pixel" has to be true against the definition the *fill* path
-uses, and it was not.** The inscribed rectangle is exact against the warped
-quad, but `warp.filled_region` deliberately dilates the hole by three pixels,
-because the resampler leaves a sub-pixel fringe along that diagonal edge and an
-inpaint that stops at the geometric boundary leaves a dark rim. Measured on a
-9° pitch: **0** invented pixels inside the rectangle at `grow=0` and **88** at
-`grow=3`, all of them in the outermost three rows of one corner. So `auto_crop`
-now insets by `warp.FRINGE`, the one constant both users read — 0.9 percentage
-points of frame on that scene, 35.7 % → 36.6 %.
-
-The inset goes **after** the two guards, not before. The "nothing was padded"
-test compares the rectangle against the full canvas, and three pixels of inset
-slipped under it: a photograph the plan had already cropped came back with a
-stored rectangle that trimmed only the inset. Pinned at all three definitions
-of the hole by `test_the_auto_crop_contains_no_invented_pixel`, so the constant
-and its two users cannot drift apart.
-
-## Going through a folder by hand, one photograph at a time
-
-`Review each...` is the other way through a selection: no unattended writing at
-all, one panel load per photograph, each becoming a file only when Save is pressed.
-A batch run decides; this asks. It cannot produce a single output nobody looked
-at, which makes it the right mode for a folder that matters and the wrong one
-for four hundred holiday snaps.
-
-**Chained, never looped.** Tk has one event loop, so a `for` around a blocking
-load either stalls it or queues thirty photographs at once. Each load's
-`on_closed` opens the next -- and it fires however the review went away, saved,
-kept, or closed with Close, because a queue that only advances on Save stalls
-forever on the first photograph someone dismisses. The next load happens
-through `after(50, ...)` rather than inline, since `on_closed` runs while the
-panel is still being rebuilt.
-
-**A saved photograph leaves the list.** What is left is then exactly what is
-left to do, which is the only reading of a list that survives being interrupted.
-
-**Overwriting is decided per photograph and confirmed per photograph.** The
-batch checkbox seeds the panel's, but replacing an original is the one
-action here nothing undoes, and in a queue of thirty the checkbox was ticked
-long before this particular picture came up. So the panel asks, every time,
-naming the file. `_dest_corr` exists because `_dest` folds the overwrite
-decision into the path -- right for an unattended run, wrong where the choice
-is per image and the panel needs both candidates.
-
-## The window opens on one thing, because there is one thing to do
-
-With nothing loaded, a screen of sliders, an empty results table and a disabled
-Start button do not help anyone start -- they bury the drop target, which is
-the only control that matters yet. So the empty window *is* the drop target, at
-four times the height, plus the buttons that do the same for anyone who would
-rather browse. Everything else appears when there is something to work on and
-goes away again on "Clear".
-
-Nothing is destroyed and rebuilt: `_set_stage` only hides. The widgets keep
-their state, so an output folder chosen, a detector picked or a ComfyUI address
-typed survives emptying the list. The two packed sections (options, bar) have
-to be re-packed in order, because `pack` appends and they would otherwise
-surface above the frame they belong under; the results tree is re-added to the
-paned split rather than re-packed.
-
-The review panel sits directly under the compact loader -- the photograph under
-the cursor is reviewed in the frame you are looking at, not in a second window.
-The window opens at 1920x1080, the most common desktop resolution (Statista
-2025), clamped to smaller screens, and maximized so a larger monitor gets the
-whole frame; F11 toggles borderless fullscreen for a long review session.
-Review and results share the remaining height in a draggable `PanedWindow`
-split (review starts with the larger share): the sash means nobody is stuck
-with whatever ratio the code picked.
-
-## The split is not a ratio, because the two panes want different things
-
-"The layout is not optimized; the GUI should match the screen -- as big as
-useful." Measured on a maximized window at 2560x1440, the complaint was exact:
-
-| | px | share of window |
-|---|---|---|
-| chrome (header, loader, options 128, bar 47) | 424 | 31 % |
-| results tree | 267 | 20 % |
-| review controls (8 rows) | 436 | 32 % |
-| **the image canvas** | **265** | **20 %** |
-
-A fifth of a 1440p screen for the only thing anyone is looking at, and a
-results list showing *one row* given more height than the photograph.
-
-**The cause was a proportional split, and proportions are the wrong instrument
-here.** `weight=3`/`weight=2` divides a paned window by ratio -- so the tree's
-share grows with the monitor. But **a results list's need is absolute and a
-photograph's is not**: six visible rows is six visible rows at any resolution,
-while every pixel given to a picture being judged by eye is another pixel of
-usable detail. Splitting by ratio therefore gets steadily *worse* as the screen
-gets bigger, which is the opposite of "as big as useful".
-
-So `layout.py` gives the tree what its rows ask for -- bounded below at two
-rows and above at six, and never more than 32 % of the pane -- and hands the
-preview everything else. The pane weights say the same thing for resizes
-afterwards: review `weight=1`, tree `weight=0`, so extra height has nowhere to
-go but the picture. Measured, loaded, one file:
-
-| window (simulated, not maximized) | tree | canvas |
-|---|---|---|
-| 1366x768 | 76 px | 228 px |
-| 1920x1080 | 76 px | 265 px |
-| 2560x1440 | **76 px** | **411 px** |
-
-The tree is the *same* height on all three and every pixel the bigger screen
-adds reaches the image.
-
-**Mind which probe produced a number before quoting one against another.** An
-earlier draft of this table read "411 px (was 265)", which compares a window
-*simulated* at a full 2560x1440 against the earlier measurement of a genuinely
-*maximized* window -- 2560x1351, because the taskbar takes 89 px. Same machine,
-two different windows. The like-for-like maximized figures are **265 -> 361 px**
-of canvas (review pane 653 -> 845); the 228/265/411 row set is internally
-consistent but only among itself. It is a small instance of the shape this file
-keeps recording: a measurement that flatters the change is the one to re-check. That is the assertion, not the anecdote:
-`test_a_bigger_screen_goes_to_the_photograph` pins it as arithmetic and
-`test_the_results_list_keeps_its_rows_and_the_preview_takes_the_rest` pins it
-on the real widgets.
-
-**`weight` does not place the initial sash**, which is the part that cost the
-most time. It distributes *surplus* on resize; where the sash first lands comes
-from the panes' requested sizes, and nothing ever called `sashpos`. Setting it
-once from `after_idle` was not enough either -- `_set_stage` packs the options
-row and the bar *after* adding the tree, so the first measurement saw the empty
-stage's taller pane and put the sash past the loaded window's height, which
-collapsed the tree to **one pixel**. It follows `<Configure>` instead, so the
-split is right after the stage settles, after a resize, and after a move to
-another monitor -- and it stops permanently the moment the user drags the sash,
-because a window that keeps re-deciding a split someone just set by hand is
-worse than one that never helped.
-
-**The restore-down size follows the screen too.** It was a hardcoded
-1920x1080 -- too small on a 1440p or 4K monitor, and larger than the display in
-both directions on a 1366x768 laptop. `layout.initial_window` takes a share of
-the real screen and clamps it both ways.
-
-**What is still wrong, and was not touched.** The review panel's eight control
-rows take **436 px -- more than the image gets**, and the canvas is
-*height*-limited while roughly half its width goes unused (a 3:2 photograph in
-a 1263x361 box paints about 540 px wide). Height is the scarce resource in this
-window and the controls are where it is. Fixing that means restructuring the
-review panel, which `skills/ui.md` forbids on purpose ("add, don't
-restructure"), so it is recorded as the next move rather than taken: collapse
-or tab the control rows, or shrink the 84 px status box until something fails.
-
-**`layout.py` has no Tkinter import**, for the same reason `review.py` does
-not: a layout rule that can only be checked by looking at a screen is a layout
-rule nobody checks. Screen size in, pixels out, tested at five resolutions.
-
-**Windows DPI awareness is deliberately not done.** The process is DPI-unaware
-(`GetProcessDpiAwareness` -> 0), so at any display scaling other than 100 %
-Windows bitmap-stretches the whole window. This machine runs at 100 % -- Tk
-reports 2560x1440 at 96 dpi and `GetSystemMetrics` agrees -- so the change
-would be a **no-op here and unverified everywhere else**, which is exactly the
-kind of default-path edit the rest of this file argues against shipping
-unmeasured. It is also all-or-nothing: making the process aware means point
-sizes scale and raw pixels do not, so `rowheight=24` and every pixel pad would
-shrink against the text at 150 %. Half the change is worse than none. Re-open
-it on a machine that actually runs scaled.
-
-## Known weakness, stated plainly
-
-**A flat-on facade with no EXIF.** One horizontal direction fixes one *point* on
-the horizon, not the line, so the focal length is genuinely not determined by
-lines alone. Web JPEGs are usually exactly this case. Mitigations: the damping
-above, a 0.60 confidence factor for a guessed focal length, and `--max-pitch`.
-
-The real fix is a learned focal prior (GeoCalib, or Hold-Geoffroy et al.'s
-perceptual measure). Not implemented — it would be the project's first deep
-learning dependency. **`--focal-35mm` on a folder shot with one lens is exact
-and costs one flag**, and should be the first thing suggested to a user whose
-results look under-corrected.
-
-## Feature requests, and where each stands
-
-Recorded here because this file is the source of truth; chat history and any
-`debug.md` are not. Nine were asked for, in this order.
-
-**DeepLSD as a second front end -- done.** See "DeepLSD: judgement, not geometry"
-above. It is wired as `--detector deeplsd`, with the `deep-hybrid` / `deep-union`
-pair, a GUI dropdown, and a lazy torch import so the default path never pays for
-it. Nothing left to do.
-
-**Fill the band the rotation opens up -- done.** See "Generating the band the
-rotation opens up" above. The request was "when the corrected frame is bigger
-than the original, fill the empty corners"; the answer is `--fill` with
-`none / telea / lama / comfyui`, default `telea`. LaMa for a band a few percent
-wide, ComfyUI (differential diffusion) when it is wide or wants a plausible sky.
-Nothing left to do.
-
-**A dependency check before the run -- done.** The tool already degraded gracefully and named the missing piece per backend; what was missing was a *gate* that runs before any file is touched. `deps.py` provides it: a core check (numpy, cv2 and Pillow hard; piexif soft, because `imageio.py` already falls back to `default_focal_35mm` without it), a `--doctor` report that reuses each backend's existing `describe()`, and a pre-flight in `main()` that hard-fails only when a backend is *explicitly requested* but absent. Requested-but-missing fails loud before any file is opened; left at the default (`auto` / `none`) it stays graceful, so a batch still runs on a machine where the user never asked for the heavy backends. Six tests in `tests/test_deps.py`; `--doctor` exits 2 only when a required package is missing.
-
-**Frontal / planar correction -- wired end to end, and it had never once
-worked.** This entry was wrong in *both* directions at the same time, and the
-pair is the lesson. It said "core done" while `planar.py` could not complete a
-single call -- `test_planar.py` was missing from `MODULES`, so nothing ever ran
-it, and `cv2.getPerspectiveTransform` rejected every float64 quad it was handed.
-It said "GUI shell not started" while `gui.py` in fact carried the whole shell:
-`v_planar`, `_on_planar_toggle`, `_on_planar_drag`, `_on_planar_release`, and
-`review.py` carried the pure layer beneath it -- `set_planar_point`,
-`pick_planar_corner`, `planar_homography`, `planar_rectified`, `save_planar`.
-
-So a user could tick the box, click four corners, and reach
-`planar_homography` -> `transform_for` -> an exception, on every photograph,
-for as long as the feature has existed. **Two stale claims cancelled out into a
-feature nobody noticed was broken**: the half that said "not started" explained
-away the absence of any working behaviour, and the half that said "core done"
-explained away the absence of a test. Neither was checked against the code.
-
-The dtype bug and a wrong assertion are fixed and the seven `test_planar` tests
-now run -- see "Testing". **What is still genuinely missing is coverage of the
-layer in between.** `test_planar.py` exercises `planar.py`'s math only; the
-seven `ReviewSession.planar_*` methods the GUI actually calls have no test at
-all, which is exactly the gap that let this survive. They are pure functions of
-state, like everything else in `review.py`, so they are headlessly testable and
-there is no excuse. That is the next job on this feature, ahead of any polish.
-
-The math
-lives in `planar.py`: a general homography (eight degrees of freedom) from four
-clicked corners -- exact for a planar correspondence, no focal length, no RANSAC,
-no guess. `target_size` follows the document-scanner convention (the longer of
-the top/bottom edges is the width), and `transform_for` raises on a degenerate
-quad rather than returning a homography that would warp the image into a sliver.
-The output canvas is exactly covered by the warped quad, so there is no fill
-band -- what separates planar rectification from the rotation path. Automatic
-routing was considered and dropped on purpose: a shot with strong perspective
-distortion is exactly the case where line geometry cannot decide for you (the
-focal length is under-determined by lines alone), so "this looks like an oblique
-facade" is not a reliable trigger, and guessing wrong warps a good photo into a
-sliver; when in doubt the rotation path stays in charge. There is still no CLI
-flag -- planar is a manual, one-photograph-at-a-time mode by design, so the
-review panel is the right and only home for it. The learned-focal-prior idea
-(see "Known weakness") still stands as the other half of the frontal case;
-planar is the manual answer to it.
-
-**Horizontal (yaw) de-convergence -- estimator done, policy wrong, needs a new
-approach. Off by default and staying off.**
-
-The geometry is right and is wired end to end. Yaw cannot be read off the
-vertical vanishing point -- a yaw is a rotation about the world vertical and
-leaves it fixed -- so it comes from the dominant horizontal one instead: level
-the frame with (roll, pitch), and the angle that remaining horizontal direction
-makes with the image x-axis is the yaw. Gated on `min_horizontal_support` (0.3)
-and folded to [-90, 90], because a line has no direction and the two antipodal
-readings differ by a half-turn. `warp.limit` scales it by `horizontal_strength`
-and caps it tighter than pitch (`max_horizontal_deg`, 8.0); past the cap the
-whole correction clamps into the existing refuse-beyond-limit path. CLI:
-`--horizontal` (off), `--horizontal-strength`, `--max-horizontal`. Review panel:
-a "horizontal (yaw)" checkbox plus a +/-15 deg slider, disabled unless enabled;
-toggling it on in AUTO mode calls `session.refit()`, because the estimator only
-computes a yaw when the flag was already on at estimation time. Recovery is
-under 1 deg worst over -12 to +10 deg synthetic scenes.
-
-**It was briefly switched on by default with the cap widened to 90 deg, and that
-is the mistake this file exists to prevent.** The argument in the config comment
-was that leaving the horizontals converging "reads as not corrected". Measured
-over the seventeen real assets with it on:
-
-| | yaw | conf |
-|---|---|---|
-| burgebrach scheune | **+57.7 deg** | 0.53 |
-| ulica Machcowskiego | **-67.5 deg** | 0.46 |
-| wilsdruff scheunen | **+70.1 deg** | 0.33 |
-| heilsbronn | +44.0 deg | 0.48 |
-| quaker barn | +27.7 deg | **0.75** |
-| camden (genuinely frontal) | -0.05 deg | 0.46 |
-
-Fourteen of seventeen asked for more than 25 deg of yaw, most of them at a
-confidence the 0.40 gate admits. One photograph -- the hospital -- then opened a
-band 43 % of the frame and failed the write outright, which is how it was found.
-
-**Those are not errors the estimator made.** Converging horizontals *are*
-correct perspective on an obliquely photographed facade; the estimator is
-faithfully measuring facade obliquity. Squaring it up is *frontalisation*, not
-levelling, which is precisely what the planar section rejects as an automatic
-route by name -- "guessing wrong warps a good photo into a sliver". So
-confidence cannot catch this and is not built to, exactly as with the Prague
-ceiling: every factor it scores measures how well the lines agree, never whether
-they are the right lines.
-
-**With the cap back at 8 deg, turning the flag on does *less* than leaving it
-off, and that is the first thing the next person will hit.** `warp.limit`
-returns one `clamped` flag for all three axes, and "beyond the limit means
-refuse, not trim" then drops the whole correction. Measured:
-
-```
-        bpc -n burgebrach-...jpg
-OK       roll=-0.08deg pitch=+6.27deg conf=0.53 keep=100%
-        bpc -n --horizontal burgebrach-...jpg
-SKIPPED  correction beyond the limit (roll -0.1, pitch +6.3, yaw +57.4; caps 12/20/8)
-```
-
-The good 6.3 deg of pitch is lost because of a yaw nobody needed. **Whether
-that is right is an open question and part of the redesign**, not something to
-patch: the refuse-beyond-limit rule was written for the Prague ceiling, where a
-huge *pitch* is evidence the estimator locked onto the wrong line bundle, so the
-whole fit is suspect. A huge *yaw* says only that the facade is oblique, which
-is no evidence at all about roll and pitch. So the two plausible answers are
-"refuse, as today" and "drop the yaw, keep the levelling" -- and picking the
-second needs the plane question below answered first, because a yaw that is
-silently dropped is a flag that appears to do nothing.
-
-**The open design problem is which plane, and who chooses it.** A photograph
-routinely shows two facades. Yaw makes *one* of them fronto-parallel and
-necessarily makes the other worse, so there is no answer the geometry can give
-on its own. Candidate routes, none decided:
-
-* pick the dominant horizontal cluster only, and refuse when the second cluster
-  is within some margin of the first -- cheap, and refuses the corner view
-  instead of guessing at it;
-* let the user say which facade, by dragging a band over it. **The seam for this
-  already exists and is half-wired**: `pipeline.analyse(..., roi_x=(x0, x1))`
-  and `review.set_roi_x / clear_roi_x` restrict the *horizontal* evidence to a
-  vertical strip in full-resolution pixels (verticals stay global, and a strip
-  holding no horizontals falls back to the full frame). There is no CLI flag and
-  no GUI drag to drive it -- the config comment claiming `--roi-x` exists was
-  wrong. `Result.roi_x` is carried into the log line;
-* or a mask, the same way `--mask` already names a region.
-
-Until one of those is measured, it stays off. It is a special case, not a
-default, and `test_yaw_is_zero_when_horizontal_correction_is_off` is what pins
-the default itself -- it builds a bare `Settings()`, so it is the test that
-fails if anyone flips it again. It is how this was caught.
-
-**One window, not two -- done.** The review used to open as a `Toplevel` per
-photograph; it now lives embedded in the batch window as `ReviewPanel`, under
-the compact loader, and `load()` swaps the photograph into the same widgets.
-The old X button is a Close button; Save/Keep no longer destroy anything. The
-error status shows the full traceback and appends it to `bpc_errors.log` at the
-project root, because a Tk status box is not reliably copyable and a truncated
-traceback hides the frame that actually failed.
-
-**1080p standard, fullscreen, flex -- done, and the split is no longer a
-ratio.** The window opens maximized; F11 toggles borderless fullscreen (View
-menu). Review and results share a draggable `PanedWindow`, and what changed is
-how it is divided. See "The split is not a ratio" below.
-
-**Download assistance -- done.** Setup > "Download model files..." fetches the
-DeepLSD weights (98 MB) into `models/` via `deeplsd.download_weights`; the menu
-label is the progress bar, a second click while busy is refused, and a complete
-file is returned as-is. M-LSD ships in `models/`; BiRefNet weights are chosen by
-hand, so there is nothing else to download.
-
-**UI skills doc -- done.** `skills/ui.md`: the INK palette as the single colour
-source, the one-window structure, review-panel rules, and the off-screen test
-pattern for GUI changes.
-
-**ComfyUI settings in a compact popup -- done.** The ComfyUI controls live in
-a small withdrawn `Toplevel` (`_build_comfy_popup`), built once at startup and
-hidden until opened; close hides rather than destroys, so the verdict and model
-lists survive a round trip. The StringVars stay on the App, so `_comfy_open`,
-`_show_comfy_state`, `_fill_model_lists` and the queue path are untouched.
-This work arrived tangled in a bad merge that left **two `class App`
-definitions** in `gui.py`: the second shadowed the first and called
-`_build_comfy_popup()`, a method only the first had, so the window died at
-startup with an `AttributeError`. The duplicate is gone -- one class, one popup.
-
-**Preview on selection -- done.** `self.lst` binds `<<ListboxSelect>>` to
-`_on_list_select`, which loads the selected photograph into `ReviewPanel`,
-guarded by `session.path` so a re-click never re-runs detection. One catch that
-took a probe to find: **Tk 8.6 does not fire `<<ListboxSelect>>` for a
-programmatic `selection_set`** -- only real user clicks do (verified with a
-minimal repro). So `_add` and `_refresh_items` call `_on_list_select()` by hand
-after their programmatic selections; the guard makes a repeat a no-op. Adding
-files previews the first new one, and saving a photograph advances to the next.
-
-**Clean up the repository, fix the structure, improve the setup -- done.**
-Recorded here because it was a wish like any other. What it came to:
-
-*Cleanup.* Fourteen scratch files sat in the working tree -- six `_probe_*.py`,
-`_gui_merge_test.py`, `_layout_test.py`, `_smoke_preview.py`, and five captured
-logs including `full_suite.log` and `tools/mask_bench.log`. They are **moved to
-`analysis/scratch/`, not deleted**: they were untracked, so git could not have
-brought them back, and everything they discovered is already written into this
-file (the Tk `<<ListboxSelect>>` finding among it). `.gitignore` now catches the
-shape at the root -- `/_*.py`, `/_*.log`, `/_*.txt`, `*.log` -- so the next
-probe cannot reach a commit.
-
-*`analysis/README.md` is now the one tracked file in that folder.* The rule was
-`analysis/`, and **git does not descend into an excluded directory**, so a
-`!analysis/README.md` negation under it does nothing at all. It takes
-`analysis/*` for the negation to be reachable. A fresh clone otherwise gets no
-explanation of a folder the docs tell people to write into.
-
-*Structure.* The `MODULES` guard above, and the dead `planar.py` it found.
-
-*Setup.* `pyproject.toml` grew `[project.optional-dependencies]` --
-`gui` / `mlsd` / `deeplsd` -- and the platform markers `requirements.txt`
-already carried (headless OpenCV off Windows), which its `dependencies` had
-silently dropped. CI installs `-r requirements.txt` instead of a hand-written
-pip list that could drift from it, and runs `--doctor` as a gate before the
-suite.
-
-**There is deliberately no `lama` extra, and a test enforces it.**
-`simple-lama-inpainting` must go in with `--no-deps`; an extra resolves
-dependencies normally, so `pip install .[lama]` would be a one-command way to
-do exactly the Pillow-9.5/numpy-1.26 damage the manual step exists to avoid --
-a regression that reads as a convenience, which is why it needs a test and not
-a comment. `test_no_extra_can_install_a_backend_that_breaks_the_core` also
-bans `ultralytics`, the other package with a history of moving a required one.
-`test_the_declared_dependencies_are_the_ones_the_core_check_requires` pins
-pyproject against `deps.core_status`, since those are two statements of one
-fact and drift between them is quiet in both directions.
-
-*Left untracked, but not scratch.* `tests/assets/Horizontal/` -- seven
-photographs, 3.6 MB -- **is a deliberate asset folder for testing horizontal
-(yaw) correction**, which is the open feature two entries above. It was
-initially mistaken here for stray files; it is not, and it should not be
-deleted.
-
-It is still **untracked**, for one reason that has nothing to do with its
-purpose: filenames like `017d2b2a-...-2008695636.jpg` and
-`Webseitentitel_1.080x675.png` carry no provenance, every other asset here
-arrived through `tools/fetch_commons_asset.py`, and the licensing section is
-explicit that this repo stays MIT-clean. Committing them is a licensing
-decision for the author to make, not a cleanup one.
-
-**Nothing reads the folder yet either way.** `test_assets` globs `assets/*`
-and filters by extension, so it never descends into a subfolder -- the photos
-sit there inert until the yaw work grows a test that opens them. When it does,
-that test is the natural home for the "which facade" question the
-plane-selection wish has to answer, because these are the photographs it will
-be answered on.
-
-**A transparent grid over the corrected pane -- asked for, not started.** The
-question a reviewer actually has is "is it straight *now*", and the eye is bad
-at judging verticality against nothing. A grid answers it directly, and it is
-the rare request here that **cannot ruin a photograph**: read-only, invents no
-pixel, changes no estimate, and is one toggle away from gone. That makes it the
-right thing to build first among the open wishes.
-
-Three things it has to get right, all of them already settled by existing
-decisions elsewhere in this file:
-
-* **It goes on the *after* pane.** A grid over the original shows only that the
-  original was crooked, which nobody doubted. The corrected pane is where the
-  claim is being made.
-* **It is a canvas overlay, not a composite into the image.** Same reason
-  `_refresh_crop` redraws the overlay only and never calls `_schedule_redraw`:
-  compositing would mean a re-warp and a live `telea` fill of a
-  pixel-identical frame on every toggle, which is its own kind of jump.
-* **It must never reach the saved file.** It is a measuring instrument, not a
-  correction. The crop rectangle already establishes the pattern -- shaded in
-  the preview, applied only in `save()`; the grid is the case that is applied
-  *nowhere*.
-
-Open: spacing (a fixed division of the frame is scale-independent and
-defensible; pixel spacing is not), and whether to offer thirds for composition
-as well as a dense grid for verticality. A centre cross costs nothing and is
-probably the most useful single line.
-
-**Manual selection of the horizontal plane -- asked for, and it settles an open
-design question rather than adding a feature.** The yaw entry above ends by
-naming three candidate routes for "which facade should be made
-fronto-parallel", and says none is decided. This request picks the second:
-**let the user say, by dragging a band over the facade they mean.**
-
-**The seam is already written and is half-wired.** `pipeline.analyse(...,
-roi_x=(x0, x1))` and `review.set_roi_x` / `clear_roi_x` restrict the
-*horizontal* evidence to a vertical strip in full-resolution pixels; verticals
-stay global, and a strip holding no horizontals falls back to the full frame.
-`Result.roi_x` is already carried into the log line. What is missing is a drag
-in the GUI to drive it -- and **a test, because `roi_x` currently has none at
-all**, which is precisely the state `planar.py` was in.
-
-**It cannot be built alone, and the ordering matters.** Turning `--horizontal`
-on today does *less* than leaving it off: `warp.limit` returns one `clamped`
-flag for all three axes, so a yaw past the 8 deg cap drops the whole correction
-through refuse-beyond-limit, losing a good 6.3 deg of pitch over a yaw nobody
-asked for. A band selector feeding a yaw that then gets the photograph refused
-is a control that appears to do nothing -- the exact failure the always-live
-crop section was written about. So the refuse-vs-drop-the-yaw question has to
-be answered first, and this file says picking "drop the yaw, keep the
-levelling" needs the plane question settled. **This wish is what settles it**,
-which is why the two are one job and not two:
-
-1. decide refuse-vs-drop-the-yaw, now that a person rather than the geometry
-   names the plane;
-2. test the `roi_x` seam headlessly;
-3. then the drag, and only then is `--horizontal` worth turning on for anyone.
-
-## Conventions that are correct as written
-
-- **`H = K R K^-1`, always.** A pure camera rotation: three degrees of freedom,
-  all physical. Yaw is now fed into the warp as the third angle
-  (`correction_rotation(roll, pitch, yaw)` = `Ry(-yaw) Rx(pitch) Rz(-roll)`), but
-  it is **off by default**, so an ordinary run is still the two-angle rotation
-  and reproduces the old homography exactly -- pinned by
-  `test_zero_yaw_builds_the_same_homography_as_before`. It *cannot* shear. The reference built a
-  general projective transform plus an affine fix-up — eight free parameters,
-  nothing tying them to anything a camera could do, and a `clip_factor` hack to
-  stop the output exploding. Asserted by
-  `test_the_warp_is_a_camera_rotation_so_it_cannot_shear`.
-- **The `1/|g|²` reweighting in `refine_vp`.** `line · vp == |g| · sin(θ)`, so
-  dividing the algebraic residual by `|g|²` turns the cheap eigenvector solution
-  into the angular one. Not a fudge factor.
-- **An explicit "already parallel" hypothesis.** Pairwise RANSAC can never
-  propose exactly-parallel, so without it a straight photo is decided by
-  whichever noise realisation won.
-- **Seeded RNG everywhere.** A batch tool that gives different output on a
-  re-run is not usable. `test_the_same_input_gives_a_byte_identical_output_twice`.
-- **Confidence is multiplicative**, so any single factor can veto.
-- **Analysis at 1600 px, geometry in angles.** Angles are scale invariant, so
-  the only thing needing rescaling to full resolution is `f`. That is a real
-  argument for this parameterisation, not just tidiness.
-- **`review.py` has no Tkinter import.** Every manual-mode behaviour is a pure
-  function of state and is tested headlessly; `gui.py` is only the shell. This
-  was forced by the dev container having no Tkinter and turned out to be the
-  right split anyway.
-
-## A run has to be judgeable by someone who did not make it
-
-`--diagnostics` writes the interpreter, library versions, importable backends and
-the settings actually in force as a log header; `--json-report` stores the same
-block beside the results. "SKIPPED, low confidence" is nearly useless without
-them. `run_and_log.bat` collects a whole run — corrected images, overlays, log,
-report — into one folder, and writes the environment *before* the run so a failed
-run still leaves something diagnosable.
-
-`--remember` stores **addresses only** (checkpoint, mask folder, output, focal
-length, ComfyUI URL, workflow, and the three model files chosen for it). Correction parameters are deliberately not
-remembered: a setting that
-silently persists between runs is one nobody can reason about, and a batch must
-stay reproducible from its command line. Unknown keys are dropped on load so the
-file cannot become a second, hidden place where behaviour is configured.
-
-## Testing
-
-`python tests/run_tests.py` -- 181 tests, standalone, no pytest (some skip at
-runtime depending on assets and backends), 113 s. The modules are listed explicitly in
-`run_tests.py`, so a new test file that is not in `MODULES` runs nowhere and is
-worse than no test at all.
-
-**That rule is now enforced rather than written down, and enforcing it found a
-dead module.** `_unlisted()` compares `test_*.py` on disk against `MODULES` and
-fails the run naming anything missing, because the old failure mode was silent
-in the worst way: the file exists, it reads as covered, and it has never once
-executed. `test_planar.py` was in exactly that state -- seven tests, never run,
-and **three of them failed the moment they were wired in**:
-
-* `cv2.getPerspectiveTransform` asserts `CV_32F` on its inputs and
-  `planar.homography_from_quad` passed float64, so *every* call raised. The
-  module was dead on arrival -- and the assertion is long-standing, so it had
-  most likely never worked on any OpenCV this project supports, while this file
-  recorded it as "core done". That is the MODULES lesson at full strength: not
-  a version that got stricter, but code that had never once executed. The shape check still
-  happens in float64 and only the call is narrowed -- the solve is double
-  internally, `H` comes back float64, and a pixel coordinate needs three of
-  float32's seven digits.
-* `test_full_coverage_no_fill_band` asserted the wrong algebra: it pushed the
-  *output* canvas corners through the forward `H` and expected them to land on
-  *source* quad corners, which holds only if `H` is its own inverse. It now
-  sends them through `H^-1`, which is how `warpPerspective` actually resamples.
-
-The lesson is the one this file keeps recording in other forms: a test that
-cannot run is worse than an absent one, because absence is visible.
-
-The former known red is fixed: `Aulendorf_Schloss_Fassade.png` now has a cached
-mask in `tests/assets/masks/`, so the mask-cache test passes. The standing skips
-are the documented ones -- M-LSD without a TFLite runtime, and the two
-`*_upright.*` / `*_skip.*` asset tests while those assets are absent.
-
-Synthetic scenes (`tests/synth.py`) carry an **exactly known camera pose**. The
-high-frequency-mask notes warn that synthetic fixtures misled that project; the
-difference is that it was asking a *statistical* question about real texture,
-while this asks a *geometric* one where a rendered scene with ground truth is
-strictly the better instrument -- on a real photograph nobody knows the true
-pitch to compare against.
-
-What synthetic data cannot test is the front end: does LSD find the facade under
-real texture, JPEG blocking, foliage and lens distortion. That needs
-`tests/assets/`, where six further tests activate as soon as real photos are
-present. `*_upright.*` is asserted to be left unchanged, `*_skip.*` to be
-refused.
-
-**Two of those six are currently dormant, and the mask cache is what gives it
-away.** There are twenty-one masks and seventeen photographs: `painted-hall`,
-`prague-main-railway-station-ceiling`, `tiled-skyscraper-facade` and
-`warsaw-d3200-27mm_upright` have a cached mask and no image. So
-`test_files_marked_upright_are_left_alone` and `test_files_marked_skip_are_refused`
-both skip for want of assets -- including the Prague ceiling, which is the
-photograph the whole "beyond the limit means refuse" section is built on.
-`tools/fetch_commons_asset.py` is how the others arrived.
-
-**The suite was shortened by memoizing, not by deleting.** Two thirds of the
-runtime was the real-asset sweeps, and the largest single item in it was pure
-duplicate work: `test_a_known_rotation_is_recovered_on_real_photographs` and
-`test_every_photograph_it_is_confident_about_is_measured_accurately` both call
-`_round_trip_error(f)` over the same seventeen photographs with the same default
-arguments. `_round_trip_error` and `_load` now cache on their **full** argument
-tuple, and the second sweep went **20.3 s -> 2.8 s** (suite 129 s -> 113 s) with
-every assertion and threshold untouched.
-
-The key has to be the full tuple, and that is the whole trap.
-`test_the_border_guard_is_what_makes_the_measurement_honest` deliberately calls
-the same file twice, guarded and with `inner=0.0`, and asserts the second is
-three times worse. A cache keyed on the path alone would hand it the same number
-twice and the test would pass while measuring nothing -- the border artifact
-story in this file, repeated as a test bug. A cached `None` is also a real
-result, so the hit check is `key in cache`, never a truthiness test.
-
-The remaining big item, `test_every_asset_is_processed_without_error` at 26 s,
-is genuinely end to end (it writes files) and shares nothing with the round-trip
-path. It stays as it is.
-
-Optional backends are tested by *skipping* cleanly -- M-LSD without a TFLite
-runtime, DeepLSD without its checkout or weights, LaMa without its package. A
-suite that fails because an optional dependency is absent trains people to
-ignore it.
-
-**`test_inpaint.py` deliberately asserts nothing about image quality.** There is
-no ground truth for a pixel nobody photographed, so what it pins is
-*containment*: exact equality outside the hole, refusal above `--fill-max-share`,
-an unknown backend raising rather than passing through, and the shipped ComfyUI
-workflow still carrying the node titles the code writes into. Do not add a test
-that scores the generated band -- it would be scoring a guess.
-
-## Windows has two Pythons and neither is wrong
-
-This costs more time than any algorithm here, so it is worth stating plainly:
-
-| | torch (BiRefNet) | tkinter (the GUI) |
-|---|---|---|
-| ComfyUI `python_embeded` | yes, with CUDA | **no** -- the embeddable Python omits tcl/tk |
-| system Python | usually not | yes |
-
-A system Python that has *both* is the happy case and is worth checking for
-before assuming the split: the DeepLSD and LaMa measurements in these notes were
-only possible because this machine's python.org 3.12 carries torch with CUDA and
-tkinter at once. When that is true, none of the bridging below is needed.
-
-Both failures print "no backend". `--mask-info` reports both halves plus the
-interpreter, and the error message reads which side it is on: in the GUI Python
-it offers `--mask-export` *before* suggesting an install, because putting a
-multi-gigabyte CUDA torch into a second interpreter on a machine that already
-has one is the wrong first answer.
-
-`--mask-export DIR` runs the segmenter once from whichever Python can load it and
-writes one mask PNG per photograph; everything afterwards consumes the folder
-through `--mask file`. That bridge exists so nobody has to choose between the
-segmenter and the review window.
-
-**Anything fiddly belongs in Python, not in a `.bat`.** `run_and_log.bat` once
-searched for the checkpoint itself, grew a `^` continuation inside a
-parenthesised block -- which cmd splits and runs as a command -- and the mask
-prompt silently never appeared. That search is now `--birefnet-model auto`, where
-it is tested, and it prefers what *works* over what is largest.
-
-## Environment
-
-Plain CPython, `pip install -r requirements.txt` -- numpy, OpenCV, Pillow,
-piexif, and nothing else. `pip install -e .` does the same and adds the `bpc`
-command. Tkinter is needed only for the GUI and ships with the
-python.org Windows installer; the CLI runs without it. OpenCV's LSD was dropped
-in 4.1 and restored in 4.8, hence the detector fallback chain in `lines.py`.
-
-Three of the optional backends are also extras -- `pip install -e ".[gui]"`,
-`".[mlsd]"`, `".[deeplsd]"`. The other two are **not**, and must not become
-extras: `--fill lama` needs `--no-deps` (see the feature-list entry on the
-cleanup), and `--fill comfyui` needs no package at all, only a running server.
-
-Everything below is optional, imported lazily, and says what is missing instead
-of failing at import:
-
-| feature | needs | ask it |
-|---|---|---|
-| `--mask birefnet` | torch + weights (ComfyUI's are found by `--birefnet-model auto`) | `--mask-info` |
-| `--detector mlsd`, `hybrid`, `union` | `pip install ai-edge-litert`; the model is vendored | `--detector-info` |
-| `--detector deeplsd`, `deep-hybrid`, `deep-union` | torch, a `cvg/DeepLSD` checkout in `tools/`, `pip install omegaconf scikit-image pytlsd`, and `models/deeplsd_md.tar` (98 MB) | `--detector-info` |
-| `--fill lama` | `pip install --no-deps simple-lama-inpainting` | `--fill-info --fill lama` |
-| `--fill comfyui` | a running ComfyUI and an API-format workflow | `--fill-info --fill comfyui` |
-| GUI drag-and-drop | `pip install tkinterdnd2` | the window says so |
-
-**The `--no-deps` on that fourth row is not a style preference.** Plain
-`pip install simple-lama-inpainting` downgrades Pillow to 9.5 and numpy to 1.26
-to satisfy pins the package no longer needs, and OpenCV in the same interpreter
-stops importing. An optional backend must never be able to move a required
-dependency; install it without its dependencies and let a real ImportError say
-what is genuinely absent.
-
-`pytlsd` ships no wheels and builds from source, so DeepLSD also wants cmake and
-a C++ compiler. That, and not accuracy, is why it is not the default.
-
-## Licensing
-
-MIT, and it must stay clean. darktable's `ashift.c` is GPL-3.0 and ShiftN's
-source is LGPL. Both were **read to understand the algorithms** and neither was
-copied. Constants like "assume 28 mm" are facts about the problem, not
-expression. See `docs/prior-art.md` for what was taken conceptually and what was
-deliberately rejected.
+| system python.org 3.12 | yes (CUDA) | **absent** | yes | no |
+| ComfyUI `python_embeded` | yes | yes | **no** | yes |
+
+BiRefNet wants torch **+ transformers** + timm + einops; the GUI interpreter has no
+transformers, so `--mask birefnet` runs from the ComfyUI interpreter via
+`--mask-export` (writes one PNG per photo, consumed later through `--mask file`).
+The full interpreter split is the table above.
+
+M-LSD needs no second interpreter: its TFLite runtime (`ai-edge-litert`, the
+declared `mlsd` extra) is installed in the **system** interpreter, so
+`--detector mlsd|hybrid|union` run there directly. Reinstall with
+`pip install --no-deps ai-edge-litert`.
+
+## Ledger — the only place status lives
+
+**Suite 2026-09-14: 285 tests, 2 failed, 2 skipped, ~171 s — NOT green.** Both
+failures are the single receding-row photograph in the bug entry below;
+everything else passes, including the three features the worker landed on 09-14
+(theme switch, paste button, JPEG-quality spinbox — see Done). Re-run
+before trusting this — it is a measurement, not a promise, and no entry below may
+restate it. An item stays under **Open** until
+nothing is left to do; **Done** is only for finished work. `Pn` labels are short
+handles for work packages; entries written out in full here stand on their own.
+
+### Open — do these
+
+**Priority, set 2026-09-14.** The list below is not in order; this is.
+
+**0. Commit. Nothing else matters until this is done.** 47 files, ~5,966
+insertions and 55 untracked files sit uncommitted on a branch whose last commit
+predates all of it, 4 ahead of `origin` and never pushed. That is two agents'
+worth of a full day — the manual-first reshape, the mask brush, the overlay
+moves, Qwen's theme/paste/JPEG work — one bad `checkout` or crash from gone. Not
+a Ledger item, which is exactly why it kept being skipped. Commit in coherent
+chunks, then push.
+
+**1. Re-decide the batch-era caps as manual-first defaults.** Cheapest real
+improvement per hour, and it touches every photograph reviewed. `max_horizontal_deg`
+8 → 30 already proved the pattern: a cap reasoned for unattended batch was
+throttling a correction the user wanted, and the fix was one constant. The same
+argument is still unexamined for `max_pitch_deg`, the multiplicative confidence
+veto, and P9's refuse-whole-correction recommendation. Each needs its own
+measurement, not a blanket loosening — but each is a constant with a documented
+sweep behind it, so the work is bounded.
+
+**2. Click-to-select the building** (item below). The user's own preference, it
+kills the failure that recurred all of 09-13 (BiRefNet chose two parked cars,
+GDINO chose one building of a row), it completes the manual masking story the
+brush started — brush for coarse, click for exact — and every piece is already
+local. Bigger than #1 but the highest-value feature left.
+
+**3. Decide the receding-row bug** (item below) — *decide*, not necessarily fix.
+It is the only thing keeping the suite red, and a permanently red suite stops
+being a signal. Either do the real work (make the focal estimate reject
+horizontal evidence spanning multiple planes) or scope that photograph class out
+of the round-trip gate deliberately and in writing. Leaving it red by default is
+the one option that costs something every day.
+
+**4. SAM3 via ComfyUI** (item below) is now partly superseded by #2 — a point
+prompt is the same machinery with a better interface. Fold it into #2 or drop it;
+do not build both.
+
+**5. Distortion correction and the four `knowledge.md` research goals** stay
+last: blocked on a go-ahead and on measurement passes respectively, and none of
+them is what the product needs next.
+
+- **[open] Click-to-select the building instead of guessing it (2026-09-13,
+  user-directed, ref `github.com/Acly/krita-vision-tools`).** Every automatic
+  subject finder tried here guesses, and today it guessed *two parked cars* on
+  `39079116-...`. A point prompt does not guess: click the facade, SAM segments
+  it. This is what SAM is designed for and is **simpler** than the box/text route
+  already built, not harder. Pieces already in place: SAM2 (base-plus/large/small/
+  tiny) and SAM3 weights local, BiRefNet wired, and the review canvas already
+  handles clicks (planar corners, line brush, marks). Missing: a **point**-prompt
+  path (only the box path exists, via `masks.gdino_box` → `gdino_mask`), plus the
+  usual interpreter split (SAM needs the ComfyUI python, the GUI needs tkinter) —
+  solve it the way BiRefNet already does, compute once and cache, rather than
+  loading a segmenter inside the GUI process. **Fits the manual-first direction
+  and only that**: a click is per-photograph, so this is a review-panel tool and
+  can never be a batch default. **Licence**: krita-vision-tools is GPL-3.0 — take
+  the idea, not the code; SAM2 itself is Apache-2.0 and already vendored.
+
+- **[bug, diagnosed 2026-09-13, not fixed] An oblique *receding row* of facades
+  is corrected confidently and wrongly — a real limitation, not a bad asset.**
+  `39079116-ein-augenmerk-...-3Rec` is a legitimate architectural photograph
+  (looked at it: a row of gabled townhouses on Münzstraße, shot obliquely, the
+  street receding to the right, parked cars in front). Two tests fail on it:
+  round-trip error **3.71°** against a 2.5° gate, at **conf 0.73** against a 0.4
+  gate. **Measured across the whole 46-asset pool** (`analysis/` diagnostic, one
+  run): every other asset lands ≤1.87°, most under 0.6 — this is a **2× outlier**,
+  not a borderline case.
+  **Why it is confident**: the verticals really are vertical, so the vertical VP
+  is excellent — inlier share 0.911, stability 0.065°, horizon support 0.915, and
+  every confidence term passes (share/count/spread 1.0, horizon 0.95, focal 0.84,
+  stability 0.92). **Why it is wrong**: a receding row puts the *horizontals*
+  — rooflines, eaves, window courses — on many differently-angled planes, the
+  focal length is then derived geometrically from that mixed evidence
+  (`focal_source='geometric'`, f=2433), and a wrong f buys a wrong pitch
+  (13.5°) that fits the lines just as well. The classic pitch/focal degeneracy.
+  **Dead ends, do not repeat**: (1) the mask is irrelevant — `test_assets.py`
+  never references one, which is why the numbers were byte-identical before and
+  after every mask change made today; (2) `horizontal_vps` is **3 for every asset
+  in the pool**, so it cannot discriminate this case; (3) confidence does not rank
+  error at all here (conf 0.05 → 1.57°, conf 0.77 → 0.38°), so no threshold tweak
+  separates it without refusing good photographs too.
+  **Not faked green.** The honest routes are: make the focal estimate reject
+  horizontal evidence that spans multiple planes (real work, related to
+  `knowledge.md` §1 facade-outline-first and to `ArchitectureScheme`); or accept
+  that the round-trip gate encodes a *batch-era* promise ("what it touches does
+  not come out wrong") that the manual-first direction has made negotiable, and
+  scope this class out of that gate deliberately, in writing. **Blocked on: which
+  of those two.**
+  **Mask half, now closed**: `35559_XXL` got its missing mask, and
+  `39079116-...`'s mask was inverted because plain full-frame BiRefNet segmented
+  **two parked cars** as the subject (verified by looking at the PNG). Regenerated
+  via the GDINO crop path (prompt "building", box score 0.56) —
+  `test_birefnet.test_the_cached_masks_mark_what_to_ignore_not_what_to_keep`
+  passes now. Note the inconsistency this leaves: that one asset's mask came from
+  the gdino route while every other cached mask is plain BiRefNet, and
+  `birefnet.export_masks` cannot reproduce it (it calls `build_mask` directly and
+  never honours `mask_mode`), so the file is currently not regenerable by the
+  documented command.
+- **[open] SAM3 via ComfyUI as a second masking technique (follow-on, 2026-09-12;
+  feasibility assessed 2026-09-13).** The tools field now hosts line editing *and*
+  BiRefNet masking (see Done). The next exploration is a second masking route through
+  ComfyUI, like BiRefNet's `--mask-export` path (one PNG per photo, consumed later via
+  `--mask file`). **Assessment:** the HTTP side already exists — `inpaint._fill_comfy`
+  (upload → `/prompt` → poll → download) is a ready-made ComfyUI client, and
+  `masks.py:38` already names "SAM in ComfyUI" as the intended `--mask-export` consumer —
+   so a SAM3 mask workflow would be a thin addition reusing that plumbing. **Not blocked on
+   infrastructure after all (checked 2026-09-13):** every weight is already local in
+   `D:\ComfyUI_windows_portable\ComfyUI\models\` — Grounding DINO (Swin-T OGC + Swin-B), SAM2
+   (base-plus/large/small/tiny) and SAM3 (`sam3.pt`, 3.29 GB) — plus the matching custom nodes,
+   so nothing needs downloading (the 403 egress is moot). Two routes: the ComfyUI server (a
+   `GroundingDetector`→`Sam2Segment` graph), or **direct Python in `python_embeded`** with no
+   server at all — `transformers` GroundingDINO + the official `sam2` package; recipe and pitfalls
+   live in `.claude/skills/grounding-sam/SKILL.md`. The remaining gate is §3a's round-trip benchmark
+   (beat BiRefNet / no-mask on the pool) before it becomes a default. Same two-interpreter story as
+   BiRefNet (ComfyUI interpreter has no tkinter).
+- **[open] Distortion correction (barrel/pincushion) — fully researched 2026-09-14,
+  blocked on go-ahead to prototype Stage 0+1.** `H = K R K^-1` is a pure rotation and
+  cannot touch radial distortion. **Full research now in `knowledge.md` §5** (APIs,
+  licences, interpreter split, remap composition, trigger signal) — read that before
+  implementing. Summary: Stage 0 `lensfunpy` (MIT, Windows wheels, returns per-pixel
+  remap coords directly for `cv2.remap`) when EXIF identifies the lens; Stage 1
+  AnyCalib (Apache-2.0, ICCV'25, `radial:k` k=1..4, ~25 ms on 4090, ComfyUI
+  interpreter) blind fit for no-EXIF images; Stage 2 GeoCalib (Apache-2.0 code /
+  CC-BY-4.0 weights, ECCV'24, accepts focal prior, enters `model.py` prior table as
+  one row); Stage 3 cross-check gate (free, multiplicative confidence); Stage 5
+  compose undistortion map + H into a single `cv2.remap`. Pipeline order: detect →
+  undistort → correct. Trigger: monotonic angle drift in `merge_collinear` chains.
+  Test case: `Aulendorf_Schloss_Fassade.jpg` (zero EXIF, fragmented lines). Must keep
+  the 8% border guard. **Blocked on**: user go-ahead to prototype — new dependency,
+  new pipeline stage.
+- **[open] Four research goals in `knowledge.md` — read that file before picking any
+  of these up (2026-09-13).** Full analysis, existing-measurement citations and
+  external sources live there; this is the pointer plus the one-line scope of each.
+  **None of these are implementation packages** — each needs its own measured
+  comparison first, same discipline as the P9/pitch-cap passes. Don't guess at any of
+  them; if the measurement says "no", write that down and stop, same as those did.
+  1. **Facade-outline-first vs. partition-after-detect** (`knowledge.md` §1): does
+     marking the two facades before detection recover corner cases like `lochfassade`
+     that `ArchitectureScheme`'s post-hoc split under-weights (`h2` support 0.045 there
+     vs. 0.36 on a confident corner)? Analysis-only until a comparison exists.
+  2. **Dominant-edge hierarchy in the detector** (`knowledge.md` §2): a structural-edge
+     tier (roofline, ground line, the corner seam) above ordinary window/course lines,
+     orthogonal to `ArchitectureScheme`'s plane split. Needs a literature check on
+     building-outline/roofline extraction (not done yet, flagged in the file) before a
+     design, then the usual `tools/benchmark_detectors.py`-style before/after.
+  3. **SAM reconsidered via SAM3's text prompts** (`knowledge.md` §3a): the original
+     SAM rejection was the *invented selection criterion*, not SAM itself — SAM3 takes
+     a text/concept prompt ("building facade") and removes that criterion at the root.
+     Needs the same round-trip benchmark that killed SAM1 before it becomes anything.
+     **Infrastructure landed 2026-09-13**: `.claude/skills/grounding-sam/SKILL.md`
+     documents a detect-then-segment route (Grounding DINO text-prompts a "building"
+     box, SAM2 segments inside it — SAM3 itself is also present locally as a one-model
+     alternative, `models/sam3/sam3.pt`), all weights already local (this box has 403
+     egress, nothing more can be fetched). `tools/probe_gdino_sam.py` is the probe
+     script the skill's own §7 validation calls for. **First run crashed, not yet
+     measured**: `analysis/gdino_sam_probe_run.log` — GDINO loads fine (0.9s), then
+     `TypeError: string indices must be integers, not 'str'` at
+     `probe_gdino_sam.py:105` (`d["label"]` assumes a dict; the actual detection
+      result shape differs) — fix that before anything can be eyeballed or benchmarked.
+      The skill's own gate (§5) still applies in full: a box overlay + mask to eyeball,
+      then score against cached BiRefNet masks and no-mask on the worst case, only then
+      a `mask_mode` slot. **Direction shifted 2026-09-13 (user):** keep BiRefNet as the
+      matte engine ("don't drop it too fast") and test GDINO as a *crop in front of*
+      BiRefNet rather than replacing it with SAM2 — that combination was measured and
+      gives **no gain** on the current pool (`tools/probe_gdino_birefnet.py`, result
+      recorded in `knowledge.md` §3a); `probe_gdino_sam.py` is superseded, not deleted.
+  4. **A found-geometry overlay helper** (`knowledge.md` §3b): show the *specific*
+     vanishing points/inlier lines the algorithm found on **this** photo (not the
+     generic verticality grid, which already exists and is Done) — the rendering
+     already exists twice over (`analysis/README.md`'s debug overlay,
+     `ArchitectureScheme.draw_preview`); what's missing is a GUI toggle and a decision
+     on which of the two to show by default.
+
+### Done — rely on these
+
+- **Clipboard paste + jpeg quality spinbox** (09-13, user: "möchte screenshots per copy paste einfügen"). Paste button (`add_paste_btn`) in addbar calls `App._paste_screenshot()`, which grabs the clipboard via `PIL.ImageGrab.grabclipboard()`, saves a timestamped JPG in the output dir at the configured quality, and feeds it through `_add`. Jpeg quality spinbox (`v_jpegq`, range 10–100) added to batch options grid (2,4), persisted via `trace_add` → `prefs.save(jpeg_quality=…)`. Pinned by `test_gui.test_paste_button_exists_and_handler_is_wired` and `test_gui.test_jpeg_quality_spinbox_in_batch_options`.
+- **[bug] Before/after canvases stayed black after a theme switch** (09-13, user:
+  "still bg black!"). `tk.Canvas` has no `-fg` option, so the old Canvas branch's
+  `cget("fg")` raised TclError and aborted the branch *before* the background was
+  re-tinted. Rewrote it as an independent per-option cget loop (gui.py ~280-294):
+  each of bg/foreground/highlightbackground is read and swapped on its own, a bad
+  option can no longer take the others down with it. Pinned by
+  `test_gui.test_theme_switch_retints_canvas_backgrounds`.
+- **Status box removed; detector moved Q4→Q3** (09-13, user: "status not needed
+  anymore, move all detector stuff from 4 quarter to 3rd quadrant left bottom").
+  The `tk.Text` status area and its copy button are gone from the review panel's
+  top frame; `_set_status`/`_set_status_extra` are no-ops so the ~25 call sites
+  throughout `gui.py` remain safe. The detector combobox and weights button now
+  live in Q3 (`_build_tools`, the tools field, bottom-left) instead of the App-level
+  batch options panel (Q4). `App.v_detector` is kept as a StringVar synced via
+  `trace_add("write", …)` from the review panel's combobox so `_settings()` still
+  reads the right value. The weights button is created on the App object
+  (`app.btn_weights`) inside `_build_tools` so `_download_models()` can reference
+  it for progress display. Four test assertions in `test_gui.py` that read
+  `r.status.get("1.0","end")` were removed.
+- **[bug] The mask brush did nothing from the second photograph onwards — fixed
+  (09-13).** `v_stroke`/`v_stroke_w` were rebuilt by `_build`, which re-runs on
+  every load, while the "Mask brush" checkbutton lives in the tools field, which
+  is built **once**. After the first load the box set a variable nothing read and
+  `_on_click_before` saw a fresh `False`. Every test passed throughout, because
+  they all set `v_stroke` directly instead of pressing the widget — the exact
+  "Tested is not reachable" trap this file names. Fixed by making them once, and
+  pinned by `test_gui.test_the_mask_brush_still_works_after_a_second_photograph_loads`,
+  which **presses the real checkbutton and sends real Tk events, after a reload**.
+  **Audited for more of the same class**: every other tools-field variable
+  (`v_alpha`, `v_detector`, `v_gdino_prompt`, `v_maskinv`, `v_maskmode`, `v_roi`,
+  `v_roi_x0/x1`) is created inside `_build_tools` itself, so none can go stale.
+  This was the only instance.
+- **Brush preview fixed and restyled** (09-13, user: "yellow cursor is far off").
+  It drew stroke points — stored in *image* coordinates — straight onto the
+  *canvas*, so it sat a whole `_before_off` away from the pointer; and it used the
+  radius as a width, so the guide was half the mark it left. Now offset correctly,
+  at the true diameter, solid dark red instead of dashed yellow (a marquee reads
+  as a selection, not as paint).
+- **Grid draws on the corrected pane only** (09-13, user-directed). It was being
+  drawn on both. On the original it measures nothing and competes with the
+  detected lines; on the result a true vertical should run along a grid line,
+  which is the whole point. Pinned in `test_the_grid_never_reaches_the_saved_file`.
+- **"Check lines": re-detect on the corrected frame** (09-13, user-directed
+  diagnostic). A switch on the after pane runs the detector over the *result* and
+  draws what it finds — green where a line came out truly vertical/horizontal,
+  red/orange where it still leans. The direct way to see a correction that came
+  out too weak, instead of inferring it from the before pane. Off by default;
+  runs on the preview-sized array, never full resolution.
+- **`max_horizontal_deg` raised 8 → 30** (09-13, user: "horizontal correction is
+  often way too weak"). The 8 was reasoned for unattended batch, where a wrong yaw
+  shears a frame nobody looks at; P9 measured the real single-VP yaw on this pool
+  at **16–70°**, so the cap was clamping it to a fraction of what the geometry
+  asked for. 30 matches the manual slider, so automatic and by-hand now reach the
+  same place. The shear risk is unchanged and real — it is simply seen by the
+  person reviewing before anything is written. First consequence of the
+  manual-first direction reaching a measured default; the others (pitch cap,
+  confidence veto, P9's refuse-whole) are still open.
+- **Tools live on the picture now** (09-13, user-directed): the before pane's
+  top-left corner is a vertical palette — a bigger `+`, the folder icon, then
+  Mask brush / Mark / Planar as toggle buttons (`indicatoron=False`, so a tool
+  reads as held). Everything you can do to the original is in one column on the
+  original.
+
+- **The brush paints the mask now, instead of erasing individual lines** (09-13,
+  user-directed: "use brush to expand mask manually — for example killing the
+  car"). Renamed **Mask brush**. `review.paint_ignore(pts, display_scale, radius,
+  erase=False)` maintains a hand-painted region at analysis resolution, merges it
+  into the shown mask so the red wash grows as you paint, and strikes lines the
+  paint covers **end to end** — `drop_by_endpoints`, the same rule the automatic
+  mask uses, so a facade edge that merely crosses the painted area keeps its say.
+  Re-derived from the region on every stroke rather than accumulated, which is
+  what makes erasing work. Deliberately skips the two heuristics that
+  second-guess a *computed* mask — `protect_structure` (hands long lines back)
+  and `credible` (can refuse a mask outright): what the user paints is a decision,
+  not a hypothesis. Survives a re-detect (`_detect` re-applies it), so changing
+  detector or mask source no longer discards it. Gestures are Photoshop's: **left
+  paints, right erases, Alt+right dragged sideways sizes the pen**. This is the
+  manual answer to the problem that ran all day — BiRefNet picked two parked cars
+  as the subject, GDINO picked one building; a stroke ends the argument.
+  `test_review.test_painting_the_mask_strikes_what_it_covers_and_erasing_hands_it_back`
+  + `test_gui.test_the_mask_brush_paints_the_ignore_region_and_erases_it_again`.
+  **Supersedes `erase_lines_in_stroke`, which is deleted** along with its tests —
+  painting subsumes it (the mask drops those lines anyway) and the user asked to
+  drop per-line annotating.
+- **Overlay switches moved onto the images they draw on** (09-13, user-directed):
+  `Lines` and `Mask` to the top-right of the *before* pane, `Grid` to the
+  top-right of the *after* pane, both `place`d over the canvas like the add icons
+  in the before pane's top-left. A switch for an overlay belongs on the picture it
+  changes, not in a box across the window; and the grid in particular is the ruler
+  you judge the *corrected* frame with, so it belongs on that frame. Built in
+  `_build` beside their canvases — `_build` re-runs on every load, so a bar
+  parented to the previous canvas dies with it; the variables are made once so the
+  switches don't flip themselves back on each photograph. `_mk_show`/`_mk_mask`
+  deleted (their only callers were the old row).
+- **Masks get a morphological close before the shrink** (09-13, user-reported thin
+  stripes, with a screenshot). `build_mask` now closes (dilate then erode, default
+  `close_frac=0.004`) before the measured `shrink_frac` erosion. The matte leaves
+  thin unmasked slivers where it runs between structures, and the shrink is an
+  erosion, which eats a thin region entirely and leaves broken stripes. Closing
+  first fills them without moving the silhouette, so it cannot disturb what
+  `shrink_frac` was measured against. Kept deliberately smaller than the shrink:
+  it is for speckle, not for reshaping the subject.
+- **The options bar says what it is**: titled "defaults every photograph opens
+  with" (09-13). "detector", "mask" and "fill" appear *twice* in this window and
+  nothing said which was which — `_settings()` feeds these to every
+  `review.load`, and the panel's copies override them for the photograph on
+  screen. Same controls, now legible.
+
+- **The prominent run button now *asks* instead of writing unattended** (09-13,
+  user-directed "focus on manual; if batch then image by image"). The accent
+  button in the run bar is `Review each` (`Review` for a single photograph) and
+  calls `_review_each`, which opens one review window per image and writes only
+  on Save; the old fire-and-forget run is demoted to a plain `Unattended` button
+  (`btn_batch`) beside it — **demoted, not deleted**, and both go disabled while
+  a run is writing so a review walk can't race it. Nothing about `_review_each`
+  itself changed: the walk, its `[n/total]` position label and its close-advances-
+  the-queue chaining already existed and were simply not the default.
+  `test_gui.test_the_prominent_button_asks_rather_than_writing_unattended` pins
+  it by *pressing* the button and checking no worker thread starts — a button
+  labelled Review but wired to the batch is the failure worth catching, and only
+  invoking it tells the two apart.
+- **`masks.build` accepts several sources at once** (09-13): `mask_mode` may be
+  one name as always ("birefnet") or comma-joined ("file,birefnet"), in which
+  case the ignore regions are **added** (a pixel is ignored when any source
+  ignores it). Single values behave exactly as before, so every caller, CLI flag
+  and remembered preference is untouched. `_build_one` holds the per-source logic.
+  **Currently reachable from nothing** — the GUI checkbox UI that would drive it
+  was started and reverted when mask work was paused, so this is a seam with no
+  caller: the gotcha this file already names. Either wire it or drop it; don't
+  leave it a third time.
+
+Condensed 2026-09-13 (see Governance) — one to a few lines each: what shipped, the
+date, and the pinning test if any. Full narrative for anything still worth arguing
+about lives in `knowledge.md` (research goals) or `docs/worker-environment.md`
+(worker/tooling); everything else, the code and tests are the source of truth for
+*how* — this list is only the record *that* it happened.
+
+- **Review-window UI polish: tooltips, movable mark endpoints, Alt+click mask erase, Mask Apply, loupe in mark mode** (09-13, user-directed). `_attach_tooltip` (gui.py ~473) adds a `tk.Toplevel` tooltip to all ~30 interactive buttons; rubberband mark lines gained draggable endpoints for refinement; Alt+Left-click erases mask paint (same as right-click, gui.py 2414); "Mask Apply" button strikes lines covered by painted mask (gui.py 2208); full-resolution loupe magnifier follows the cursor when dragging planar corner handles (gui.py 1539-1588). `test_gui.test_the_mask_brush_paints_the_ignore_region_and_erases_it_again`, `test_gui.test_planar_corners_can_be_placed_and_dragged`.
+- **Loupe click forwarding + drag tracking** (09-14, user-reported "loupe not working on click" then "loupe still fixed when moving handle"). Two fixes: (1) `_loupe_show()` now binds `<Button-1>`, `<ButtonRelease-1>`, `<B1-Motion>` on the loupe canvas and relays them to `c_before` via `event_generate` at the equivalent coordinate — the loupe floats above `c_before` and was swallowing clicks. (2) `_on_before_b1motion` now calls `_loupe_move(event)` first, so the loupe tracks the cursor during drags (`<B1-Motion>` fires instead of `<Motion>` while a button is held). Checkbox indicators enlarged ~25% via `indicatorwidth=16, indicatorheight=16` on the TCheckbutton style (same session, user-directed "25% larger").
+- **FIND controls moved to the input side; review panel is edit-only.** The line
+  detector + ROI x left the lower-right adjustments panel (`leftcol` removed) and now
+  live in the bottom-left tools field beside the before-image (`_build_tools`) — what
+  the estimator *sees* belongs on the input side, not with the angles that edit the
+  result (09-13, user-directed; verified by off-screen position dump). The panel is a
+  single edit column now. This supersedes the "three-zone within the panel" proposal in
+  the layout-ergonomics item it closed.
+- **ROI strip auto-enables horizontal correction** (09-13, fixes "ROI shown but not
+  applied"): ROI x only restricts *horizontal* evidence → yaw, and yaw is gated on
+  `correct_horizontal` (`model.py:426`, `warp.py:49`) which defaults off — so the strip
+  changed nothing until that flag was set. `_apply_roi` now turns the flag on (and calls
+  `_on_horizontal_toggle()`) when a valid strip is set; clearing the strip does not force
+  it back off. `test_gui.test_enabling_an_roi_strip_turns_on_horizontal_correction`.
+- **Batch Output destination moved to the Start/Stop bar** from the loader field — an
+  output concern riding the run controls' existing height (the options frame above has no
+  vertical headroom; the cross fixes field height). `_w_out` packed right on `bar`, path
+  field before the progress bar so it keeps width at 1280 (09-13). Closes layout-ergonomics ask #1.
+- **Window floor raised to 1920×1080** (`self.minsize(1920, 1080)`, `gui.py`): the cross
+  needs a full field per quadrant, so the old 960×640 floor let a resize starve the
+  canvases. Off-screen tests updated to the new floor (09-13).
+
+- **Controls `btns` row no longer clips at any window size** (09-13, full fix for
+  the overflow bug — closes the Open item that had called this "partially fixed").
+  Two mechanisms: (1) the action row (Save/overwrite/Close/Keep original) reaches
+  every size because `btns.pack(side="bottom", fill="x")` now runs first in the
+  assembly, so it claims its strip before the picture does — the picture yields
+  height, never the buttons; paired with the adaptive adjustments-panel default
+  `layout.adjustments_start_open` (open only if the window height can afford both
+  controls and a usable picture; `_adapt_adjust_default` applies it and stands down
+  permanently the instant the user touches the toggle by hand). (2) The row's own
+  width overflow is solved by splitting it into two rows — `self._btns` (Auto/Reset
+  left, Save/overwrite/Close/Keep right) and `self._btns2` (Mark/kind/Planar/Clear
+  marks/Strike slanted/Auto crop/Reset crop) — and moving the display overlays
+  (Lines/Mask/Grid/grid-step) out of the row into the lower-left tools field
+  (`_build_tools`), so each row fits the ~742–1230 px field at the 1920 floor.
+  `test_gui.test_the_save_button_is_reachable_at_every_window_size` (now asserts
+  every child of both rows has width > 0) +
+  `test_the_panel_default_keeps_both_the_buttons_and_a_usable_picture` +
+  `test_a_hand_made_choice_about_the_controls_outranks_the_height` +
+  `test_collapsing_the_adjustments_leaves_the_cross_where_it_was`; measured by
+  `analysis/verify_btns_fit.py`. **Supersedes** the "three sub-rows" IA redesign this
+  bug's Open entry used to propose — that specific proposal was not what got built;
+  this is a narrower, different fix (assembly priority + adaptive default + row
+  split), not the redesign.
+- **Folder-add icon redesigned**: one continuous polygon silhouette (a body whose
+  top edge steps up into a short tab over the left half), replacing the old two-
+  overlapping-rounded-rectangles blob that was confirmed unrecognizable at 18px
+  (09-13, `_folder_pil`, `gui.py`). **Visually verified by the architect** at 18px
+  and 8x (`analysis/folder_final_18.png` / `folder_final_8x.png`, rendered via
+  `analysis/render_folder_final.py` from four candidates) — Qwen cannot view images
+  itself (confirmed directly from its own reasoning trace while working this item),
+  so this item's "visually checked before done" gate routes through rendered
+  artifacts plus a sighted reviewer, not a worker self-check. No dedicated shape-
+  pinning test, only the pre-existing `test_gui.py:673` mapped-presence check — a
+  future edit could silently regress the shape.
+- **Crop rectangle gained mid-edge handles**, not just corners: a drag on an edge
+  midpoint moves just that edge along its axis (top/bottom vertically, left/right
+  horizontally) instead of re-placing all four (09-13, `_grab_handle`, `gui.py`).
+  `test_gui.test_the_mid_edge_handles_move_one_edge_on_its_axis`.
+- **Enabling the `roi_x` strip now turns on `correct_horizontal` with it** (09-13)
+  — the strip only shapes the yaw, and yaw is gated on that flag (off by default),
+  so a strip that left it off changed nothing. One-way: clearing the strip again
+  does not force the flag back off, since that may now be a deliberate choice.
+  `test_gui.test_enabling_an_roi_strip_turns_on_horizontal_correction`.
+- **`roi_x` got a real interface**: mouseover tooltip + two draggable vertical
+  rulers on the before-canvas, defaulting to 20%/80% (not the old useless 0/100),
+  clamped to the frame edge and to each other so the strip can't collapse or be
+  swiped away; percent spinboxes stay as a secondary fine-tune (09-13, user-directed).
+  `test_gui.test_roi_x_draws_two_draggable_rulers_defaulting_to_20_and_80`. The
+  auto-derived default from a GDINO box (`grounding-sam/SKILL.md` §6) is a later,
+  separately-measured refinement — this is the baseline.
+- **Mask opacity works with "Lines" off** (09-13) — `render_before` drew the mask
+  wash only when lines were shown; now independent.
+  `test_review.test_mask_opacity_is_adjustable_and_zero_means_invisible`.
+- **"subfolders"/"overwrite originals" duplicate checkbox fixed** (09-13) — one pair
+  now, not two. `test_gui.test_the_batch_bar_has_each_setting_exactly_once`.
+- **`--mask gdino` shipped**: 4th mask_mode, text-prompt box (GDINO) crops, BiRefNet
+  mattes inside it; opt-in, not default (09-13). Needed `kornia` (`--no-deps`) to
+  unblock BiRefNet loading in-process. 6 `test_masks` tests +
+  `test_gui.test_the_gdino_prompt_field_and_mode_are_reachable`. Not a measured win on
+  clean assets (see the GDINO-crop finding below) — ships as an alternate entry point /
+  competing-foreground fix.
+- **Pitch cap raised 20°→30°** (09-13, user-directed, overriding the measurement
+  below). `config.py max_pitch_deg = 30.0`.
+- **BiRefNet-lite checkpoint support** added (`_arch_file` routes "lite" names to
+  `birefnet_lite.py`) (09-13). `test_birefnet.test_the_lite_checkpoint_uses_its_own_network_file`.
+  **GDINO-crop-then-BiRefNet measured no gain** over plain BiRefNet on 3 assets (IoU
+  0.975–1.000) — `tools/probe_gdino_birefnet.py`, recorded in `knowledge.md` §3a. (This
+  did not stay a stopped probe — it shipped anyway as `--mask gdino` above, a looser
+  reading of §3a's gate than this measurement supports; noted once, here.)
+- **Crop rectangle gains a pan gesture**: press-inside drags the whole rect, clipping
+  to the frame at an edge (09-13, user-directed).
+  `test_gui.test_dragging_inside_the_crop_pans_it_and_clips_to_the_frame`.
+- **Cached-mask pool completed** (6 assets generated) **and a real bug fixed**:
+  `cv2.imread` mangles non-ASCII paths on Windows — added `masks._imread`
+  (`np.fromfile`+`imdecode` fallback) (09-13). A mojibake mask filename and two
+  legitimately-degenerate masks (routed to the existing `MK.credible` refusal) were
+  also cleaned up in the same pass.
+- **P13 decided**: division/fraction grid modes stay bare, by construction
+  (`_grid_step` returns `step=0` → `_draw_rulers` no-ops there) (09-13). No code
+  change needed — rulers remain pixel-mode-only, top/left/right edges.
+- **P10 done**: the 2 actually-missing assets (of the 4 the item named — 2 had
+  already landed) were tracked-but-deleted, restored via `git checkout --`, no
+  network needed (Commons is 403 from this box regardless) (09-13).
+- **`ArchitectureScheme` wired in** behind `config.use_scheme` (default `False`) /
+  `--scheme` (09-13) — off by default since it only ever removes evidence.
+  `pipeline.analyse` re-derives vert/horiz from survivors when it fires; summary
+  logged to `detect_info`. `test_pipeline.test_use_scheme_partitions_lines_and_is_off_by_default`
+  + `test_schemes` (7). **Do not build a second classifier for this under a different
+  name** — checked against a prompt referencing `XiaohuLuVPDetection`/`GlobustVP`/
+  `vp-toolbox`/`perspective-control` on 09-12, this class already covers it. A more
+  outlier-robust VP search belongs in `vanishing.py`, not a new class; `vp-toolbox`'s
+  J-linkage drops the Manhattan-orthogonality assumption `H=KRK^-1` depends on, a
+  core-model change, not a line-filter tweak.
+- **P9 (yaw policy) measured, analysis-only** (09-13): over 33 assets with
+  `correct_horizontal=True`, refuse-whole-on-limit throws away 25 photos whose
+  roll+pitch were safely within cap — only yaw (16–70°) breached; only lochfassade
+  breached multi-axis. **Recommendation: refuse only on roll/pitch breach; drop yaw
+  and keep levelling when only yaw breaches.** Not implemented — a separate
+  `warp.limit`/`pipeline.analyse` decision, and only matters once `correct_horizontal`
+  is opted into (default off).
+- **Pitch cap measured, analysis-only** (09-13): 32/33 assets ≤19.5°, only
+  lochfassade at 28.6° exceeded 20°; forcing it through showed a fill-smear + a
+  trapezoidal far-facade (expected — one rotation can't square two non-coplanar
+  planes). Recommended keeping the cap at 20 — **overridden the same day**, see
+  "Pitch cap raised to 30" above; kept here as the measurement the override was
+  weighed against.
+- **P16 done**: rubberband marking takes `kind="v"|"h"` now — a horizontal-kind mark
+  drives yaw via `min_horizontal_support=0`; mark-line width scales with image size
+  (09-12). `test_review` (4 new) + `test_layout.test_the_mark_line_thins_out_on_small_photographs`.
+- **BiRefNet's process-wide `subprocess.check_output` monkeypatch scoped** to a
+  contextmanager around just the torch import (09-12) — stopped leaking into other
+  callers.
+- **`tests/assets/Horizontal/` wired into `test_assets.py`**, `*_corr.*` outputs
+  filtered out so the test doesn't grade its own homework (09-12).
+- **`skills/ui.md` rewritten** for the cross layout + the widgets that landed since
+  (Spinboxes, mark-kind combobox, rulers, loupe) (09-12).
+- **Bottom-left field became the persistent tools area**: line-brush + masking
+  controls (incl. a working mask-opacity `tk.Scale`) moved there from the old
+  lower-right row (09-12, user-directed).
+- **Review-panel columns read "find vs. edit"**: detector in `leftcol`, angle
+  sliders + fill/mask/ComfyUI in `rightcol` (09-12, user-directed). Pure reparenting.
+  **Superseded 09-13** — the FIND controls (detector + ROI x) left the panel entirely
+  for the bottom-left tools field; the panel is now a single edit column (see the
+  "FIND controls moved to the input side" entry above).
+- **Loader minimized** to two grey add-icons overlaid on the before-image + a
+  save-folder row; file listbox removed (09-12, user-directed) — this also fixed a
+  3px results-tree collapse at 1280×800 that the listbox's height demand was causing.
+- **Line-brush stroke tool**: drag over the before-canvas erases every candidate
+  line it touches — a pencil, not a toggle; sweeping the same path twice is
+  idempotent, one `refit()` per stroke (09-12; **corrected 09-13** — this shipped as
+  a toggle/flip and was documented as one here, but the code is now erase-only:
+  `erase_lines_in_stroke`, was `toggle_lines_in_stroke` — the old entry was a wrong
+  done). Refined 09-13 (user-directed): default width 24→10; struck lines now
+  *vanish* from the before render instead of lingering grey (`render_before` no
+  longer draws disabled lines in `PV.GREY`), so an erased line stays gone; the drag
+  preview is a temporary saturated-amber dashed brush (`#ffd000`, denser dash) that
+  clears on release while the erasure persists — pale `#ffe14d` was invisible on
+  light facades. `test_review.test_a_stroke_erases_every_line_it_crosses_and_is_idempotent`
+  + `test_gui.test_line_brush_stroke_erases_lines_and_clears_its_preview`.
+- **`ReviewPanel._apply_mask` no longer crashes on a missing `v_maskpath`** (09-13,
+  surfaced by an off-screen probe). It read `self.v_maskpath`, but that StringVar is
+  created on the App (batch options), not the ReviewPanel — so picking birefnet/gdino
+  with no stored model threw `AttributeError`. Now it reads the App's remembered
+  `"birefnet_model"` (mode-independent, unlike the mode-dependent `v_maskpath` field)
+   via `self._app()`, falling back to prefs under a test root.
+- **Mask-mode label renamed "source" → "mask"** (09-13, user-directed): the tools-field
+  label beside the mask-mode combobox (off/file/birefnet/gdino) now reads "mask". One-line
+  text change at `gui.py` (`_build_tools`), nothing else on that row moves.
+- **Hough detector removed** (09-12, user call — too noisy, and was a silent
+  fallback even when a different detector was explicitly picked). `detect_segments`
+  now returns empty rather than degrading to it. `test_detectors.py`/`test_prefs.py`
+  updated for the removed name.
+- **Off-screen test coverage added for planar corners** (`debug_ui.py` +
+  `test_gui.test_planar_corners_can_be_placed_and_dragged`), closing the gap that let
+  P11/P12 (below) sit broken undetected for a day (09-12).
+- **Loupe crash fix**: `w.lift()` is the wrong Canvas API for raising a window (it's
+  the *item*-stacking call); now `w.tk.call("raise", w._w)` (09-12).
+- **Planar Save fix**: `_save` was writing the roll/pitch correction even with 4
+  planar corners placed, silently discarding them. Now branches on
+  `v_planar.get() and len(planar_quad)==4` (09-12).
+  `test_gui.test_save_routes_to_planar_when_four_corners_are_placed`.
+- **P15 done**: before/after panes show source/destination filenames,
+  middle-truncated so the extension always survives (`_shorten_middle`) (09-12).
+- **Grid-spacing combobox made genuinely editable** — was still `readonly` despite
+  an earlier claim otherwise (09-12).
+- **Angle/focal sliders gained paired Spinboxes** for fine control; flex rulers (P13)
+  added on the after-canvas, pixel mode only (09-12). `layout.ruler_ticks` +
+  `gui._draw_rulers`, `test_layout.test_ruler_ticks_*`.
+- **Ruler ticks added to the right edge too**, for counter-checking level — same
+  y-positions as the left ruler (09-12, user-directed).
+  `test_gui.test_the_ruler_reads_the_same_height_on_left_and_right`.
+- **M-LSD unblocked in the GUI interpreter** — needed `ai-edge-litert`
+  (`--no-deps`) (09-12). 2 tests un-skipped.
+- **Perfect cross UI, window = cross** (09-12). Four exactly equal fields — before/
+  after on top, loader + controls below — a flat **20px dark cross** and **20px dark
+  border** (`CROSS_GAP`/`CROSS_BORDER`, `layout.py`; `INK["cross"]`, `gui.py`). No
+  PanedWindow, no results strip: the results tree lives in the loader field, the
+  batch bar at the foot of the controls field. Pinned by `test_the_cross_is_four_equal_fields`,
+  `test_the_window_is_the_cross_and_nothing_else`,
+  `test_the_perfect_cross_is_flat_twenty_on_every_real_screen` (five screen sizes).
+  **Closed decision** — the cross and the loader's `+` icon are what the user wants;
+  do not propose layout changes.
+- **P14 done**: manual yaw slider to ±30° (`max_horizontal_deg` unchanged at 8 —
+  that's the auto-estimator's cap, a slider is a person deciding, not a guess).
+- **Version series starts at 1.0** — 0.x was never user-visible.
+- **P11+P12 done**: planar corner placement/drag and the loupe both work (an
+  earlier CLAUDE.md claim that `_loupe_show`/`_loupe_hide` didn't exist was already
+  stale when written).
+- **Slim live CLAUDE.md**, full history split out (that archive, `claude_save.md`,
+  was itself deleted 2026-09-13 once carried forward into this file and
+  `knowledge.md`) — 09-12.
+- **Batch-options bar regrouped**: detector+params left (cols 0-5), output
+  (mask/fill/server/checkboxes) right (cols 7-11) (09-12, user-directed).
+- **`ttk.Scale` crash on window open, fixed** (09-12) — `ttk.Scale` doesn't take
+  `width`/`sliderlength` (that's `tk.Scale`'s API); an in-flight styling change had
+  added them to three sliders, crashing the whole window on open. Removed;
+  `layout.SLIDER_WIDTH`/`SLIDER_THUMB` stay defined but unused pending a proper
+  `ttk.Style` pass, if that's still wanted.
+
+### Repo note
+
+Nothing on this branch is committed yet. `git status` is otherwise clean — no scratch
+files at the root, and the untracked additions (`skills/`, `scheme.py`
++ its test, `tools/debug_ui.py`, `tools/worker_bench.py`, `tests/test_cli.py`,
+`run_bpc_gui.bat` replacing the deleted `run_gui.bat`, the `Horizontal/` assets and the
+newer top-level ones) are all wanted. Nothing to delete or move. The commit-readiness
+caveat this note used to carry (`scheme.py` unwired, the monkeypatch unscoped) no longer
+applies — both landed (see Done).
+
+## Gotchas (each cost real time)
+
+- Tk fires **no `<Configure>`** for a widget re-packed at the size it had — so a
+  `pack_forget()`/`pack()` round trip reschedules nothing; only a genuine geometry
+  change (window resize) will. The window's `minsize(1920, 1080)` also means no resize
+  can starve the canvases (<20 px) — an unmapped canvas is the only reachable
+  starvation branch now (`test_the_preview_gives_up_retrying...`).
+- Tk 8.6 does **not** fire `<<ListboxSelect>>` for programmatic `selection_set`; call
+  `_on_list_select()` by hand after programmatic selections (the guard makes repeats
+  no-ops).
+- A test written to match observed behaviour certifies the bug and goes red when
+  somebody fixes it. Assert what the code is *for*, against the constant that defines
+  it, never the number it currently prints.
+- The round-trip test must keep the border guard (8 % crop) or `BORDER_REPLICATE`
+  smears edge pixels into long straight streaks the detector reads as lines — that
+  artifact produced two confident wrong conclusions.
+- Caches key on the **full** argument tuple; hit-check is `key in cache`, never
+  truthiness (`None` is a real result).
+- Synthetic scenes are right for geometric questions with ground truth, wrong for
+  statistical ones about real texture.
+- **Tested is not reachable.** `roi_x` and `ArchitectureScheme` sat correct, covered and
+  switched on by nobody for a day — no flag, no control, no caller. Both are fully
+  wired now (CLI flags, and `roi_x` picked up a GUI control too, 2026-09-13). A seam
+  with tests is half a feature; "done" means someone can use it. Check for the caller
+  before writing a done entry.
+- **Two lists that must agree will not.** P11/P12 were implemented while a second
+  section still called them "not started", because the status lived in two places. One
+  ledger, one entry per item — if you are about to note a status twice, you have found
+  the same bug again.
+
+## Worker (local Qwen3.8-27B)
+
+- CLI: `qwen -m "unsloth/Qwen3.8-27B-GGUF" -p "<package>"`. Server
+  `http://127.0.0.1:8888/v1`. Key lives in `~/.qwen/settings.json` under
+  `env.UNSLOTH_API_KEY` — read it at call time, never paste it into a script.
+- **Check `/v1/models` for `loaded: true` before blaming anything.** A 404 "downloaded
+  but not loaded" is the server state, not a broken install.
+- Sampling (Qwen3.8 card, bench-verified): thinking `T=1.0 top_p=0.95 top_k=20
+  presence_penalty=0`, non-thinking `T=0.7 top_p=0.8 top_k=20 presence_penalty=1.5`.
+  **Never temperature 0** (Qwen3 degrades into repetition). Give `max_tokens` real room
+  (≥32768) — a thinking model with a small budget returns empty `content` and a full
+  `reasoning_content`.
+- **Decided settings (bench 2026-09-12, `tools/worker_bench.py`, history in
+  `analysis/worker_settings/history.jsonl`):** default packages to thinking with
+  `reasoning_effort=low` (~25 % fewer completion tokens than medium, equal pass rate on
+  coding tasks); `/no_think` for mechanical sub-steps (fastest: 8.3 s vs 11.1 s mean);
+  escalate to `medium` only after a package fails twice. The effort knob works per
+  request via `chat_template_kwargs`.
+- **The chat template is a custom build, not stock Qwen3, and strict thinking-off
+  *is* exposed per request** (corrects an earlier claim in this file) — plus a
+  token-efficiency lever (`preserve_thinking`, now defaulted off) and a confirmed
+  llama.cpp server bug (`reasoning_tokens` always reports 0 in `usage`, harmless).
+  Full detail, sources and the launcher/`.bat`/resume notes from the 2026-09-13
+  debugging session: **`docs/worker-environment.md`**.
+- **Temperature is not a lever (sweep T=0.3/0.4/0.5/0.7/1.0, effort low):** all pass
+  every task at every point; wall time flat at 11–13 s, completion tokens 607–764.
+  Keep the card's `T=1.0` for thinking mode — lowering it buys nothing here.
+- **Bench tasks:** t1 spec-following, t2 grid arithmetic, t3 boundary bug fix
+  (debug test), t4 novel coding task. For quality checks use problems **newer than the
+  model's training data** — Qwen3.8 shipped Aug 2026, so take contest problems from
+  Sept 2026+ (t4 = AtCoder ABC 474 B "Exit Order", held 2026-09-06, official samples +
+  statement-derived edge cases). Public 2021-era benchmarks (MBPP, HumanEval) are
+  contaminated — the model has seen them.
+- **Self-testing: objective verifiers only.** LLM-as-judge has documented
+  self-enhancement, position and verbosity biases (Zheng et al., arXiv 2306.05685) —
+  never let Qwen grade Qwen's own code. The worker runs the project's tests; the
+  architect reviews against them. Vendor evals are likewise objective-benchmark based
+  (`QwenLM/Qwen3` `eval/`, resumable inference scripts).
+- Context is **94 848** (measured from the server, not the card). An agentic CLI
+  re-prefills the whole context on every tool round trip, so the lever is removing
+  exploration: look up names yourself (`correct_horizontal`, `Result.roll_deg`, …) and
+  hand them over. The architect does the reading.
+- Package contract: GOAL / SCOPE / CONSTRAINTS / VALIDATION — full method and ten
+  lessons in `skills/delegation.md`.
+- **Next packages, ready to hand over.** Each open ledger entry already names its files,
+  symbols and line numbers — paste the entry in as SCOPE verbatim; the worker should
+  never have to grep for a name. Check the Open list itself for what's current rather
+  than a fixed list here, since it has been overtaken three times already. As of
+  2026-09-13 the open items are the distortion roadmap, the SAM3-via-ComfyUI follow-on
+  (both blocked on external go-aheads/infrastructure) and the four `knowledge.md`
+  research goals below — **all four are measurement/research passes, explicitly not
+  implementation packages yet**: no `src/` change until each has its own measured
+  comparison, per that file's "Proposed test, not a change" sections.
+
+## Skills
+
+- `skills/ui.md` — INK palette (single colour source), one-window structure,
+  review-panel rules, off-screen test pattern.
+- `skills/delegation.md` — how to write a worker package; the lessons are worth more
+  than the contract.
+- `docs/worker-environment.md` — chat-template internals, the llama.cpp
+  `reasoning_tokens`-always-0 bug, and the launcher/`.bat`/resume notes; the Worker
+  section above only points here.
+- `.claude/skills/debug/SKILL.md` — benchmark / BiRefNet failure workflow, the
+  two-Python setup, Windows pitfalls.
+- `.claude/skills/grounding-sam/SKILL.md` — Grounding DINO + SAM2 detect-then-segment masking,
+  direct Python (no ComfyUI server); local model paths, the §3a benchmark gate, roi_x synergy.
+- `knowledge.md` — analysis + external sources for the four remaining research goals
+  (facade-outline-first, dominant-edge hierarchy, SAM3, found-geometry overlay); read
+  before picking up any of them.
