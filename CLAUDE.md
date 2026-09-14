@@ -48,8 +48,16 @@ paused — why, and how to resume it, in `docs/qwen-knowledge.md`.
   Python 3.12.9 (python.org), 32 cores.
 - Compile: `python -m py_compile src/pc/gui.py` (and anything else touched).
 - One module: `python tests/run_tests.py test_gui` — fast.
-- Full suite: `python tests/run_tests.py` — 282 tests, ~135 s, modules in worker
-  processes; `-s` for the old sequential run.
+- **The runner has two modes since `74da5a9` (09-14) — the bare command is no
+  longer the full suite.** `python tests/run_tests.py` is the *fast* run: 261
+  tests, ~20 s, deliberately skipping `test_gui` and `test_assets` (real Tk
+  windows and real photograph sweeps, together most of the old wall time). It
+  says so on exit — `!! FAST RUN -- did NOT run: test_assets, test_gui` — and
+  **green there does not mean green**. Full suite: `python tests/run_tests.py
+  --full` (or `PC_FULL=1`) — 299 tests, ~52 s, modules in worker processes; `-s`
+  for the old sequential run. The line this replaces claimed "282 tests, ~135 s"
+  for the bare command, which now measures neither that count nor that set:
+  any suite number quoted anywhere must say which mode produced it.
 - A new `test_*.py` must be added to `MODULES` in `run_tests.py` or `_unlisted()`
   fails the run.
 - GUI off-screen pattern: `App(start_maximized=False)`, `geometry("<WxH>-4000+0")`,
@@ -95,17 +103,14 @@ declared `mlsd` extra) is installed in the **system** interpreter, so
 
 ## Ledger — the only place status lives
 
-**Suite 2026-09-14, re-measured in `D:\Coding\Perspective-Correction` at
-`843a76b` + the in-flight `src/pc/gui.py`: 292 tests, 3 failed, 2 skipped,
-160.3 s.** Two failures are the single receding-row photograph in the bug entry
-below (3.71° round-trip on one asset; pre-existing). **The third is new and is a
-regression, not a known limitation**: `test_gui.test_the_ruler_reads_the_same_
-height_on_left_and_right` fails with *"grid on, pixel mode: the rulers drew
-nothing"* (`tests/test_gui.py:770`) — the ruler rework that moved ticks into the
-20px `RULER_MARGIN` border zone left this test's path drawing no items at all.
-Until that is understood, the claim "all GUI tests pass" below is false and the
-previous line here (299 tests, 2 failed, ~166 s) was measured against something
-this checkout does not reproduce — 292 is what `tests/run_tests.py` counts now.
+**Suite 2026-09-14, `--full` at `0978371`: 299 tests, 2 failed, 2 skipped,
+51.5 s.** Both failures are the single receding-row photograph in the bug entry
+below (3.71° round-trip on one asset) — the long-standing limitation, nothing
+else. **The ruler regression this header carried is gone**: the test that failed
+with "the rulers drew nothing" was superseded when rulers became guides pulled
+from the cross (see Done), so the suite is back to its one known red. Note the
+wall time fell 160 s → 52 s in the same commit that split the runner — that is
+the parallel split, not tests disappearing, and `--full` is what produced 299.
 Re-run before trusting this — it is a measurement, not a
 promise, and no entry below may restate it. An item stays under **Open** until
 nothing is left to do; **Done** is only for finished work. `Pn` labels are short
@@ -328,6 +333,45 @@ everything else. The list below is not in that order; this is.
 
 ### Done — rely on these
 
+- **The two remaining batch-era caps, measured** (09-14, `analysis/measure_caps.py`,
+  51 files / 49 after deduplication, 0 load errors).
+  **`max_pitch_deg = 30` is inert on this pool: 0 refusals.** Post-damping pitch runs
+  min 0.12°, median 7.73°, p90 13.55°, max **24.25°** (`lochfassade`, whose raw
+  28.53° the 0.85 damping brings clear). Nothing tests the cap, so **the measurement
+  does not decide it** — leave it at 30. Lowering it would start refusing corrections
+  around the median that this pass never evaluated for correctness.
+  **`min_confidence = 0.40` refuses 7/51, and `stability` is the vetoing factor in
+  6 of those 7.** The sweep is smooth — 0.30→3, 0.35→5, 0.40→7, 0.45→12, 0.50→17 —
+  so **0.40 is not cutting at a natural break**; the only real gap in the
+  distribution is between 0.07 and 0.26. Of the seven, one is a 0.20° non-correction,
+  one is a genuine outlier (`marienrode`, conf 0.07, stability swing 1.56°, earned),
+  and **five are moderate, plausible corrections (pitch 1.9–13.6°) whose
+  share/count/spread all read 1.0** and which fail on `stability` alone.
+  Whether a reviewer would want those five needs visual/round-trip ground truth that
+  this pass did not collect, so it **does not decide the number either**. What it does
+  establish: the gate slices a dense continuum almost entirely on one factor —
+  **changing `min_confidence` and reworking how `stability` enters the product are
+  two different fixes, and this measurement does not separate them.**
+  Incidental: yaw (flag on) runs median 31.5°, max 71.5°, matching P9's 16–70°;
+  3/49 now exceed the raised 60° cap. And the pool's three `screenshot_*` files are
+  two byte-identical duplicates of one — deduplicating moved pitch p90 15.15 → 13.55,
+  which is the housekeeping note's skew, confirmed.
+- **`tools/debug_ui.py` was watching a file nothing writes** (09-14). It checked
+  `bpc_errors.log`; the code has written **`pc_errors.log`** since the `bpc` → `pc`
+  rename, so every "clean" it printed was vacuous — and it judged by
+  `os.path.exists`, so a log left behind hours earlier read as "WROTE ERRORS". Both
+  fixed: right filename, and size compared before and after the sweep. This cost real
+  time: it made a correct "that error is historical" reading look wrong twice.
+  A diagnostic that cries wolf is worse than none.
+- **Buttons, type scale and control sizes** (09-14, user: "improve click buttons,
+  they look ugly and they are too small"). One `apply_theme` pass: TButton padding
+  (12,6) → (16,9), Accent (14,7) → (18,10), Title 15 → 16, Entry/Combobox padding
+  → 7, Spinbox and Checkbutton → 6, Treeview rowheight 24 → 28, Scale slider 16 → 20
+  and thickness 8 → 10, Progressbar 4 → 6. No new style names, no new colours.
+  **Generated by the local Qwen worker to spec and applied by hand** — see the Worker
+  section for why that is the shape that works.
+
+
 - **The suite runs on five photographs, not fifty** (09-14, user: "test should be
   minimal half of time", "testsuite max 5 images"). **152.8 s → 48.3 s**, a 3.2x cut,
   with the same 292 tests, the same 2 known failures and the same 2 skips — the
@@ -491,9 +535,11 @@ nothing is silently re-proposed and so a search still finds it.
 **Rewritten 2026-09-14 — the old text ("nothing on this branch is committed yet")
 had been false for eight commits.** Actual state, measured:
 
-- `D:\Coding\Perspective-Correction` is the **live checkout**, `main` at `843a76b`,
-  in sync with `origin/main`. Uncommitted here: `CLAUDE.md` and `src/pc/gui.py`
-  (worker in flight — the new ruler test failure is most likely in that diff).
+- `D:\Coding\Perspective-Correction` is the **live checkout**. `main` is at
+  `0978371` and **two commits ahead of `origin/main`** (`843a76b`) — `74da5a9`
+  (guides from the cross, both previews maximized, the fast/full runner split)
+  and `0978371` (ignore local `.bak`) are local only, so today's UI work is not
+  yet pushed. Uncommitted on top: `tests/test_review.py`, `tools/debug_ui.py`.
 - **`D:\Coding\Batch-Perspective-Correction` still exists.** The rescue section at
   the foot of this file says that folder "is gone"; it is not. It is a stale
   checkout one commit behind (`1dc2670`, still `src/bpc/`) with its own modified
@@ -541,6 +587,31 @@ had been false for eight commits.** Actual state, measured:
   the same bug again.
 
 ## Worker (local Qwen3.8-27B)
+
+**It has no tools. It is a code *generator*, not an agent** (established
+2026-09-14, in its own words: *"in this session I have no tool to write the file
+or launch the process, so that's the blocker"*). `qwen -p` here is a plain chat
+completion — no file editing, no shell. That single fact explains every previous
+disappointment with it: the first real package returned nothing in five minutes
+because it was composing an answer nobody could apply; "reply with OK" worked
+fine; and a later one-file task came back as a correct patch with no way to
+write it.
+
+**So use it, and use it freely — it costs nothing.** The working shape is:
+
+* hand it a **precise spec with every name supplied** (no exploration — it
+  cannot grep, and asking it to would be asking for invention);
+* ask for **only** a fenced code block, no prose;
+* **apply the patch yourself and run it yourself.**
+
+Measured on that footing it is good: given the spec for a preview-size check it
+produced code matching it exactly, first try. What it cannot do is find out what
+the names are, verify its own work, or notice that the file moved under it.
+Anything needing those is a metered subagent or the architect.
+
+If tool access is ever enabled in the CLI, re-test before trusting it with a
+multi-step package — everything above is about the harness, not the model.
+
 
 **Context is 125 056** (2026-09-14, from the running server's `/v1/models`
 `context_length` — not the card, not the Studio panel, which shows the
