@@ -100,7 +100,17 @@ def build_parser():
     g.add_argument("--horizontal-strength", type=float,
                    help="scale the horizontal (yaw) correction (0 = none, 1 = full)")
     g.add_argument("--max-horizontal", type=float, default=Settings.max_horizontal_deg,
-                   help="cap on the horizontal (yaw) correction, degrees")
+                    help="cap on the horizontal (yaw) correction, degrees")
+    g.add_argument("--roi-x", type=float, nargs=2, metavar=("X0", "X1"), default=None,
+                   help="restrict the horizontal evidence to the vertical strip "
+                        "X0..X1 in full-resolution pixels (corner views: fit yaw on "
+                         "one facade); verticals stay global. A strip holding no "
+                         "horizontals falls back to the full frame")
+    g.add_argument("--scheme", action="store_true",
+                   help="partition detected lines into the building's Manhattan "
+                        "planes before the VP search (ArchitectureScheme); off by "
+                        "default. A non-established frame filters nothing, so the "
+                        "change is bounded to frames with a confident second plane")
 
     g = p.add_argument_group("decision")
     g.add_argument("--min-confidence", type=float, default=Settings.min_confidence,
@@ -123,9 +133,9 @@ def build_parser():
 
     g = p.add_argument_group("detection")
     g.add_argument("--detector",
-                   choices=["auto", "lsd", "fld", "hough", "mlsd", "hybrid", "union",
+                   choices=["lsd", "fld", "mlsd", "hybrid", "union",
                             "deeplsd", "deep-hybrid", "deep-union"],
-                   default="auto",
+                   default="lsd",
                    help="line detector; mlsd/hybrid/union need a TFLite runtime, "
                         "deeplsd/deep-* need torch and a DeepLSD checkout "
                         "(see docs/detectors.md for the measurements)")
@@ -146,10 +156,11 @@ def build_parser():
                    help="report the core packages and every optional backend this "
                         "interpreter can run, and exit. Exits 2 if a required "
                         "package is missing")
-    g.add_argument("--mask", choices=["off", "file", "birefnet"],
+    g.add_argument("--mask", choices=["off", "file", "birefnet", "gdino"],
                    default=Settings.mask_mode,
                    help="'file' a painted PNG or a folder of them, 'birefnet' segment "
-                        "the building out (see --birefnet-model)")
+                        "the building out (see --birefnet-model), 'gdino' find it by "
+                        "text prompt and matte inside the box (needs --birefnet-model)")
     g.add_argument("--birefnet-model", default="",
                    help="BiRefNet weights, or 'auto' to search the usual ComfyUI "
                         "folders. Example: "
@@ -167,6 +178,12 @@ def build_parser():
                         "edges survive (0.008 is ~15 px at 1600; 0 disables)")
     g.add_argument("--birefnet-device", default="",
                    help="cuda, cpu; empty picks cuda when present")
+    g.add_argument("--gdino-prompt", default=Settings.gdino_prompt,
+                   help="text prompt for --mask gdino, e.g. 'building' or 'facade'; "
+                        "Grounding DINO finds the box, BiRefNet mattes inside it")
+    g.add_argument("--gdino-model", default="",
+                   help="Grounding DINO model dir; empty uses the vendored "
+                        "models/GroundingDINO")
     g.add_argument("--remember", action="store_true",
                    help="store --birefnet-model, --mask-file, -o and --focal-35mm as "
                         "defaults for future runs")
@@ -281,12 +298,15 @@ def settings_from(args) -> Settings:
     s.birefnet_res = args.birefnet_res
     s.birefnet_shrink_frac = args.birefnet_shrink
     s.birefnet_device = args.birefnet_device
+    s.gdino_prompt = args.gdino_prompt
+    s.gdino_model = args.gdino_model
     s.detect_max_edge = args.detect_max_edge
     s.min_line_length_frac = args.min_line_length
     s.inlier_threshold_deg = args.inlier_threshold
     s.angular_softness = args.angular_softness
     s.seed = args.seed
     s.merge_lines = args.merge_lines
+    s.use_scheme = args.scheme
     s.focal_35mm = args.focal_35mm
     s.default_focal_35mm = args.default_focal_35mm
     s.use_exif_focal = not args.no_exif_focal
@@ -343,8 +363,8 @@ class _Log:
 
 
 def _job(item):
-    src, dst, settings, debug_dir, dry = item
-    return process(src, dst, settings, debug_dir=debug_dir, dry_run=dry)
+    src, dst, settings, debug_dir, dry, roi_x = item
+    return process(src, dst, settings, debug_dir=debug_dir, dry_run=dry, roi_x=roi_x)
 
 
 def diagnostics_text(args, settings) -> str:
@@ -374,7 +394,8 @@ def diagnostics_text(args, settings) -> str:
         f"{k}={'yes' if v else 'no'}" for k, v in BN.backends().items()))
     if settings.mask_mode == "birefnet" and settings.birefnet_model:
         out.append(f"# birefnet: {BN.describe(settings.birefnet_model)}")
-    interesting = ("detector", "deeplsd_model", "mask_mode", "mask_file", "birefnet_model",
+    interesting = ("detector", "use_scheme", "deeplsd_model", "mask_mode", "mask_file",
+                   "birefnet_model",
                    "birefnet_threshold", "focal_35mm", "default_focal_35mm",
                    "focal_estimate", "min_confidence", "max_pitch_deg",
                    "max_roll_deg", "max_horizontal_deg",
@@ -430,7 +451,7 @@ def detector_info(args) -> int:
     from . import deeplsd as DL
     from . import mlsd as ML
     print(f"interpreter: {_sys.executable}")
-    print(f"  lsd/fld/hough  opencv {cv2.__version__}")
+    print(f"  lsd/fld  opencv {cv2.__version__}")
     print(f"  {'yes' if ML.available(args.mlsd_model) else 'no '}  mlsd, hybrid, union")
     print(f"  {'yes' if DL.available(args.deeplsd_model) else 'no '}  "
           f"deeplsd, deep-hybrid, deep-union")
@@ -534,15 +555,16 @@ def main(argv=None) -> int:
                                     settings_from(args), log=log)
         log.close()
         return 0 if failed == 0 else 3
-    if args.mask == "birefnet" and not args.birefnet_model:
+    if args.mask in ("birefnet", "gdino") and not args.birefnet_model:
         from . import birefnet as BN
         found = BN.find_weights()
+        what = "--mask " + args.mask
         if found:
-            print("--mask birefnet needs --birefnet-model. This machine has:\n"
+            print(what + " needs --birefnet-model. This machine has:\n"
                   "  " + found + "\n\nRun it with:\n"
-                  "    --mask birefnet --birefnet-model auto --remember")
+                  "    " + what + " --birefnet-model auto --remember")
         else:
-            print("--mask birefnet needs --birefnet-model <weights>, or 'auto'.\n\n"
+            print(what + " needs --birefnet-model <weights>, or 'auto'.\n\n"
                   + BN.what_you_need())
         return 2
     if args.mask == "file" and not args.mask_file:
@@ -597,7 +619,7 @@ def main(argv=None) -> int:
         if args.skip_existing and not args.overwrite and os.path.exists(dst):
             skipped_existing += 1
             continue
-        jobs.append((src, dst, settings, args.debug_dir, args.dry_run))
+        jobs.append((src, dst, settings, args.debug_dir, args.dry_run, args.roi_x))
 
     workers = args.workers or min(8, (os.cpu_count() or 1))
     if not args.workers and settings.mask_mode == "birefnet" and workers > 2:

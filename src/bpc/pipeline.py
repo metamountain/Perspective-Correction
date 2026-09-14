@@ -70,7 +70,22 @@ def analyse(bgr, settings, exif_focal_px=None, image_path="", roi_x=None):
     stay global.  A strip holding no horizontals falls back to the full frame."""
     gray, scale = io.analysis_gray(bgr, settings.detect_max_edge)
     small = _match_scale(bgr, gray)
-    _, vert, horiz, detector, info = L.prepare(gray, settings, small, image_path)
+    ls, vert, horiz, detector, info = L.prepare(gray, settings, small, image_path)
+    if settings.use_scheme and len(ls):
+        # Partition the detected lines into the building's Manhattan planes before
+        # the fit.  A non-established frame filters nothing (a safe no-op), so this
+        # only changes frames with a confident vertical + horizontal frame; when it
+        # does remove lines, vert/horiz are re-derived from the survivors.  The
+        # summary rides along in detect_info so a wrong scheme is visible, not quiet.
+        from . import scheme as S
+        sc = S.ArchitectureScheme(ls, gray.shape[1], gray.shape[0], settings)
+        relevant, _ignored = sc.filter_by_vanishing_points(
+            horizontal_correction_only=settings.correct_horizontal)
+        if len(relevant) < len(ls):
+            vert, horiz = L.split_by_orientation(
+                relevant, settings.vertical_window_deg,
+                settings.horizontal_window_deg, settings.angular_softness)
+        info["scheme"] = sc.summary()
     if roi_x is not None:
         keep = L.in_xband(horiz.seg, roi_x[0] * scale, roi_x[1] * scale)
         if keep.any():

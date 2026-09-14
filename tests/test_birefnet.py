@@ -28,6 +28,39 @@ def test_the_resolution_comes_from_the_checkpoint_name():
     assert BN.resolution_for(r"C:\models\BiRefNet_dynamic.safetensors") == 1024
 
 
+def test_the_lite_checkpoint_uses_its_own_network_file():
+    """The lite checkpoints are a smaller PVT-v2 backbone, not the shared Swin.
+
+    Loading them into ``birefnet.py`` size-matches at the first layer, so the
+    network file has to follow the name; HR / general / dynamic keep the shared
+    one.  A folder holding only the shared network must not satisfy a lite
+    weight -- that is exactly the pairing that used to crash on load.
+    """
+    assert BN._arch_file("BiRefNet-HR.safetensors") == "birefnet.py"
+    assert BN._arch_file("BiRefNet_general.safetensors") == "birefnet.py"
+    assert BN._arch_file("BiRefNet_dynamic.safetensors") == "birefnet.py"
+    assert BN._arch_file("BiRefNet_lite.safetensors") == "birefnet_lite.py"
+    assert BN._arch_file("BiRefNet_lite-2K.safetensors") == "birefnet_lite.py"
+
+    with tempfile.TemporaryDirectory() as d:
+        w = os.path.join(d, "BiRefNet_lite.safetensors")
+        open(w, "wb").write(b"0" * 32)
+        open(os.path.join(d, "birefnet.py"), "w").write("# architecture\n")
+        real = BN.architecture_dirs
+        try:
+            BN.architecture_dirs = lambda: []
+            try:
+                BN._arch_dir(w)
+                assert False, "a lite weight with no birefnet_lite.py must refuse"
+            except BN.BiRefNetUnavailable as exc:
+                assert "birefnet_lite.py" in str(exc)
+        finally:
+            BN.architecture_dirs = real
+        open(os.path.join(d, "birefnet_lite.py"), "w").write("# architecture\n")
+        assert BN._arch_dir(w) == os.path.abspath(d), \
+            "the lite network beside the weights must win"
+
+
 def test_the_architecture_is_looked_for_beyond_the_weights_folder():
     """A checkpoint and the file that defines its network are separate things,
     and ComfyUI does not keep them together.
@@ -165,7 +198,13 @@ def test_the_cached_masks_mark_what_to_ignore_not_what_to_keep():
     for p in _cached():
         m = MK.load(p, (400, 600, 3))
         h, w = m.shape
-        if m.mean() > 0.98:
+        # "mostly white" means the segmenter kept only a small subject (a lone
+        # building in a wide sky, a bare ceiling) -- such a mask is useless for
+        # correction and must be refused at runtime, so it is checked below
+        # instead of against border>centre, which a small off-centre subject
+        # legitimately fails. 0.95 catches the real degenerate pair (0.95/0.97)
+        # without sweeping in a mask that keeps a normal facade (~0.3-0.8).
+        if m.mean() > 0.95:
             degenerate.append(os.path.basename(p))
             continue
         centre = m[h // 3:2 * h // 3, w // 3:2 * w // 3].mean()
