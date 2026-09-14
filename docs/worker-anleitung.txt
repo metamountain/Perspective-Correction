@@ -1,0 +1,158 @@
+LOKALEN QWEN-WORKER BENUTZEN — ANLEITUNG FÜR EINE NEUE SITZUNG
+Stand 2026-09-14. Erprobt, nicht geschätzt.
+
+
+DIE KURZFASSUNG
+===============
+Der Worker braucht KEIN Plugin und KEINE Konsole mit Subagent.
+Er braucht nur den laufenden Unsloth-Studio-Server.
+Das Skript tools/worker_agent.py redet direkt mit ihm.
+
+Jahrelang galt "das Modell kann nur lesen, nicht schreiben". Das war falsch.
+Nicht das Modell war die Grenze, sondern der Client (`qwen -p`), der dem Modell
+gar keine Werkzeuge angeboten hat. Gibt man ihm welche, arbeitet es.
+
+
+SCHRITT 1 — SERVER STARTEN
+==========================
+In einer PowerShell:
+
+    unsloth studio run --model unsloth/Qwen3.8-27B-GGUF:UD-IQ4_XS
+
+Dauert ca. 45 Sekunden (13 GB GGUF ins VRAM).
+
+!! DIESES FENSTER MUSS OFFEN BLEIBEN !!
+Schließt du die Konsole, stirbt der Server mit ihr. Das ist genau der Fehler,
+der in der Sitzung vom 14.09. passiert ist: der Endpoint war plötzlich tot.
+
+
+SCHRITT 2 — PRÜFEN, OB ER LEBT
+==============================
+Am einfachsten: im Server-Fenster steht, wenn er oben ist, die Zeile
+
+    Unsloth ready at http://127.0.0.1:8888 · model unsloth/Qwen3.8-27B-GGUF
+
+Steht sie da, läuft er. Wenn du es von außen prüfen willst (PowerShell 7):
+
+    (Invoke-WebRequest http://127.0.0.1:8888/v1/models -SkipHttpErrorCheck).StatusCode
+
+  401  = Server lebt (nur kein Schlüssel mitgeschickt) -> alles gut
+  200  = lebt, mit Schlüssel
+  Fehler/keine Antwort = Server ist tot -> zurück zu Schritt 1
+
+(Nicht die curl-Zeile aus dem Netz nehmen: `-w "%{http_code}"` und `NUL` sind
+cmd.exe-Syntax und werden von PowerShell verstümmelt.)
+
+Der API-Schlüssel steht in ~/.qwen/settings.json unter env.UNSLOTH_API_KEY.
+Er überlebt einen Neustart des Servers. Das Skript liest ihn selbst — niemals
+in ein Skript kopieren.
+
+!! DIESE DATEI NICHT LÖSCHEN !!
+Sie heißt nach der qwen-CLI, die du laut dieser Anleitung nicht mehr benutzen
+sollst — sie sieht also irgendwann wie Müll aus. tools/worker_agent.py liest
+den Schlüssel aber genau daraus. Weg damit, und der Worker geht nicht mehr.
+
+
+SCHRITT 3 — AUFTRAG SCHREIBEN
+=============================
+Eine Textdatei nach dem Muster GOAL / SCOPE / CONSTRAINTS / VALIDATION.
+Die goldene Regel: JEDER NAME WIRD MITGELIEFERT. Der Worker soll nicht suchen
+müssen, was etwas heißt — sonst erfindet er es.
+
+Beispiel, das funktioniert hat:
+
+    GOAL
+    Delete two dead helper functions. Both are verified to have no callers.
+
+    SCOPE - exactly these two, nothing else:
+    1. src/pc/sam2seg.py - function `predict_box` (line 192), whole function
+       including docstring. Keep `predict_box_and_points`.
+    2. src/pc/vanishing.py - function `_plausible_horizontal` (line 61).
+       Keep `_plausible_horizontal_rows` - DIFFERENT function, still used.
+
+    CONSTRAINTS
+    - Change nothing else. No reformatting, no import changes, no renames.
+    - Leave exactly two blank lines between top-level functions (PEP 8).
+    - Use read_file before each str_replace.
+
+    VALIDATION
+    - grep for both names, confirm only the kept twins remain.
+    - run_tests(full=true). Expected: 301 tests, 2 failed, 2 skipped.
+      Those 2 failures are a known limitation - do NOT try to fix them.
+    - Then reply with one short sentence and stop.
+
+Auf Englisch schreiben. Das Modell ist darauf trainiert und arbeitet damit
+sauberer als auf Deutsch.
+
+
+SCHRITT 4 — LAUFEN LASSEN
+=========================
+    python tools/worker_agent.py auftrag.txt
+
+Der Worker hat genau vier Werkzeuge, alle aufs Repo begrenzt:
+    read_file      Datei mit Zeilennummern lesen
+    grep           alle .py durchsuchen
+    str_replace    EINE eindeutige Textstelle ersetzen
+    run_tests      die Suite laufen lassen
+
+Keine Shell. Kein Zugriff außerhalb des Repos. Beides mit Absicht.
+
+
+SCHRITT 5 — SELBST NACHPRÜFEN (NICHT ÜBERSPRINGEN)
+==================================================
+    git diff
+    python tests/run_tests.py --full
+
+Sollwert: 301 tests, 2 failed, 2 skipped.
+Die zwei Roten sind das bekannte Foto (muenzstrasse, 3.71 deg) — erwartet.
+
+Eine grüne Suite ist ein BEWEIS, keine ERLAUBNIS. Der Diff wird gelesen,
+bevor irgendetwas committet wird.
+
+
+WAS DU NICHT BRAUCHST
+=====================
+- Das Plugin / "Starte einen lokalen Agenten".
+  Funktioniert, ist aber ein zweiter Weg. MCP-Server hängen sich nur beim
+  SITZUNGSSTART an — der Befehl mitten in einer laufenden Sitzung bringt ihr
+  nichts. Und `unsloth start claude --as-subagent` startet eine eigene
+  Claude-Sitzung, lässt sich also nicht aus einer Shell heraus steuern.
+
+- `qwen -p`.
+  Diese CLI bietet dem Modell keine Werkzeuge an. Ein Auftrag "schreib eine
+  Datei" lief dort 10 Minuten und lieferte nichts. Nicht mehr benutzen.
+
+
+FALLSTRICKE, DIE ZEIT GEKOSTET HABEN
+====================================
+1. Konsole zu = Server tot. Siehe Schritt 1.
+
+2. Werkzeuge dürfen dem Worker niemals rohen Ausgabe-Schwanz zurückgeben.
+   `run_tests` gab anfangs die letzten 12 Zeilen zurück — das war der
+   Tk-Abbaulärm `invalid command name ..._pump`, laut CLAUDE.md harmlos.
+   Der Worker hielt das für einen Fehler und versuchte es ACHT MAL neu.
+   8 von 12 Turns verschwendet. Jetzt gibt run_tests die Ergebniszeile zurück.
+
+3. Kontextlänge ist 96 256, nicht 262 144. Studio verkleinert beim Laden
+   ("Context auto-reduced: 262144 -> 96256"), weil KV-Cache ins VRAM muss.
+   Die Zahl ändert sich mit der Quantisierung — immer den laufenden Server
+   fragen, nie die Modellkarte.
+
+4. --reasoning-effort greift nicht, wenn der Server schon läuft.
+   Vorher `unsloth studio stop`.
+
+
+WAS DER WORKER GUT KANN — UND WAS NICHT
+=======================================
+GUT:   mechanische, klar umrissene Änderungen, bei denen alle Namen feststehen
+       und ein Test binär sagt, ob es stimmt. Löschen, umbenennen, ein Muster
+       an mehreren Stellen anwenden, eine Funktion nach Spezifikation schreiben.
+       Er hat selbst zur Kontrolle gegrept, ohne dass man es verlangt hat.
+       Und er behauptet keinen Erfolg, den er nicht prüfen konnte — das ist
+       die Eigenschaft, die ihn überhaupt brauchbar macht.
+
+NICHT:  alles mit Urteil. "Anbinden oder löschen?", "welches von zwei Designs?",
+       "ist diese Naht sinnvoll?" — das sind keine Pakete. Die bleiben beim
+       Architekten oder beim Benutzer.
+
+Er kostet nichts und läuft lokal. Für die erste Sorte Arbeit also ruhig oft.
