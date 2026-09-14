@@ -58,17 +58,6 @@ def _plausible_vertical(vp, cx, cy, min_dist, max_lean_deg):
     return lean <= math.radians(max_lean_deg)
 
 
-def _plausible_horizontal(vp, cx, cy, min_dist):
-    if abs(vp[2]) < 1e-9:
-        dx, dy = vp[0], vp[1]
-    else:
-        dx = vp[0] / vp[2] - cx
-        dy = vp[1] / vp[2] - cy
-        if math.hypot(dx, dy) < min_dist:
-            return False
-    return abs(math.atan2(abs(dy), abs(dx))) <= math.radians(45.0)
-
-
 def _normalize_rows(v):
     """Row-wise :func:`geometry.normalize_vp`.
 

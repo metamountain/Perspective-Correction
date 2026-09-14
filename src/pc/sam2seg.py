@@ -189,18 +189,6 @@ def _load(ckpt: str, cfgdir: str, device: str = "") -> dict:
         return entry
 
 
-def predict_box(bgr: np.ndarray, box: Tuple[int, int, int, int], ckpt: str,
-                cfgdir: str, device: str = "") -> np.ndarray:
-    """The SAM2 mask for one box prompt, True inside the selection.
-
-    Runs in-process, so it needs torch + sam2 in *this* interpreter -- the child
-    script uses the same code path via ``_load``.  Kept beside
-    ``predict_box_and_points`` because a test can exercise the box-only contract
-    without fabricating points.
-    """
-    return predict_box_and_points(bgr, box, [], ckpt, cfgdir, device)
-
-
 def predict_box_and_points(bgr: np.ndarray, box: Optional[Tuple[int, int, int, int]],
                            points: List[Tuple[int, int, int]], ckpt: str, cfgdir: str,
                            device: str = "") -> np.ndarray:
