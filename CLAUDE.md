@@ -135,7 +135,17 @@ handles for work packages; entries written out in full here stand on their own.
   wrong shape. The method converts now rather than demanding the caller does.
   Pinned by `test_a_sam_segment_reaches_the_estimator_and_composes_with_the_paint`,
   which also asserts paint and segment compose and that clearing leaves no stale
-  union.
+  union. **Follow-on, same day:** deleting the prompt trio exposed that
+  `sam2seg._load` and `predict_box_and_points` had no caller either — SAM2 has
+  only ever run through the *generated standalone* `_CHILD_SCRIPT`, which imports
+  torch itself and never imports the module. `_load`'s docstring asserted a call
+  that cannot happen ("only ever called from inside a child spawned by
+  `run_subprocess`"), which is why the pair read as live; 80 lines gone with
+  `_LOCK`, `_CACHE` and `import threading`. **A docstring claiming a caller is not
+  evidence of one** — that sentence outlived every reader who believed it. Found by
+  sweeping every function in `src/pc` for references across src, tests and tools:
+  worth re-running after any deletion, since removing one function is exactly what
+  strands the next.
 *(The two dead helpers listed here — `sam2seg.predict_box` and
 `vanishing._plausible_horizontal` — are **gone**, deleted 2026-09-14 and verified
 absent from both files; `--full` stays at 301 tests, 2 failed, so nothing was
@@ -241,7 +251,13 @@ everything else. The list below is not in that order; this is.
    so nothing needs downloading (the 403 egress is moot). Two routes: the ComfyUI server (a
    `GroundingDetector`→`Sam2Segment` graph), or **direct Python in `python_embeded`** with no
    server at all — `transformers` GroundingDINO + the official `sam2` package; recipe and pitfalls
-   live in `.claude/skills/grounding-sam/SKILL.md`. The remaining gate is §3a's round-trip benchmark
+   live in `.claude/skills/grounding-sam/SKILL.md`. **The second route is no longer
+   hypothetical (2026-09-15):** `src/pc/sam2seg.py` *is* it — `run_subprocess` shells
+   into `python_embeded` and hands a PNG back, and click-to-select ships on it. So
+   what is left here is only the *text-prompt* question (SAM3 replacing a click with
+   "building facade"), not the plumbing, and the entry's opening line — "the next
+   exploration is a second masking route through ComfyUI" — is spent. Weigh it
+   against what a click already gives before spending anything on it. The remaining gate is §3a's round-trip benchmark
    (beat BiRefNet / no-mask on the pool) before it becomes a default. Same two-interpreter story as
    BiRefNet (ComfyUI interpreter has no tkinter).
 - **[open] Distortion correction (barrel/pincushion) — Stage 0 implemented 2026-09-14,
