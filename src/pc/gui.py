@@ -21,7 +21,7 @@ import threading
 import traceback
 
 import tkinter as tk
-from tkinter import colorchooser, filedialog, messagebox, ttk
+from tkinter import filedialog, messagebox, ttk
 
 # Drag and drop is not in the standard library.  tkinterdnd2 provides it and is
 # a small pure-Tcl extension, but the window has to work without it, so the drop
@@ -61,6 +61,9 @@ DETECTORS = ("lsd", "fld", "mlsd", "hybrid", "union",
              "deeplsd", "deep-hybrid", "deep-union")
 
 RULER_MARGIN = 20
+# Guides are hairlines, not a scale: mid grey reads on a bright facade and a
+# dark one alike, so it needs no outline or halo to stay visible.
+GUIDE_GREY = "#9aa0a8"
 
 # --------------------------------------------------------------------------
 # theme
@@ -556,6 +559,19 @@ class ReviewPanel(tk.Frame):
         # destroys and rebuilds three of the four fields, the loader survives.
         b = layout.CROSS_BORDER
         g = layout.CROSS_GAP // 2
+        # The cross and the border ARE this widget's own background showing
+        # through the grid gaps -- there is no separate bar to click. Children
+        # capture their own events, so a <Motion> that reaches `self` is a
+        # pointer over the gutter or the border and nowhere else. That is what
+        # makes "drag a ruler out of the black cross" implementable at all.
+        self.bind("<Motion>", self._on_cross_motion)
+        self.bind("<Leave>", self._on_cross_leave)
+        # Guides are pulled out of the cross itself. Only events that reach the
+        # panel are over the gutter or the border -- every child canvas eats its
+        # own -- so no hit-testing against the fields is needed.
+        self.bind("<Button-1>", self._on_cross_press)
+        self.bind("<B1-Motion>", self._on_cross_pull)
+        self.bind("<ButtonRelease-1>", self._on_cross_drop)
         self.rowconfigure(0, weight=1, uniform="cross_rows")
         self.rowconfigure(1, weight=1, uniform="cross_rows")
         self.columnconfigure(0, weight=1, uniform="cross_cols")
@@ -824,9 +840,7 @@ class ReviewPanel(tk.Frame):
             self._loupe_show()
         self.c_before.bind("<Button-1>", self._on_click_before)
         self.c_before.bind("<Motion>", self._on_before_motion)
-        self.c_before.bind("<B1-Motion>", self._on_sam_drag)
         self.c_before.bind("<B1-Motion>", self._on_before_b1motion)
-        self.c_before.bind("<ButtonRelease-1>", self._on_sam_release)
         self.c_before.bind("<ButtonRelease-1>", self._on_before_b1release)
         # Photoshop's gestures, because this is a brush and those are the ones in
         # everybody's hands already: left paints, right erases, Alt+right dragged
@@ -835,8 +849,13 @@ class ReviewPanel(tk.Frame):
         self.c_before.bind("<Alt-ButtonPress-1>", self._on_alt_erase_press)
         self.c_before.bind("<Alt-ButtonPress-3>", self._on_pen_size_start)
         self.c_before.bind("<Alt-B3-Motion>", self._on_pen_size_drag)
-        self.c_before.bind("<ButtonPress-3>", self._on_sam_right_click)
-        self.c_before.bind("<ButtonPress-3>", self._on_erase_press)
+        # ONE bind per sequence. Tk's bind() *replaces* a handler for the same
+        # sequence rather than adding to it, so binding both here left
+        # `_on_sam_right_click` silently dead -- SAM's right-click (clear the
+        # prompt points) did nothing at all. Dispatch instead; both handlers
+        # already guard themselves (`v_sam` / `_brush_live`), so they cannot
+        # both act.
+        self.c_before.bind("<ButtonPress-3>", self._on_right_press)
         self.c_before.bind("<B3-Motion>", self._on_erase_motion)
         self.c_before.bind("<ButtonRelease-3>", self._on_erase_release)
         self.c_after.bind("<ButtonPress-1>", self._on_crop_press)
@@ -922,11 +941,11 @@ class ReviewPanel(tk.Frame):
                         command=self._on_horizontal_toggle).grid(row=0, column=0, sticky="w")
         # ±30, not the automatic cap: a hand is allowed to ask for what the
         # estimator's 8 deg gate refuses -- the manual path carries no limit.
-        self._yaw_scale = ttk.Scale(ctl, from_=-30, to=30, variable=self.v_yaw,
+        self._yaw_scale = ttk.Scale(ctl, from_=-60, to=60, variable=self.v_yaw,
                                     orient="horizontal",
                                     command=lambda _v: self._on_slider())
         self._yaw_scale.grid(row=0, column=1, sticky="ew", padx=6)
-        self._yaw_spin = ttk.Spinbox(ctl, textvariable=self.v_yaw, from_=-30, to=30,
+        self._yaw_spin = ttk.Spinbox(ctl, textvariable=self.v_yaw, from_=-60, to=60,
                                      increment=0.1, format="%.2f", width=7,
                                      command=self._on_slider)
         self._yaw_spin.grid(row=0, column=2, sticky="e", padx=(6, 0))
@@ -955,17 +974,14 @@ class ReviewPanel(tk.Frame):
                             state="readonly", values=["none", "telea", "lama", "comfyui"])
         fbox.grid(row=0, column=1, sticky="w", padx=(6, 6))
         fbox.bind("<<ComboboxSelected>>", lambda e: self._apply_fill())
-        _b = ttk.Button(fill_row, text="pad colour...",
-                        command=self._pick_pad_colour)
-        _b.grid(row=0, column=2, sticky="w")
-        _attach_tooltip(_b, "Pick the colour used to pad the frame when filling gaps")
-        self.lbl_pad_colour = tk.Label(fill_row, fg=INK["text"], width=4,
-                                       relief="flat", font=("TkDefaultFont", 8))
-        self.lbl_pad_colour.grid(row=0, column=3, sticky="w", padx=(6, 0))
-        _b = ttk.Button(fill_row, text="edge",
-                        command=self._pad_edge)
-        _b.grid(row=0, column=4, sticky="w", padx=(6, 0))
-        _attach_tooltip(_b, "Set how many pixels of padding to add around the frame")
+        # The pad colour picker, its swatch and the "edge" button left this row
+        # (2026-09-14, user). `pad` only shows through when the fill is off, and
+        # the fill defaults to `telea`, so three controls were competing for
+        # width in the busiest row in the window to set something almost nobody
+        # ever sees. `--pad` and `Settings.pad` are untouched -- the setting is
+        # still there for anyone who runs with `--fill none`, it simply has no
+        # widget. (The "edge" button's tooltip described padding *width*, which
+        # it never set, so it had been lying about itself as well.)
         # The ComfyUI mode was selectable here with no way to configure it and
         # no indicator -- so picking it meant the default address and, worse,
         # the *unnamed default workflow*, which is the inpainting graph. An
@@ -978,7 +994,6 @@ class ReviewPanel(tk.Frame):
         self.lbl_comfy = ttk.Label(fill_row, text="", style="Dim.TLabel")
         self.lbl_comfy.grid(row=1, column=1, columnspan=5, sticky="w", padx=(6, 0))
         fill_row.columnconfigure(5, weight=1)
-        self._sync_pad_swatch()
         self._register_comfy()
 
         # Save / Keep / Close stay outside the collapsible: a queue advances on
@@ -1024,11 +1039,19 @@ class ReviewPanel(tk.Frame):
         # moved to the lower-left tools field (2026-09-13).
         btns2 = ttk.Frame(top, padding=(0, 8))
         self._btns2 = btns2
-        self.v_planar = tk.BooleanVar(value=False)
-        _cb = ttk.Checkbutton(btns2, text="Planar",
-                              variable=self.v_planar, command=self._on_planar_toggle)
-        _cb.pack(side="left", padx=(6, 0))
-        _attach_tooltip(_cb, "Use planar homography instead of rotation (for flat surfaces)")
+        # Planar left Q4 (2026-09-14): it is a drawing tool, not a correction
+        # setting -- the quad states which plane the horizontals and verticals
+        # belong to, so it belongs beside the other drawing tools in the
+        # lower-left palette and nowhere else.
+        #
+        # **Made once**, for the reason spelled out directly below about
+        # `v_stroke`: `_build` re-runs on every load while the tools field is
+        # built a single time, so recreating this variable would hand the
+        # palette's planar button a stale one -- ticking it would set a
+        # variable nobody reads and the tool would silently stop working from
+        # the second photograph onwards.
+        if getattr(self, "v_planar", None) is None:
+            self.v_planar = tk.BooleanVar(value=False)
         # Mask brush state lives here; its widgets live in the lower-left tools
         # field -- App._build calls `_build_tools` to place them.  **Made once.**
         # `_build` re-runs on every load while that tools field is built a single
@@ -1403,38 +1426,6 @@ class ReviewPanel(tk.Frame):
             self.lbl_comfy.configure(text="")
         self._schedule_redraw()
 
-    def _pick_pad_colour(self):
-        """What fills the corners *before* any generation, and all that fills
-        them when the fill is off.  One setting, ``--pad``, not a second one."""
-        current = self.session.settings.pad
-        col = colorchooser.askcolor(
-            initial=current if current.startswith("#") else "#000000",
-            title="pad colour", parent=self)
-        hexval = col[1] if col[1] else None
-        if not hexval:
-            return
-        self.session.settings = self.session.settings.replace(pad=hexval)
-        prefs.save(pad=hexval)          # an output preference, not a per-photograph decision
-        self._sync_pad_swatch()
-        self._schedule_redraw()
-
-    def _pad_edge(self):
-        """Back to extending the border colour, which is the default and has no
-        swatch to show."""
-        self.session.settings = self.session.settings.replace(pad="edge")
-        prefs.save(pad="edge")
-        self._sync_pad_swatch()
-        self._schedule_redraw()
-
-    def _sync_pad_swatch(self):
-        """The swatch must report what ``pad`` actually is.  It defaults to
-        ``edge``, which is not a colour, so a black square would be a lie."""
-        pad = self._cfg().pad
-        if pad.startswith("#"):
-            self.lbl_pad_colour.configure(bg=pad, text="")
-        else:
-            self.lbl_pad_colour.configure(bg=INK["field"], text=pad[:4])
-
     def _toggle_mask(self):
         """Show the excluded region and the lines it removed.
 
@@ -1632,6 +1623,14 @@ class ReviewPanel(tk.Frame):
         cx = event.x
         cy = event.y
         self.c_before.delete("brush_cursor")
+        # A double ring, white outside and black inside, because a single black
+        # one is invisible against a dark facade and against the field colour
+        # itself -- which is what "show the round tool outline" was asking for.
+        # Every image editor draws it this way for the same reason: one of the
+        # two rings always contrasts, whatever is underneath.
+        self.c_before.create_oval(cx - r - 1, cy - r - 1, cx + r + 1, cy + r + 1,
+                                  outline="white", width=1,
+                                  tags="brush_cursor")
         self.c_before.create_oval(cx - r, cy - r, cx + r, cy + r,
                                   outline="black", width=1,
                                   tags="brush_cursor")
@@ -1990,10 +1989,18 @@ class ReviewPanel(tk.Frame):
         box = self._after_box
         arr = (darken_outside_crop(base, frac_rect)
                if (frac_rect is not None and not planar_on) else base)
-        inset_box = (box[0] - 2 * RULER_MARGIN, box[1] - 2 * RULER_MARGIN)
-        ph, _ = _to_photo(arr, inset_box)
-        aox = RULER_MARGIN + (inset_box[0] - ph.width()) // 2
-        aoy = RULER_MARGIN + (inset_box[1] - ph.height()) // 2
+        # Fit the FULL canvas, exactly as the before pane does. This used to
+        # inset by RULER_MARGIN on all four sides to guarantee a border strip
+        # for the guides, which cost the corrected image 11.5 % of its area
+        # against the original beside it (measured 648x486 vs 625x446 at
+        # 1920x1200) -- the two panes then showed the same photograph at two
+        # different scales, which is the one thing a before/after comparison
+        # must not do. **The ruler zone is the black cross, outside the
+        # images** (user, 2026-09-14), so no pixels need to be taken from
+        # inside the frame to host it.
+        ph, _ = _to_photo(arr, box)
+        aox = (box[0] - ph.width()) // 2
+        aoy = (box[1] - ph.height()) // 2
         self._after_off = (aox, aoy)
         self.c_after.delete("all")
         self.c_after.create_image(aox, aoy, anchor="nw", image=ph)
@@ -2049,46 +2056,36 @@ class ReviewPanel(tk.Frame):
         return None
 
     def _draw_after_guides(self):
-        """Redraw all reference guides in the ROI-ruler visual style.
+        """Redraw the reference guides: **plain grey lines, nothing else.**
 
-        Vertical guides: bold line (3 px), ticks every 20 px with major ticks
-        (longer, thicker) every 100 px; label at top.
-        Horizontal guides: slightly lighter weight (2 px), ticks every 20 px
-        with majors every 100 px; label at left.
+        They were drawn in the ROI-ruler style -- 3 px, light blue, a tick every
+        20 px, longer majors every 100, and a numeric label -- which is a ruler
+        *scale*. A guide is not a scale: it exists to be laid against an edge to
+        see whether that edge is parallel to it, and every tick and label is
+        something competing with the photograph for attention while you do that.
+        One hairline, in a grey that reads on both a bright facade and a dark
+        one, is the whole instrument (user, 2026-09-14: "rulers should be simple
+        grey lines").
+
+        Drawn on the canvas, never composited into the frame, so `save()` cannot
+        see them.
         """
         self.c_after.delete("after_guide")
         if not getattr(self, "_ph_a", None):
             return
         aox, aoy = self._after_off
         iw, ih = self._ph_a.width(), self._ph_a.height()
-        C = "#9fd8ff"
         for kind, pos in self._after_guides:
             if kind == "v":
                 x = aox + pos
                 self.c_after.create_line(x, aoy, x, aoy + ih,
-                                         fill=C, width=3, tags="after_guide")
-                for ty in range(0, ih, 20):
-                    major = (ty % 100 == 0)
-                    half = 8 if major else 4
-                    wdt = 2 if major else 1
-                    self.c_after.create_line(x - half, aoy + ty, x + half, aoy + ty,
-                                             fill=C, width=wdt, tags="after_guide")
-                self.c_after.create_text(x, aoy - 8, text=str(int(pos)),
-                                         fill=C, font=("Courier", 9, "bold"),
-                                         anchor="s", tags="after_guide")
+                                         fill=GUIDE_GREY, width=1,
+                                         tags="after_guide")
             else:
                 y = aoy + pos
                 self.c_after.create_line(aox, y, aox + iw, y,
-                                         fill=C, width=2, tags="after_guide")
-                for tx in range(0, iw, 20):
-                    major = (tx % 100 == 0)
-                    half = 8 if major else 4
-                    wdt = 2 if major else 1
-                    self.c_after.create_line(aox + tx, y - half, aox + tx, y + half,
-                                             fill=C, width=wdt, tags="after_guide")
-                self.c_after.create_text(aox - 8, y, text=str(int(pos)),
-                                         fill=C, font=("Courier", 9, "bold"),
-                                         anchor="e", tags="after_guide")
+                                         fill=GUIDE_GREY, width=1,
+                                         tags="after_guide")
 
     def _on_guide_drag(self, event):
         """Move the grabbed guide to follow the cursor (allow overshoot)."""
@@ -2205,6 +2202,7 @@ class ReviewPanel(tk.Frame):
             return
         if self._pending_mark is None:
             self._pending_mark = (x, y)
+            self._mark_moved = False
             what = "horizontal" if kind == "h" else "vertical"
             self._set_status(f"marking a {what}: click the other end\n"
                              "(as far from the first point as the structure allows)")
@@ -2215,6 +2213,49 @@ class ReviewPanel(tk.Frame):
         added = self.session.add_control_line(x0, y0, x, y,
                                               display_scale=self._before_scale,
                                               kind=kind)
+        if added is None:
+            self._set_status("too short to be trusted -- mark the full length of "
+                             "the structure, not a few pixels of it")
+            self._redraw()
+            return
+        self._sync_from_session()
+
+    def _mark_rubber(self, event):
+        """Draw the line being dragged, from the pressed point to the cursor.
+
+        Canvas-drawn and cleared on release, like every other in-progress
+        overlay here: it is interaction state, not detection, and must appear
+        without waiting for a re-render.
+        """
+        self._mark_moved = True
+        ox, oy = self._before_off
+        x0, y0 = self._pending_mark
+        self.c_before.delete("mark_rubber")
+        col = "#e040fb" if self._mark_kind() == "h" else "#00e5ff"
+        self.c_before.create_line(ox + x0, oy + y0, event.x, event.y,
+                                  fill=col, width=2, dash=(4, 3),
+                                  tags="mark_rubber")
+
+    def _mark_commit(self, event):
+        """Finish a dragged mark on release.
+
+        Rubberband and two-click are the same gesture with and without
+        movement, which is why this hangs off `_pending_mark` rather than a
+        mode of its own: press, drag, release places the line; press, release,
+        press still does too, and a press that never moved falls through to
+        `_click_mark`, so **clicking an existing mark to delete it keeps
+        working**. Losing that was the trap -- the removal gesture has no other
+        home.
+        """
+        self.c_before.delete("mark_rubber")
+        x0, y0 = self._pending_mark
+        self._pending_mark = None
+        self._mark_moved = False
+        x = event.x - self._before_off[0]
+        y = event.y - self._before_off[1]
+        added = self.session.add_control_line(x0, y0, x, y,
+                                              display_scale=self._before_scale,
+                                              kind=self._mark_kind())
         if added is None:
             self._set_status("too short to be trusted -- mark the full length of "
                              "the structure, not a few pixels of it")
@@ -2394,6 +2435,9 @@ class ReviewPanel(tk.Frame):
     def _on_before_b1motion(self, event):
         if getattr(self, "_loupe", None) is not None:
             self._loupe_move(event)
+        if getattr(self, "v_sam", None) is not None and self.v_sam.get():
+            self._on_sam_drag(event)
+            return
         if getattr(self, "_ruler_dragging", False):
             self._ruler_y = max(2, min(RULER_MARGIN - 2, event.y))
             self._schedule_redraw()
@@ -2404,12 +2448,18 @@ class ReviewPanel(tk.Frame):
         if getattr(self, "_mark_drag", None) is not None:
             self._on_mark_drag(event)
             return
+        if getattr(self, "_pending_mark", None) is not None:
+            self._mark_rubber(event)
+            return
         if getattr(self, "v_stroke", None) is not None and self.v_stroke.get():
             self._on_stroke_drag(event)
         else:
             self._on_planar_drag(event)
 
     def _on_before_b1release(self, event):
+        if getattr(self, "v_sam", None) is not None and self.v_sam.get():
+            self._on_sam_release(event)
+            return
         if getattr(self, "_ruler_dragging", False):
             self._ruler_dragging = False
             self.c_before.config(cursor="sb_h_arrow")
@@ -2417,6 +2467,9 @@ class ReviewPanel(tk.Frame):
             return
         if getattr(self, "_roi_drag", None) is not None:
             self._on_roi_drag_release()
+            return
+        if getattr(self, "_pending_mark", None) is not None and getattr(self, "_mark_moved", False):
+            self._mark_commit(event)
             return
         if getattr(self, "_mark_drag", None) is not None:
             self._mark_drag = None
@@ -2589,6 +2642,13 @@ class ReviewPanel(tk.Frame):
                            event.y - self._before_off[1])
         return "break"
 
+    def _on_right_press(self, event):
+        """Right-click: SAM prompt reset when SAM is on, erase stroke otherwise."""
+        if getattr(self, "v_sam", None) is not None and self.v_sam.get():
+            self._on_sam_right_click(event)
+            return "break"
+        return self._on_erase_press(event)
+
     def _on_erase_press(self, event):
         if not self._brush_live():
             return
@@ -2717,11 +2777,19 @@ class ReviewPanel(tk.Frame):
             self._draw_empty()
             return
         try:
-            rm = RULER_MARGIN
-            box_b = (max(1, self.c_before.winfo_width() - 2 * rm),
-                     max(1, self.c_before.winfo_height() - 2 * rm))
-            box_a = (max(1, self.c_after.winfo_width() - 2 * rm),
-                     max(1, self.c_after.winfo_height() - 2 * rm))
+            # The full canvas, both panes, no inset. These were each shrunk by
+            # 2 * RULER_MARGIN to reserve a border strip for the guides, which
+            # cost every preview 40 px in each direction and capped the picture
+            # well short of the frame it had. **The ruler zone is the black
+            # cross, outside the images** (user, 2026-09-14), so nothing needs
+            # to be taken from inside them. Identical expressions for the two
+            # panes on purpose: the same photograph must not appear at two
+            # scales side by side, and the surest way to keep that true is that
+            # there is only one rule.
+            box_b = (max(1, self.c_before.winfo_width()),
+                     max(1, self.c_before.winfo_height()))
+            box_a = (max(1, self.c_after.winfo_width()),
+                     max(1, self.c_after.winfo_height()))
             # An unmapped canvas is starved as well, and its winfo_* values are
             # stale -- the last size it had, not zero -- so the <20 test alone
             # misses it and would "draw" into a widget with no place on screen.
@@ -2759,8 +2827,8 @@ class ReviewPanel(tk.Frame):
             ph_b, s_b = _to_photo(before, box_b)
             # scale from the *original* image to what is on screen
             self._before_scale = s_b * (before.shape[1] / self.session.w)
-            self._before_off = (rm + (box_b[0] - ph_b.width()) // 2,
-                                rm + (box_b[1] - ph_b.height()) // 2)
+            self._before_off = ((box_b[0] - ph_b.width()) // 2,
+                                (box_b[1] - ph_b.height()) // 2)
             self.c_before.delete("all")
             self._sam_selection = None
             self.c_before.create_image(self._before_off[0], self._before_off[1],
@@ -2840,8 +2908,13 @@ class ReviewPanel(tk.Frame):
 
         tool("│", self.v_mark, self._on_mark_toggle,
              "Mark a line that is truly vertical (or horizontal) by hand")
-        tool("◱", self.v_planar, self._on_planar_toggle,
-             "Planar: place four corners of a flat face to rectify it")
+        # Planar left the palette (2026-09-14, "less is more"). The quad was
+        # being asked to do two unrelated jobs -- rectify a flat face, and state
+        # which plane the lines belong to -- and the second is answered better,
+        # and with far less UI, by marking the lines themselves: a vertical and
+        # a horizontal mark say the same thing about a facade as four dragged
+        # corners, and they are the tool that already exists. The module and its
+        # tests stay in the tree; nothing in the window points at them.
 
     def _draw_after_lines(self, arr, iw, ih):
         """Re-detect lines on the *corrected* frame, as a check on the correction.
@@ -2912,12 +2985,119 @@ class ReviewPanel(tk.Frame):
                 y = oy + i * ih / n
                 canvas.create_line(ox, y, ox + iw, y, **kw)
 
-    def _draw_rulers(self, canvas, ox, oy, iw, ih):
-        """Ruler line in the top black border (Q2).
+    def _on_cross_motion(self, _event=None):
+        """Pointer over the black cross or border: reveal Q2's ruler.
 
-        Invisible until clicked; then a thin grey horizontal line shows at
-        the dragged Y position."""
-        if canvas is not self.c_before:
+        Hover, not click. A ruler you have to discover by clicking the one
+        black strip in the window is a ruler nobody finds.
+        """
+        if getattr(self, "_ruler_visible", False):
+            return                                  # already shown; no redraw
+        self._ruler_visible = True
+        self._schedule_redraw()
+
+    def _on_cross_leave(self, _event=None):
+        """Left the cross: hide again, unless a ruler is being dragged out."""
+        if getattr(self, "_ruler_dragging", False):
+            return
+        if not getattr(self, "_ruler_visible", False):
+            return
+        self._ruler_visible = False
+        self._schedule_redraw()
+
+    def _cross_orientation(self, event):
+        """Which guide a pull from this point on the cross makes.
+
+        A horizontal bar yields a horizontal guide and a vertical bar a
+        vertical one -- the guide comes out parallel to the edge it was pulled
+        from, which is how every image editor behaves and needs no explaining.
+        Decided by which is nearer: the panel's horizontal centre line and its
+        top/bottom border, or the vertical centre line and its left/right.
+        """
+        w, h = max(1, self.winfo_width()), max(1, self.winfo_height())
+        dx = min(event.x, abs(event.x - w // 2), abs(w - event.x))
+        dy = min(event.y, abs(event.y - h // 2), abs(h - event.y))
+        return "h" if dy <= dx else "v"
+
+    def _on_cross_press(self, event):
+        """Start pulling a guide out of the cross."""
+        if getattr(self, "_ph_a", None) is None:
+            return
+        self._cross_pull = self._cross_orientation(event)
+
+    def _on_cross_pull(self, event):
+        """Preview the guide while the pointer is still over the cross."""
+        if getattr(self, "_cross_pull", None) is None:
+            return
+        self._cross_preview(event)
+
+    def _on_cross_drop(self, event):
+        """Drop the guide if it landed on the corrected pane, else discard it.
+
+        Released back over the cross it simply does not appear -- the same way
+        a guide dragged back to the ruler is put away rather than left at the
+        frame edge.
+        """
+        kind = getattr(self, "_cross_pull", None)
+        self._cross_pull = None
+        self.c_after.delete("guide_preview")
+        if kind is None or getattr(self, "_ph_a", None) is None:
+            return
+        pos = self._after_pos(event, kind)
+        if pos is None:
+            return
+        self._after_guides.append((kind, pos))
+        self._draw_after_guides()
+
+    def _after_pos(self, event, kind):
+        """Pointer position as an offset inside the after image, or None.
+
+        Uses the *root* coordinates, because the event belongs to the panel
+        while the answer is wanted in the canvas's own space.
+        """
+        try:
+            cx = event.x_root - self.c_after.winfo_rootx()
+            cy = event.y_root - self.c_after.winfo_rooty()
+        except tk.TclError:
+            return None
+        aox, aoy = self._after_off
+        iw, ih = self._ph_a.width(), self._ph_a.height()
+        x, y = cx - aox, cy - aoy
+        if not (0 <= x <= iw and 0 <= y <= ih):
+            return None
+        return float(y if kind == "h" else x)
+
+    def _cross_preview(self, event):
+        """A grey line following the pointer, before the guide is committed."""
+        self.c_after.delete("guide_preview")
+        kind = getattr(self, "_cross_pull", None)
+        pos = self._after_pos(event, kind) if kind else None
+        if pos is None:
+            return
+        aox, aoy = self._after_off
+        iw, ih = self._ph_a.width(), self._ph_a.height()
+        if kind == "h":
+            self.c_after.create_line(aox, aoy + pos, aox + iw, aoy + pos,
+                                     fill=GUIDE_GREY, width=1, dash=(3, 3),
+                                     tags="guide_preview")
+        else:
+            self.c_after.create_line(aox + pos, aoy, aox + pos, aoy + ih,
+                                     fill=GUIDE_GREY, width=1, dash=(3, 3),
+                                     tags="guide_preview")
+
+    def _draw_rulers(self, canvas, ox, oy, iw, ih):
+        """Ruler line in the top black border of Q2, the corrected pane.
+
+        Revealed by hovering the black margin outside the picture and dragged
+        out from it, the way a guide is pulled off a ruler in an image editor.
+        Drawn on the canvas, never composited into the frame: it is an
+        instrument, and `save()` must never see it."""
+        # Q2, the corrected pane -- the ruler exists to check the *result*, and
+        # a ruler over the original only measures how crooked it already was.
+        # This read `is not self.c_before`, i.e. it drew on Q1 and returned
+        # early for Q2, while its own docstring said Q2. The docstring was
+        # right.
+        if canvas is not self.c_after:
             return
         if not getattr(self, "_ruler_visible", False):
             return

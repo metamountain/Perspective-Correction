@@ -749,35 +749,86 @@ def test_the_grid_never_reaches_the_saved_file():
         shutil.rmtree(d, ignore_errors=True)
 
 
-def test_the_ruler_reads_the_same_height_on_left_and_right():
-    """The right ruler exists to counter-check the left one: a levelled
-    horizontal should read the same offset from the top on both sides of the
-    corrected frame, so the two rulers must actually be two separate rulers,
-    not one drawn twice, and both must vanish with the grid."""
+def test_a_guide_is_pulled_out_of_the_border_as_a_plain_grey_line():
+    """Guides are hairlines laid against an edge, not a ruler scale.
+
+    This replaces `test_the_ruler_reads_the_same_height_on_left_and_right`,
+    which asserted tick marks near the left and right edges appearing and
+    vanishing **with the grid toggle**. That was a ruler *scale*, and the
+    design it pinned was superseded (user, 2026-09-14: "rulers should be simple
+    grey lines"). Bending the code back to satisfy it would have shipped a
+    feature nobody asked for, so the test moved instead -- the thing this file
+    warns about is a test written to match old behaviour outliving the decision.
+
+    What is pinned now is the behaviour that was actually asked for: a press in
+    the border zone outside the picture adds a guide, it draws as a single grey
+    line spanning the frame, it carries no ticks or labels, and the grid toggle
+    has nothing to do with it.
+    """
     app = _app()
     try:
         _loaded(app, 1920, 1200)
         r = app.review
-        assert r.v_grid.get() is False, "the grid is meant to start off"
-        assert r.v_grid_step.get() == "50 px", "default step is pixel mode"
+        assert r._after_guides == [], "a fresh photograph starts with no guides"
 
+        aox, aoy = r._after_off
+        iw, ih = r._ph_a.width(), r._ph_a.height()
+
+        # press above the picture -- the border strip, not the photograph
+        from pc.gui import GUIDE_GREY
+
+        aox, aoy = r._after_off
+        iw, ih = r._ph_a.width(), r._ph_a.height()
+
+        class _E:
+            """Panel-space x/y plus the root coords the drop handler reads."""
+            def __init__(self, x, y, xr, yr):
+                self.x, self.y = x, y
+                self.x_root, self.y_root = xr, yr
+
+        # press on the cross's horizontal centre bar, release over the picture
+        pw, ph_ = r.winfo_width(), r.winfo_height()
+        press = _E(pw // 2, ph_ // 2, r.winfo_rootx() + pw // 2,
+                   r.winfo_rooty() + ph_ // 2)
+        r._on_cross_press(press)
+        assert r._cross_pull == "h", (
+            f"a pull from the horizontal bar should make a horizontal guide, "
+            f"got {r._cross_pull!r}")
+
+        drop = _E(0, 0,
+                  r.c_after.winfo_rootx() + aox + iw // 2,
+                  r.c_after.winfo_rooty() + aoy + ih // 2)
+        r._on_cross_drop(drop)
+        _settle(app, 6)
+        assert len(r._after_guides) == 1, "the pull did not leave a guide"
+        assert r._after_guides[0][0] == "h"
+
+        items = r.c_after.find_withtag("after_guide")
+        assert items, "the guide drew nothing"
+        kinds = {r.c_after.type(i) for i in items}
+        assert kinds == {"line"}, f"a guide should be one plain line, found {kinds}"
+        assert len(items) == 1, f"a guide should be a single line, found {len(items)}"
+        assert r.c_after.itemcget(items[0], "fill").lower() == GUIDE_GREY.lower(), (
+            "the guide is not the documented grey")
+        assert int(float(r.c_after.itemcget(items[0], "width"))) == 1, (
+            "the guide is not a hairline")
+
+        # dropped back on the cross instead, it is put away, not left behind
+        r._on_cross_press(press)
+        r._on_cross_drop(press)
+        _settle(app, 4)
+        assert len(r._after_guides) == 1, (
+            "a guide released over the cross should be discarded, not added")
+
+        # and the grid toggle must not touch it -- they are different instruments
         r.v_grid.set(True)
         r._schedule_redraw()
-        _settle(app, 12)
-        ox, _oy = r._after_off
-        iw = r._ph_a.width()
-        items = r.c_after.find_withtag("ruler")
-        assert items, "grid on, pixel mode: the rulers drew nothing"
-        xs = [r.c_after.coords(it)[0] for it in items]
-        assert any(x <= ox + 12 for x in xs), "no ticks near the left edge"
-        assert any(x >= ox + iw - 12 for x in xs), (
-            "no ticks near the right edge -- the right ruler did not draw")
-
+        _settle(app, 8)
+        assert r.c_after.find_withtag("after_guide"), "the grid toggle removed the guide"
         r.v_grid.set(False)
         r._schedule_redraw()
-        _settle(app, 12)
-        assert not r.c_after.find_withtag("ruler"), (
-            "turning the grid off left rulers behind")
+        _settle(app, 8)
+        assert r.c_after.find_withtag("after_guide"), "turning the grid off removed the guide"
     finally:
         app.destroy()
 
