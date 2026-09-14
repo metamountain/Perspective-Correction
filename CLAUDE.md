@@ -118,6 +118,28 @@ handles for work packages; entries written out in full here stand on their own.
 
 ### Open — do these
 
+- **[bug] `_exif_lens_model` is read and thrown away — wiring it up IS the
+  distortion fix** (09-14, dead-code sweep, triaged and verified).
+  `distortion.py` defines `_exif_lens_model` and **nothing calls it**, while
+  `undistort_map` looks the lens up as `db.find_lenses(cam, "", "")` — empty
+  name — and takes `lenses[0]`. `pipeline.py:225` calls `undistort_map`, so
+  `--undistort lensfun` runs today and can silently apply an arbitrary profile
+  from everything known for that camera. **The only one of six dead symbols that
+  makes a *live* feature wrong**, so it goes first: a wrong distortion profile
+  bends straight lines the wrong way, which is worse than not correcting at all.
+- **[seam] The SAM prompt layer in `review.py` is unreachable.**
+  `set_sam_box`, `add_sam_point` and `clear_sam_prompts` have **no callers**:
+  the GUI keeps its own `self._sam_box` / `_sam_points` and never routes through
+  the session. `add_sam_point`'s docstring describes Shift/Alt clicks that **do
+  not exist as bindings**, so point prompts — the thing "click-to-select the
+  building" is about — are not reachable, whatever the box button does. Wire it
+  or delete it; "a seam with tests is half a feature" applies exactly.
+- **[dead] Two genuinely dead helpers, safe to delete**: `sam2seg.predict_box`
+  (docstring says it exists for a test that does not call it; the live path is
+  the subprocess + PNG route) and `vanishing._plausible_horizontal` (a scalar
+  twin of the vectorised `_plausible_horizontal_rows` the RANSAC loop uses).
+
+
 **Priority, re-sorted 2026-09-14 (user: "sort jobs, start with easy ones, first
 work on tools and mask features").** Easiest first, tools and masking ahead of
 everything else. The list below is not in that order; this is.
@@ -588,10 +610,15 @@ had been false for eight commits.** Actual state, measured:
 
 ## Worker (local Qwen3.8-27B)
 
-**It has no tools. It is a code *generator*, not an agent** (established
+**It can read, but cannot write or execute — a *generator and reviewer*, not an agent** (established
 2026-09-14, in its own words: *"in this session I have no tool to write the file
-or launch the process, so that's the blocker"*). `qwen -p` here is a plain chat
-completion — no file editing, no shell. That single fact explains every previous
+or launch the process, so that's the blocker"*). `qwen -p` here has no file-editing and no shell,
+but it **can** read the repo: asked to triage six dead-code candidates it cited
+`pipeline.py` (line 223 against an actual 225), named the vectorised
+`_plausible_horizontal_rows` twin and the GUI's own `_sam_box` — all verified
+correct. Its own words were "no tool to **write** the file or launch the
+process", which is narrower than "no tools" and is the useful distinction:
+**reading and reasoning are on the table, acting is not.** That single fact explains every previous
 disappointment with it: the first real package returned nothing in five minutes
 because it was composing an answer nobody could apply; "reply with OK" worked
 fine; and a later one-file task came back as a correct patch with no way to
