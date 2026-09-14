@@ -39,8 +39,10 @@ wanted rather than saving them from one they didn't. The caps and gates are ther
 open questions again, not settled ones; each should be re-decided as a *review-panel*
 default with its own measurement before anything is loosened.
 
-Implementation is done here directly (2026-09-13); the local Qwen3.8-27B worker is
-paused — why, and how to resume it, in `docs/qwen-knowledge.md`.
+Implementation is done here directly. **The local Qwen3.8-27B worker is no longer
+paused (2026-09-15)** — it acts through `tools/worker_agent.py`; see the Worker
+section and `docs/worker-anleitung.txt`. `docs/qwen-knowledge.md` records why it was
+shelved and is history now, not instruction.
 
 ## Running things (do not rediscover this)
 
@@ -49,12 +51,12 @@ paused — why, and how to resume it, in `docs/qwen-knowledge.md`.
 - Compile: `python -m py_compile src/pc/gui.py` (and anything else touched).
 - One module: `python tests/run_tests.py test_gui` — fast.
 - **The runner has two modes since `74da5a9` (09-14) — the bare command is no
-  longer the full suite.** `python tests/run_tests.py` is the *fast* run: 261
-  tests, ~20 s, deliberately skipping `test_gui` and `test_assets` (real Tk
+  longer the full suite.** `python tests/run_tests.py` is the *fast* run: 264
+  tests, ~24 s, deliberately skipping `test_gui` and `test_assets` (real Tk
   windows and real photograph sweeps, together most of the old wall time). It
   says so on exit — `!! FAST RUN -- did NOT run: test_assets, test_gui` — and
   **green there does not mean green**. Full suite: `python tests/run_tests.py
-  --full` (or `PC_FULL=1`) — 299 tests, ~52 s, modules in worker processes; `-s`
+  --full` (or `PC_FULL=1`) — 303 tests, ~52 s, modules in worker processes; `-s`
   for the old sequential run. The line this replaces claimed "282 tests, ~135 s"
   for the bare command, which now measures neither that count nor that set:
   any suite number quoted anywhere must say which mode produced it.
@@ -103,13 +105,13 @@ declared `mlsd` extra) is installed in the **system** interpreter, so
 
 ## Ledger — the only place status lives
 
-**Suite 2026-09-14, `--full` at `02277a4`: 301 tests, 2 failed, 2 skipped,
-55.5 s.** Both failures are the single receding-row photograph in the bug entry
+**Suite 2026-09-15, `--full` at `1c092a0`: 303 tests, 2 failed, 2 skipped,
+52.1 s** (the fast run is 264 in ~24 s, and is not the suite). Both failures are the single receding-row photograph in the bug entry
 below (3.71° round-trip on one asset) — the long-standing limitation, nothing
 else, and the only red the suite has. The earlier ruler regression is gone for
 good: that test was superseded when rulers became guides pulled from the cross
 (see Done). Wall time fell 160 s → ~55 s when the runner was split in parallel;
-that is the split, not tests disappearing, and only `--full` produces 301.
+that is the split, not tests disappearing, and only `--full` produces 303.
 Re-run before trusting this — it is a measurement, not a
 promise, and no entry below may restate it. An item stays under **Open** until
 nothing is left to do; **Done** is only for finished work. `Pn` labels are short
