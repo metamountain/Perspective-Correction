@@ -2,11 +2,24 @@
 
 ![left: detected verticals, horizontals and the implied horizon. right: corrected, the opened band filled by an optional ComfyUI backend rather than cropped](docs/hero-before-after.jpg)
 
-Straightens converging verticals in architectural photographs, a folder at a
-time. Built for the case where most of a batch needs a small correction, some
-needs none, and a few must not be touched at all -- so the default behaviour
-when the geometry is unclear is to **leave the photograph alone** and offer it
-for manual review.
+Straightens converging verticals in architectural photographs — roll, pitch and
+focal length, three numbers, `H = K R K⁻¹`. A camera rotation, so it cannot
+shear the frame into something the lens never saw.
+
+**Built around reviewing each photograph, not around processing a folder
+unattended.** You step through a selection one image at a time, see what the
+detector found, adjust it, and nothing is written until you press Save. A
+fire-and-forget run over a folder is still there, one button along, but it is no
+longer the default gesture: when a person is looking at every result, refusing a
+correction costs more than attempting one.
+
+![the review window: detected lines on the original, the corrected frame with a measuring grid, and the tools that change either](docs/ui.png)
+
+Left, the original with what the estimator sees — green verticals it used,
+yellow ones it rejected, blue horizontals, and the magenta horizon implied by the
+fit. Right, the result under a grid you can measure it against: a true vertical
+should run along a grid line. The tools that change either sit on the picture
+they act on.
 
 Descended from [chsasank/Image-Rectification](https://github.com/chsasank/Image-Rectification),
 rewritten after measuring what that code actually does
@@ -31,6 +44,26 @@ present** before any file is touched:
     pip install -e ".[mlsd]"       the M-LSD detector (the model is vendored)
     pip install -e ".[deeplsd]"    the DeepLSD detector (also wants a checkout and 98 MB of weights)
 
+### Model weights (not in this repository)
+
+The optional segmentation backends need weights that are several gigabytes in
+total, with single files over GitHub's 100 MB limit, so they are **not**
+committed — the same reasoning that keeps `tools/DeepLSD/` out. Download them
+yourself and put them where the code looks:
+
+| what | where it goes | download |
+|---|---|---|
+| BiRefNet (general) | `models/BiRefNet/` | [ZhengPeng7/BiRefNet](https://huggingface.co/ZhengPeng7/BiRefNet) |
+| BiRefNet HR — used by `--mask birefnet` here | `models/BiRefNet/` | [ZhengPeng7/BiRefNet_HR](https://huggingface.co/ZhengPeng7/BiRefNet_HR) |
+| Grounding DINO — the box finder behind `--mask gdino` | `models/GroundingDINO/` | [IDEA-Research/GroundingDINO](https://github.com/IDEA-Research/GroundingDINO) (the `transformers` build: a folder with `config.json` + `.safetensors`) |
+| SAM 2.1 | `models/sam2/` | [facebookresearch/sam2](https://github.com/facebookresearch/sam2) |
+
+`--mask-info` reports what this interpreter can import and whether the weights
+actually load, and `--birefnet-model auto` finds usable weights in the usual
+ComfyUI folders if you already have them there. The M-LSD detector is the
+exception: its model *is* vendored here (`models/`, with its licence beside it),
+because it is small.
+
 Two backends are deliberately **not** extras, because installing them the
 ordinary way damages the install:
 
@@ -49,7 +82,25 @@ only a running ComfyUI and an API-format workflow. BiRefNet masking
     python rectify.py "D:\Fotos" -n -v               decide, write nothing, explain
     python rectify.py --gui                          graphical batch window
 
-or double-click `run_gui.bat` on Windows.
+or double-click `run_bpc_gui.bat` on Windows.
+
+### In the review window
+
+**Review each** walks the selection a photograph at a time and writes only on
+Save. **Unattended** is the old fire-and-forget run, kept for when you want it.
+
+| tool | what it is for |
+|---|---|
+| **Mask brush** | paint the region the fit should ignore — a stroke over the parked cars says "not the building" directly. Left drag paints, right drag erases, `Alt`+right drag sizes the pen |
+| **Mark vertical / horizontal** | draw a line you know is truly vertical (or horizontal) and let it steer the fit |
+| **Planar** | place four corners of a flat face to rectify that face instead |
+| **ROI x** | two draggable rulers limiting which horizontals feed the yaw, for corner views |
+| **Grid** / **Check lines** | on the corrected pane: a measuring grid, and a re-run of the detector *on the result* — green where a line came out truly vertical, red where it still leans |
+| **Lines** / **Mask** | what the detector saw on the original, and the ignored region |
+
+The settings under the panel are titled *defaults every photograph opens with* —
+the same names appear in the panel itself, where they override that default for
+the image in front of you only.
 
 To produce something reviewable — by a colleague, or by an assistant helping you
 tune it — drop a photo folder onto **`run_and_log.bat`**. It finds ComfyUI's
@@ -73,7 +124,7 @@ Log lines are one per file:
 |---|---|
 | `--focal-35mm 24` | the exact lens, if you know it. **The single biggest accuracy win** |
 | `--strength 0.7` | correct only part of the way |
-| `--max-pitch`, `--max-roll` | caps in degrees (20 / 12) |
+| `--max-pitch`, `--max-roll` | caps in degrees (30 / 12). Beyond the cap a correction is refused, not trimmed |
 | `--min-confidence` | raise to skip more, lower to correct more |
 | `--no-pitch` / `--no-roll` | level only, or straighten verticals only |
 | `--crop auto\|aspect\|inside\|none` | **auto** (the default) crops while the loss stays small and keeps the whole frame otherwise; `aspect`/`inside` always crop; `none` never does |
