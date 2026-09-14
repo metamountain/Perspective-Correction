@@ -51,7 +51,7 @@ Homepage = "https://github.com/metamountain/Perspective-Correction"
 Source = "https://github.com/metamountain/Perspective-Correction"
 
 [project.scripts]
-bpc = "bpc.cli:main"
+pc = "pc.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]

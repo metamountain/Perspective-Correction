@@ -9,7 +9,7 @@ import json
 import os
 import tempfile
 
-from bpc import prefs
+from pc import prefs
 
 
 def _isolated(d):
@@ -68,7 +68,7 @@ def test_a_corrupt_file_is_ignored_not_fatal():
 
 
 def test_an_explicit_flag_beats_a_remembered_one():
-    from bpc.cli import apply_prefs, build_parser
+    from pc.cli import apply_prefs, build_parser
     with tempfile.TemporaryDirectory() as d:
         _isolated(d)
         prefs.save(birefnet_model="/remembered.pth", focal_35mm=28)

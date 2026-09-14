@@ -3,8 +3,8 @@ import math
 
 import numpy as np
 
-from bpc import warp as W
-from bpc.config import Settings
+from pc import warp as W
+from pc.config import Settings
 
 
 def test_zero_angles_are_the_identity():

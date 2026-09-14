@@ -51,6 +51,8 @@ class Settings:
     mask_invert: bool = False       # set when white means "keep"
     gdino_prompt: str = "building"  # text prompt for the --mask gdino detector
     gdino_model: str = ""           # GDINO model dir; "" = models/GroundingDINO
+    sam_model: str = ""             # SAM2 checkpoint; "" = models/sam2/sam2.1_hiera_base_plus.pt
+    sam_device: str = ""            # "" = cuda when available
 
     # ---- line partitioning (ArchitectureScheme) ----
     # Off by default: the classifier only ever *removes* evidence, and this is a
