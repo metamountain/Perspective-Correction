@@ -50,3 +50,6 @@ models/*.tar
 .idea/
 .vscode/
 .qwen/
+
+# local backups taken before a large doc edit; the content is in git history
+*.bak
