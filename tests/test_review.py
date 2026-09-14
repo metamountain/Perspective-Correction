@@ -901,3 +901,46 @@ def test_pick_control_line_endpoint_only_finds_the_requested_kind():
         "kind=v must resolve to the vertical's endpoint despite the coincident horizontal"
     assert s.pick_control_line_endpoint(300, 540, kind="h") == (0, 0), \
         "kind=h must resolve to the horizontal's endpoint despite the coincident vertical"
+
+
+def test_a_sam_segment_reaches_the_estimator_and_composes_with_the_paint():
+    """The selected building must change what the fit sees, not just the picture.
+
+    Until 2026-09-15 it did not: the GUI computed the segment, kept it in
+    `_sam_selection`, drew a green outline and a percentage, and never handed
+    it over -- so `apply_sam_mask` had no caller and SAM was decorative. The
+    seam that made that easy to get wrong was the resolution: SAM segments the
+    *file*, while `paint` and `detect_info["mask"]` are analysis-res, so the
+    only honest caller had the wrong shape. `apply_sam_mask` now converts, and
+    this pins both halves of that.
+    """
+    sc = synth.Scene(pitch_deg=9, roll_deg=-3, seed=21)
+    st = Settings()
+    st.detect_max_edge = 160          # force analysis-res below the file's own
+    s = ReviewSession("in-memory.jpg", st, image=sc.img)
+    gh, gw = s.gray.shape[:2]
+    assert (s.h, s.w) != (gh, gw), "the test is pointless if the two are equal"
+
+    full = np.zeros((s.h, s.w), dtype=bool)       # full-res, as a real caller has
+    full[:, s.w // 2:] = True                     # ignore the right half
+    s.apply_sam_mask(full)
+
+    shown = s.detect_info.get("mask")
+    assert shown is not None, "the segment must reach the shown mask"
+    assert shown.shape[:2] == (gh, gw), (
+        f"mask must arrive at analysis-res {(gh, gw)}, got {shown.shape[:2]}")
+    assert shown[:, -2:].all(), "the ignored half must be ignored"
+    assert not shown[:, :2].any(), "the kept half must be untouched"
+
+    # Paint and segment compose: either source ignoring a pixel is enough.
+    s.paint = np.zeros((gh, gw), dtype=bool)
+    s.paint[:2, :] = True                         # a strip the brush struck
+    s.apply_sam_mask(full)
+    shown = s.detect_info.get("mask")
+    assert shown[:2, :].all(), "paint must survive the segment"
+    assert shown[:, -2:].all(), "the segment must survive the paint"
+
+    s.apply_sam_mask(None)
+    shown = s.detect_info.get("mask")
+    assert shown is None or not shown[:, -2:].all(), (
+        "clearing the segment must not leave a stale union behind")

@@ -107,11 +107,9 @@ class ReviewSession:
         # verticals stay global on purpose, because both facades share the
         # world-vertical VP and restricting them would only burn evidence.
         self.roi_x = None
-        # SAM2 click-to-select: box prompt (x0,y0,x1,y1) in analysis-res pixels,
-        # positive/negative rework points, and the resulting ignore mask
-        # (True = ignore) or None until computed.
-        self.sam_box: Optional[Tuple[int, int, int, int]] = None
-        self.sam_points: list = []
+        # SAM2 click-to-select: the resulting ignore mask (True = ignore), or
+        # None until computed.  The *prompts* -- box and rework points -- live
+        # in the GUI, in frame fractions; the session only ever sees the result.
         self.sam_mask = None
         self.refit()
 
@@ -686,29 +684,25 @@ class ReviewSession:
             self.enabled[hit] = False
 
     # -- SAM2 click-to-select --------------------------------------------
-    def set_sam_box(self, box: Optional[Tuple[int, int, int, int]]):
-        """Set (or clear) the box prompt in analysis-res pixels."""
-        self.sam_box = box
-
-    def add_sam_point(self, x: float, y: float, positive: bool):
-        """Record a click in analysis-res pixels.  ``positive`` True = inside
-        the building (Shift+click), False = outside (Alt+click)."""
-        self.sam_points.append((int(round(x)), int(round(y)), 1 if positive else 0))
-
-    def clear_sam_prompts(self):
-        """Forget box, points, and the computed mask."""
-        self.sam_box = None
-        self.sam_points.clear()
-        self._apply_sam_mask()
-
     def apply_sam_mask(self, ignore: np.ndarray):
         """Install a SAM2-produced ignore mask (True = ignore) and refit.
 
-        ``ignore`` is at analysis-image resolution.  It is merged into
-        ``detect_info["mask"]`` the same way the paint brush does, so the two
-        sources compose: a pixel is ignored when either the paint or the SAM
-        segment says so.
+        It is merged into ``detect_info["mask"]`` the same way the paint brush
+        does, so the two sources compose: a pixel is ignored when either the
+        paint or the SAM segment says so.
+
+        ``ignore`` may arrive at **either** resolution and is resized here.
+        That is not politeness -- SAM segments the file, so every real caller
+        holds a full-resolution mask, while `paint` and `detect_info["mask"]`
+        are analysis-res.  Requiring the caller to convert is what left this
+        method unreachable: the GUI computed the mask and then kept it to
+        itself rather than hand over the wrong shape.
         """
+        if ignore is not None:
+            gh, gw = self.gray.shape[:2]
+            if ignore.shape[:2] != (gh, gw):
+                ignore = cv2.resize(ignore.astype(np.uint8), (gw, gh),
+                                    interpolation=cv2.INTER_NEAREST).astype(bool)
         self.sam_mask = ignore
         self._apply_sam_mask()
         self.refit()

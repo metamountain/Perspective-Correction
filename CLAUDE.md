@@ -117,13 +117,23 @@ handles for work packages; entries written out in full here stand on their own.
 
 ### Open — do these
 
-- **[seam] The SAM prompt layer in `review.py` is unreachable.**
-  `set_sam_box`, `add_sam_point` and `clear_sam_prompts` have **no callers**:
-  the GUI keeps its own `self._sam_box` / `_sam_points` and never routes through
-  the session. `add_sam_point`'s docstring describes Shift/Alt clicks that **do
-  not exist as bindings**, so point prompts — the thing "click-to-select the
-  building" is about — are not reachable, whatever the box button does. Wire it
-  or delete it; "a seam with tests is half a feature" applies exactly.
+- ~~**[seam] The SAM prompt layer in `review.py` is unreachable.**~~ **Settled
+  2026-09-15 — both answers, because it was two seams.** The *prompt* trio
+  (`set_sam_box`, `add_sam_point`, `clear_sam_prompts`) was deleted: nothing read
+  `sam_box` or `sam_points`, they were write-only, and they were specified in
+  analysis pixels while the GUI keeps its prompts in frame fractions. Wiring them
+  would have meant inventing a consumer. **The bigger find was underneath.**
+  `_on_sam_done` computed the segment, stored it in `_sam_selection`, drew a green
+  outline and a percentage — **and never handed it to the session**, so
+  `apply_sam_mask` had no caller either and *the estimator never saw the selected
+  building at all*. SAM was decorative. The entry asked "whatever the box button
+  does"; it did nothing to the fit. Now wired, and the reason it was easy to get
+  wrong is recorded in `apply_sam_mask`: SAM segments the **file**, `paint` and
+  `detect_info["mask"]` are **analysis-res**, so the only honest caller held the
+  wrong shape. The method converts now rather than demanding the caller does.
+  Pinned by `test_a_sam_segment_reaches_the_estimator_and_composes_with_the_paint`,
+  which also asserts paint and segment compose and that clearing leaves no stale
+  union.
 *(The two dead helpers listed here — `sam2seg.predict_box` and
 `vanishing._plausible_horizontal` — are **gone**, deleted 2026-09-14 and verified
 absent from both files; `--full` stays at 301 tests, 2 failed, so nothing was
