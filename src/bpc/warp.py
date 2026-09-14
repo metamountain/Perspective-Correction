@@ -305,6 +305,60 @@ def apply(img: np.ndarray, H_total: np.ndarray, out_w: int, out_h: int, settings
                                borderMode=cv2.BORDER_REPLICATE)
 
 
+def apply_undistorted(img: np.ndarray, H_total: np.ndarray, out_w: int, out_h: int,
+                      settings, undist_map: tuple[np.ndarray, np.ndarray]):
+    """Render the plan with a radial-distortion remap composed in.
+
+    ``undist_map`` is ``(map_x, map_y)`` from ``distortion.undistort_map`` —
+    per-pixel source coordinates that undo the lens's radial distortion at
+    full resolution.  The composition (Stage 5: one resample, never two):
+
+    1. For each output pixel, invert H_total to find where in the *undistorted*
+       image it came from.
+    2. Look up that location in the undistortion map to find the actual source
+       pixel in the distorted image.
+
+    The result is a single ``cv2.remap`` call — no intermediate buffer.
+    """
+    flags = _INTERP.get(settings.interpolation, cv2.INTER_LANCZOS4)
+    colour = pad_colour(getattr(settings, "pad", "edge"))
+    map_x, map_y = undist_map
+
+    H_inv = np.linalg.inv(H_total)
+    ys, xs = np.mgrid[0:out_h, 0:out_w]
+    ones = np.ones_like(xs)
+    pts = np.stack([xs.ravel(), ys.ravel(), ones.ravel()], axis=0).astype(np.float64)
+    src_pts = H_inv @ pts
+    src_pts /= src_pts[2:3, :]
+    sx = src_pts[0].reshape(out_h, out_w)
+    sy = src_pts[1].reshape(out_h, out_w)
+
+    sh, sw = img.shape[:2]
+    sx_c = np.clip(sx, 0, sw - 1)
+    sy_c = np.clip(sy, 0, sh - 1)
+
+    composed_x = _sample_map(map_x, sx_c, sy_c)
+    composed_y = _sample_map(map_y, sx_c, sy_c)
+
+    border = cv2.BORDER_CONSTANT if colour is not None else cv2.BORDER_REPLICATE
+    bval = colour if colour is not None else 0
+    return cv2.remap(img, composed_x.astype(np.float32), composed_y.astype(np.float32),
+                     flags, borderMode=border, borderValue=bval)
+
+
+def _sample_map(m: np.ndarray, x: np.ndarray, y: np.ndarray) -> np.ndarray:
+    """Bilinear sample of a 2-D map at fractional (x, y) coordinates."""
+    h, w = m.shape
+    x0 = np.clip(np.floor(x).astype(int), 0, w - 1)
+    y0 = np.clip(np.floor(y).astype(int), 0, h - 1)
+    x1 = np.clip(x0 + 1, 0, w - 1)
+    y1 = np.clip(y0 + 1, 0, h - 1)
+    fx = (x - x0).astype(np.float32)
+    fy = (y - y0).astype(np.float32)
+    return (m[y0, x0] * (1 - fx) * (1 - fy) + m[y0, x1] * fx * (1 - fy) +
+            m[y1, x0] * (1 - fx) * fy + m[y1, x1] * fx * fy)
+
+
 FRINGE = 3
 """Pixels of sub-pixel fringe the resampler leaves along the warped edge.
 
