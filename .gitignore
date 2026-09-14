@@ -28,6 +28,17 @@ analysis/*
 # a vendored third-party checkout (MIT), kept local, never committed
 tools/DeepLSD/
 
+# downloaded third-party weights: BiRefNet, Grounding DINO, SAM2/SAM3.  Several
+# GB in total and five single files over GitHub's 100 MB hard limit, so a push
+# containing them does not fail gracefully -- it is rejected outright.  All of
+# them are re-downloadable, which is the same reason tools/DeepLSD/ is kept
+# local.  The vendored M-LSD model above is the deliberate exception: small, and
+# tracked on purpose (see models/LICENSE.mlsd).
+models/BiRefNet/
+models/GroundingDINO/
+models/sam2/
+models/sam3/
+
 # model weights are fetched on demand, never committed
 models/*.pt
 models/*.pth
