@@ -5,7 +5,7 @@ import numpy as np
 
 
 def test_available_reports_install_state():
-    from bpc import distortion as D
+    from pc import distortion as D
     ok = D.available()
     assert isinstance(ok, bool)
     desc = D.describe()
@@ -13,13 +13,13 @@ def test_available_reports_install_state():
 
 
 def test_undistort_map_returns_none_without_exif():
-    from bpc import distortion as D
+    from pc import distortion as D
     result = D.undistort_map(None, 1920, 1080)
     assert result is None
 
 
 def test_undistort_map_returns_none_with_empty_bytes():
-    from bpc import distortion as D
+    from pc import distortion as D
     result = D.undistort_map(b"", 1920, 1080)
     assert result is None
 
@@ -30,8 +30,8 @@ def test_apply_undistorted_identity_map_matches_warp():
     remap must produce the same result as plain warpPerspective."""
     import cv2
     import math
-    from bpc.config import Settings
-    from bpc import warp as W, geometry as G
+    from pc.config import Settings
+    from pc import warp as W, geometry as G
 
     w, h = 400, 300
     # Smooth gradient image: avoids Lanczos ringing on per-pixel noise that
@@ -72,8 +72,8 @@ def test_apply_undistorted_identity_map_matches_warp():
 def test_apply_undistorted_with_shifted_map():
     """A uniform shift in the undistortion map shifts the output by that amount."""
     import cv2
-    from bpc.config import Settings
-    from bpc import warp as W, geometry as G
+    from pc.config import Settings
+    from pc import warp as W, geometry as G
     import math
 
     w, h = 400, 300
@@ -108,7 +108,7 @@ def test_apply_undistorted_with_shifted_map():
 
 def test_sample_map_bilinear():
     """_sample_map interpolates correctly at half-pixel positions."""
-    from bpc import warp as W
+    from pc import warp as W
 
     # Simple linear ramp: m[y, x] = x * 10
     m = np.zeros((10, 20), dtype=np.float32)
@@ -131,6 +131,6 @@ def test_sample_map_bilinear():
 
 
 def test_settings_default_is_off():
-    from bpc.config import Settings
+    from pc.config import Settings
     st = Settings()
     assert st.undistort == "off"

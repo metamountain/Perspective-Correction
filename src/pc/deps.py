@@ -163,7 +163,7 @@ def doctor() -> int:
     by = {r["name"]: r for r in recs}
     hard_missing = sum(1 for r in recs if not r["ok"] and r["hard"])
 
-    lines = ["bpc dependency check",
+    lines = ["pc dependency check",
              f"  interpreter: {sys.executable}",
              f"  python: {platform.python_version()}   ({platform.platform()})",
              "",

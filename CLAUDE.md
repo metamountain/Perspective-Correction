@@ -46,7 +46,7 @@ paused — why, and how to resume it, in `docs/qwen-knowledge.md`.
 
 - Project root `D:\Coding\Perspective-Correction`, Windows, PowerShell 7,
   Python 3.12.9 (python.org), 32 cores.
-- Compile: `python -m py_compile src/bpc/gui.py` (and anything else touched).
+- Compile: `python -m py_compile src/pc/gui.py` (and anything else touched).
 - One module: `python tests/run_tests.py test_gui` — fast.
 - Full suite: `python tests/run_tests.py` — 282 tests, ~135 s, modules in worker
   processes; `-s` for the old sequential run.
@@ -56,7 +56,7 @@ paused — why, and how to resume it, in `docs/qwen-knowledge.md`.
   pump with `update()` + `sleep(0.02)`, then `destroy()`. `invalid command name
   ..._pump` on teardown is harmless Tk noise, not a failure.
 - `python tools/debug_ui.py` sweeps the window lifecycle; must end `FAILURES: none`
-  with `bpc_errors.log` clean.
+  with `pc_errors.log` clean.
 
 ## Hard rules (the ones that bite)
 
@@ -95,14 +95,14 @@ declared `mlsd` extra) is installed in the **system** interpreter, so
 
 ## Ledger — the only place status lives
 
-**Suite 2026-09-14: 292 tests, 2 failed, 2 skipped, ~159 s.** Two failures are
+**Suite 2026-09-14: 299 tests, 2 failed, 2 skipped, ~166 s.** Two failures are
 the single receding-row photograph in the bug entry below (3.71° round-trip on
 one asset; pre-existing, unrelated to new code). Everything else passes,
-including the distortion module and all GUI tests. Re-run before trusting this —
-it is a measurement, not a promise, and no entry below may restate it. An item
-stays under **Open** until nothing is left to do; **Done** is only for finished
-work. `Pn` labels are short handles for work packages; entries written out in
-full here stand on their own.
+including the distortion module, all GUI tests, and the new `test_sam2seg`
+module (7 tests). Re-run before trusting this — it is a measurement, not a
+promise, and no entry below may restate it. An item stays under **Open** until
+nothing is left to do; **Done** is only for finished work. `Pn` labels are short
+handles for work packages; entries written out in full here stand on their own.
 
 ### Open — do these
 
@@ -221,7 +221,7 @@ them is what the product needs next.
   Stages 1+ remain.** `H = K R K^-1` is a pure rotation and cannot touch radial
   distortion. **Full research in `knowledge.md` §5** (APIs, licences, interpreter
   split, remap composition, trigger signal). Stage 0 (`lensfunpy`) is done:
-  `src/bpc/distortion.py` (EXIF make/model/focal/aperture → per-pixel remap),
+  `src/pc/distortion.py` (EXIF make/model/focal/aperture → per-pixel remap),
   `warp.apply_undistorted()` (single composed `cv2.remap`), `--undistort lensfun`
   CLI flag, `Settings.undistort`, preflight + doctor rows, 7 tests. No EXIF =
   graceful skip (returns None). Stages 1–3 (AnyCalib blind fit, GeoCalib gravity,
@@ -230,7 +230,7 @@ them is what the product needs next.
   Test case: `Aulendorf_Schloss_Fassade.jpg` (zero EXIF, fragmented lines). Must keep
   the 8% border guard.
   **Go-ahead given 2026-09-14** (user: lensfun where EXIF identifies the lens, an
-  estimator where it does not). Stage 0 is already in flight — `src/bpc/distortion.py`
+  estimator where it does not). Stage 0 is already in flight — `src/pc/distortion.py`
   is lensfunpy + EXIF make/model/focal/aperture with the usual `available()` guards.
   **Trigger: measured 2026-09-14, it does NOT work — do not build it.** The proposal
   was to suspect distortion when a `merge_collinear` chain's members show monotonic
@@ -294,8 +294,10 @@ them is what the product needs next.
 
 ### Done — rely on these
 
+- **Package renamed `bpc` → `pc`** (09-14, user: "bpc should be replaced with pc perspective correction!"). Directory `src/bpc/` → `src/pc/`, all imports across 205+ files, `pyproject.toml` entry point (`pc = "pc.cli:main"`), `rectify.py`, `tools/*.py`, docs. ComfyUI node title constants (`BPC_IMAGE`, `BPC_MASK`, `BPC_PROMPT`) are part of the workflow JSON API contract and intentionally unchanged. Launcher renamed to `"Perspective Correction.bat"`.
+- **Rulers, Q2 layout, SAM interaction overhaul** (09-14). Rulers are plain solid lines (`#556677`, 12px major / 8px minor ticks) in a symmetric 20px `RULER_MARGIN` border zone around **both** panes — no stipple, no text, no antenna look. Q2 (after pane) is the same size as Q1; `_to_photo(arr, box)` uses the full canvas box minus the margin on each side. SAM2 click-to-select: drag a box on the before pane, Shift+click adds positive points, Alt+click negative; runs in the ComfyUI interpreter via `sam2seg.run_subprocess`, hourglass cursor during prediction, result shown as a 3px green border rectangle around the canvas perimeter (a selection indicator, not an applied mask). Checkboxes enlarged to 24×24. Crop pan restricted to inside the crop box.
 - **Rulers moved to static 20px border zone** (09-14, user: "border zone of images should be zone for creating rulers, 20 pixels around images"). The after-pane image is now inset by `RULER_MARGIN=20` px on all sides (`_show_after` computes `inset_box`), guaranteeing a border strip regardless of aspect ratio. `_draw_rulers` draws ticks in that margin (top, left, right, bottom) pointing inward from the canvas edge — no longer overlaid on the photograph. Hovering the border zone shows a crosshair cursor (`_on_crop_motion`). Crop drag still calls `_show_after` which redraws rulers each tick; since they now live in the static margin (not on the moving image), the flicker is imperceptible.
-- **Stage 0 barrel distortion (lensfunpy)** (09-14). `src/bpc/distortion.py`: EXIF make/model/focal/aperture → lensfunpy `Modifier.apply_geometry_distortion()` → per-pixel `(map_x, map_y)` float32 arrays. No EXIF or no profile match = returns None (graceful skip). `warp.apply_undistorted()` composes the undistortion map with H_total into a single `cv2.remap` (Stage 5: one resample). CLI: `--undistort {off,lensfun}`. Pinned by `tests/test_distortion.py` (7 tests).
+- **Stage 0 barrel distortion (lensfunpy)** (09-14). `src/pc/distortion.py`: EXIF make/model/focal/aperture → lensfunpy `Modifier.apply_geometry_distortion()` → per-pixel `(map_x, map_y)` float32 arrays. No EXIF or no profile match = returns None (graceful skip). `warp.apply_undistorted()` composes the undistortion map with H_total into a single `cv2.remap` (Stage 5: one resample). CLI: `--undistort {off,lensfun}`. Pinned by `tests/test_distortion.py` (7 tests).
 - **Clipboard paste + jpeg quality spinbox** (09-13, user: "möchte screenshots per copy paste einfügen"). Paste button (`add_paste_btn`) in addbar calls `App._paste_screenshot()`, which grabs the clipboard via `PIL.ImageGrab.grabclipboard()`, saves a timestamped JPG in the output dir at the configured quality, and feeds it through `_add`. Jpeg quality spinbox (`v_jpegq`, range 10–100) added to batch options grid (2,4), persisted via `trace_add` → `prefs.save(jpeg_quality=…)`. Pinned by `test_gui.test_paste_button_exists_and_handler_is_wired` and `test_gui.test_jpeg_quality_spinbox_in_batch_options`.
 - **[bug] Before/after canvases stayed black after a theme switch** (09-13, user:
   "still bg black!"). `tk.Canvas` has no `-fg` option, so the old Canvas branch's
@@ -661,10 +663,10 @@ about lives in `knowledge.md` (research goals) or `docs/worker-environment.md`
 Nothing on this branch is committed yet. `git status` is otherwise clean — no scratch
 files at the root, and the untracked additions (`skills/`, `scheme.py`
 + its test, `tools/debug_ui.py`, `tools/worker_bench.py`, `tests/test_cli.py`,
-`run_bpc_gui.bat` replacing the deleted `run_gui.bat`, the `Horizontal/` assets and the
-newer top-level ones) are all wanted. Nothing to delete or move. The commit-readiness
-caveat this note used to carry (`scheme.py` unwired, the monkeypatch unscoped) no longer
-applies — both landed (see Done).
+`"Perspective Correction.bat"` replacing the deleted `run_bpc_gui.bat`, the
+`Horizontal/` assets and the newer top-level ones) are all wanted. Nothing to delete
+or move. The commit-readiness caveat this note used to carry (`scheme.py` unwired, the
+monkeypatch unscoped) no longer applies — both landed (see Done).
 
 ## Gotchas (each cost real time)
 

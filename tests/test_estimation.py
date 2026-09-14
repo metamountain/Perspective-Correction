@@ -8,8 +8,8 @@ import math
 import numpy as np
 
 import synth
-from bpc.config import Settings
-from bpc.pipeline import analyse
+from pc.config import Settings
+from pc.pipeline import analyse
 
 
 def _err(scene, settings):
@@ -111,7 +111,7 @@ def test_half_timbered_bracing_does_not_capture_the_vertical_direction():
 
 def test_a_sharper_angular_prior_is_what_helps_on_bracing():
     """Pins the measured finding: the weighting does the work, not the window."""
-    from bpc import lines as L
+    from pc import lines as L
     lean = np.radians([0.0, 10.0, 20.0, 30.0])
     window = math.radians(32.0)
     soft = L.angular_prior(lean, window, 0.35)

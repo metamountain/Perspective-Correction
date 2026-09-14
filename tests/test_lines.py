@@ -3,8 +3,8 @@ import math
 
 import numpy as np
 
-from bpc import lines as L
-from bpc.config import Settings
+from pc import lines as L
+from pc.config import Settings
 
 
 def _seg(x0, y0, x1, y1):

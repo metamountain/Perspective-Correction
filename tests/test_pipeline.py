@@ -8,12 +8,12 @@ import cv2
 import numpy as np
 
 import synth
-from bpc.config import Settings
-from bpc.pipeline import ERROR, OK, SKIPPED, process
+from pc.config import Settings
+from pc.pipeline import ERROR, OK, SKIPPED, process
 
 
 def _tmp():
-    d = tempfile.mkdtemp(prefix="bpc-test-")
+    d = tempfile.mkdtemp(prefix="pc-test-")
     return d
 
 
@@ -183,7 +183,7 @@ def test_a_mask_source_with_no_path_fails_once_not_per_file():
     ``birefnet_model`` fills the missing path in and the run succeeds, so this
     passed in CI and failed for anyone who had ever used ``--remember``.
     """
-    from bpc.cli import main as cli_main
+    from pc.cli import main as cli_main
     d = _tmp()
     old = (os.environ.get("XDG_CONFIG_HOME"), os.environ.get("APPDATA"))
     try:
@@ -210,7 +210,7 @@ def test_the_json_report_says_what_produced_it():
     by anyone who did not run it."""
     import json
 
-    from bpc.cli import main as cli_main
+    from pc.cli import main as cli_main
     d = _tmp()
     try:
         cv2.imwrite(os.path.join(d, "a.jpg"), synth.Scene(pitch_deg=8, seed=71).img)
@@ -229,7 +229,7 @@ def test_the_json_report_says_what_produced_it():
 
 
 def test_diagnostics_go_into_the_log_file_too():
-    from bpc.cli import main as cli_main
+    from pc.cli import main as cli_main
     d = _tmp()
     try:
         cv2.imwrite(os.path.join(d, "a.jpg"), synth.Scene(pitch_deg=8, seed=72).img)
@@ -252,7 +252,7 @@ def test_a_correction_past_the_limit_is_refused_not_trimmed():
     the world vertical -- and the answer was the maximum allowed warp, throwing
     away 41 % of the frame.
     """
-    from bpc.config import Settings
+    from pc.config import Settings
     d = _tmp()
     try:
         src = os.path.join(d, "a.jpg")
@@ -317,7 +317,7 @@ def _roi_analyse(band=None, max_edge=None, padded=False):
     The full tuple matters: a cache keyed on the image alone would hand the
     degenerate-input tests the baseline result and they would pass while
     measuring nothing -- the same trap the round-trip cache documents."""
-    from bpc.pipeline import analyse
+    from pc.pipeline import analyse
     key = (band, max_edge, padded)
     if key not in _ROI:
         s = Settings() if max_edge is None else Settings().replace(detect_max_edge=max_edge)
@@ -341,7 +341,7 @@ def test_in_xband_selects_by_the_midpoint_so_a_straddling_line_is_a_coin_toss():
     can be dropped. That is a real property of the rule, not an accident, and
     anybody changing it to an endpoint or an overlap test would change which
     facade the yaw comes from without changing any other visible behaviour."""
-    from bpc import lines as L
+    from pc import lines as L
     seg = np.array([
         [110., 10., 190., 12.],   # wholly inside 100..200
         [10., 10., 40., 12.],     # wholly outside, left
@@ -364,7 +364,7 @@ def test_in_xband_accepts_its_bounds_in_either_order():
     """A band comes from a drag, and a drag has no preferred direction. Sorting
     inside the filter is what lets the caller pass the press and the release
     point without normalising them first."""
-    from bpc import lines as L
+    from pc import lines as L
     seg = np.array([[110., 10., 190., 12.], [300., 10., 400., 12.]])
     assert list(L.in_xband(seg, 200.0, 100.0)) == list(L.in_xband(seg, 100.0, 200.0))
 
@@ -377,7 +377,7 @@ def test_use_scheme_partitions_lines_and_is_off_by_default():
     is that the partition only ever *removes* evidence -- a classifier must never
     invent a line to fit a hypothesis.  A corner view is the case it exists for:
     two facades whose horizontals the plain orientation split would otherwise mix."""
-    from bpc.pipeline import analyse
+    from pc.pipeline import analyse
     img = _roi_scene().img
     base_m, v0, h0, _, _ = analyse(img, Settings())
     assert "scheme" not in (base_m.detect_info or {}), \
@@ -486,7 +486,7 @@ def test_the_strip_is_given_in_full_pixels_and_rescaled_to_the_analysis_image():
     find in a batch. Both bounds are non-zero on purpose: with a band starting
     at 0 a dropped factor on the low end multiplies to 0 either way, and the
     test would see nothing."""
-    from bpc import lines as L
+    from pc import lines as L
     res = _roi_analyse(band=(300.0, 900.0), max_edge=600)
     full = _roi_analyse(max_edge=600)
     scale = res[3]
@@ -556,7 +556,7 @@ def test_set_roi_x_converts_from_display_pixels_and_clear_says_whether_it_cleare
     And clear_roi_x returns whether there was anything to clear: a control that
     reports success on a no-op is how a window comes to disagree with the state
     it is showing."""
-    from bpc.review import ReviewSession
+    from pc.review import ReviewSession
     s = ReviewSession("mem.jpg", Settings(), image=_roi_scene().img)
     assert s.roi_x is None and s.scale == 1.0
     assert s.set_roi_x(100, 700, 1.0) is True
@@ -575,7 +575,7 @@ def test_set_roi_x_refuses_a_strip_too_narrow_to_have_been_meant():
     of the frame says so instead. Measured: a refusal leaves the band exactly as
     it was rather than clearing it, which is the right answer for a stray click
     during a review."""
-    from bpc.review import ReviewSession
+    from pc.review import ReviewSession
     s = ReviewSession("mem.jpg", Settings(), image=_roi_scene().img)
     for name, args in (("narrow", (100, 130)), ("zero width", (600, 600)),
                        ("wholly right of the frame", (5000, 6000)),
@@ -606,7 +606,7 @@ def test_the_status_line_says_zero_lines_while_the_fit_quietly_used_them_all():
     whole frame. The status line states the opposite of what happened, which is
     worse than saying nothing, and it is the user-facing half of the same
     missing diagnostic as the log line above."""
-    from bpc.review import ReviewSession
+    from pc.review import ReviewSession
     s = ReviewSession("mem.jpg", Settings(), image=_roi_padded())
     before = (s.model.roll, s.model.pitch)
     assert s.set_roi_x(1420, 1590, 1.0) is True, "the blank margin clears the 5 % floor"

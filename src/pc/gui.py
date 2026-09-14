@@ -5,7 +5,7 @@ The *review* screen opens one image and lets the decision be overridden by hand:
 sliders for roll, pitch and focal length, and a clickable overlay for striking
 out the lines the detector should not have trusted.
 
-Anything that is not toolkit plumbing lives in :mod:`bpc.review`, which has no
+Anything that is not toolkit plumbing lives in :mod:`pc.review`, which has no
 Tkinter dependency and is covered by the test suite; this file is the shell.
 
 Tkinter ships with the python.org installer on Windows, which is the target
@@ -46,6 +46,7 @@ from .config import Settings
 from .imageio import READABLE
 from .pipeline import ERROR, OK, SKIPPED, process
 from .inpaint import join_url as _join_url, split_url as _split_url
+from . import sam2seg
 from .review import AUTO, MANUAL, ReviewSession, darken_outside_crop
 
 QUEUED = "queued"
@@ -236,7 +237,7 @@ def apply_theme(root, palette=None):
     st.map("TCombobox", fieldbackground=[("readonly", p["field"])],
            foreground=[("readonly", p["text"])])
     st.configure("TCheckbutton", background=p["bg"], foreground=p["text"],
-                 padding=8, indicatorwidth=16, indicatorheight=16)
+                 padding=4, indicatorwidth=24, indicatorheight=24)
     st.map("TCheckbutton", background=[("active", p["bg"])])
     st.configure("TScale", background=p["bg"], troughcolor=p["field"],
                  sliderlength=16, thickness=8)
@@ -823,7 +824,9 @@ class ReviewPanel(tk.Frame):
             self._loupe_show()
         self.c_before.bind("<Button-1>", self._on_click_before)
         self.c_before.bind("<Motion>", self._on_before_motion)
+        self.c_before.bind("<B1-Motion>", self._on_sam_drag)
         self.c_before.bind("<B1-Motion>", self._on_before_b1motion)
+        self.c_before.bind("<ButtonRelease-1>", self._on_sam_release)
         self.c_before.bind("<ButtonRelease-1>", self._on_before_b1release)
         # Photoshop's gestures, because this is a brush and those are the ones in
         # everybody's hands already: left paints, right erases, Alt+right dragged
@@ -832,6 +835,7 @@ class ReviewPanel(tk.Frame):
         self.c_before.bind("<Alt-ButtonPress-1>", self._on_alt_erase_press)
         self.c_before.bind("<Alt-ButtonPress-3>", self._on_pen_size_start)
         self.c_before.bind("<Alt-B3-Motion>", self._on_pen_size_drag)
+        self.c_before.bind("<ButtonPress-3>", self._on_sam_right_click)
         self.c_before.bind("<ButtonPress-3>", self._on_erase_press)
         self.c_before.bind("<B3-Motion>", self._on_erase_motion)
         self.c_before.bind("<ButtonRelease-3>", self._on_erase_release)
@@ -1038,6 +1042,11 @@ class ReviewPanel(tk.Frame):
         if getattr(self, "v_mark", None) is None:
             self.v_mark = tk.BooleanVar(value=False)
             self.v_mark_kind = tk.StringVar(value="vertical")
+        if getattr(self, "v_sam", None) is None:
+            self.v_sam = tk.BooleanVar(value=False)
+            self._sam_box = None
+            self._sam_points = []
+            self._sam_selection = None
         # The palette in the picture's top-left corner can only be finished here:
         # it toggles these variables, and they do not exist until this point.
         self._build_tool_palette()
@@ -1171,6 +1180,9 @@ class ReviewPanel(tk.Frame):
     def _apply_mask(self):
         if not self.session:
             return                     # no photo loaded; nothing to mask yet
+        if getattr(self, "_mask_enabled", True) is False:
+            self.lbl_mask.configure(text="mask inactive")
+            return
         mode = self.v_maskmode.get()
         if mode == "file" and not self.session.settings.mask_file:
             if not self._pick_mask_folder(apply_now=False):
@@ -1203,6 +1215,21 @@ class ReviewPanel(tk.Frame):
             self._sync_from_session()
         else:
             self._redraw()
+
+    def _clear_mask(self):
+        """Remove painted mask and SAM selection; reset mode to off."""
+        if not self.session:
+            return
+        self.session.paint = None
+        self.session._paint_struck = np.zeros(len(self.session.vert), dtype=bool)
+        self.session.sam_mask = None
+        self._sam_box = None
+        self._sam_points = []
+        self._sam_selection = None
+        self.v_maskmode.set("off")
+        self.lbl_mask.configure(text="")
+        self.c_before.delete("sam_prompts")
+        self._redraw()
 
     def _pick_birefnet_model(self, apply_now=True):
         """Point at BiRefNet weights and say what they are.
@@ -1257,6 +1284,13 @@ class ReviewPanel(tk.Frame):
             return
         self.session.mask_alpha = float(self.v_alpha.get())
         self._schedule_redraw()
+
+    def _on_mask_active_toggle(self):
+        """Toggle mask active/inactive without clearing the painted region."""
+        if not self.session:
+            return
+        self._mask_enabled = self.v_mask_active.get()
+        self._apply_mask()
 
     # -- ComfyUI, which lives on the App -----------------------------------
     # A fixed list, and it must stay one.  `_sync_comfy` copies from the App's
@@ -1569,16 +1603,29 @@ class ReviewPanel(tk.Frame):
     def _on_before_motion(self, event):
         if getattr(self, "_loupe", None) is not None:
             self._loupe_move(event)
+        # Hover cursor in the top black border (Q2 ruler zone): sb_h_arrow
+        # indicates the invisible ruler area.  Click activates + drags.
+        cw = self.c_before.winfo_width()
+        ch = self.c_before.winfo_height()
+        in_top_border = event.y < RULER_MARGIN and RULER_MARGIN <= event.x <= cw - RULER_MARGIN
+        if in_top_border:
+            self.c_before.config(cursor="sb_h_arrow")
+        elif getattr(self, "v_roi", None) is not None and self.v_roi.get() \
+                and getattr(self, "_ph_b", None) is not None:
+            oy = self._before_off[1]
+            ih = self._ph_b.height()
+            near = any(abs(event.y - (oy + ty)) <= 5 for ty in (0.0, ih))
+            self.c_before.config(cursor="sb_h_arrow" if near else "")
+        else:
+            cur = self.c_before.cget("cursor")
+            if cur != "":
+                self.c_before.config(cursor="")
         self._brush_cursor_indicator(event)
 
     def _brush_cursor_indicator(self, event):
         """Show a black-outlined circle at the cursor when the mask brush is
         active, so the user can see the effective paint size before committing."""
         if not self._brush_live():
-            self.c_before.delete("brush_cursor")
-            return
-        if getattr(self, "_stroke_pts", None):
-            # actively painting: the stroke preview already shows the size
             self.c_before.delete("brush_cursor")
             return
         r = max(8, int(self.v_stroke_w.get()))
@@ -1677,7 +1724,7 @@ class ReviewPanel(tk.Frame):
                for px, py in q]
         if len(pts) >= 3:
             self.c_before.create_polygon(
-                *[c for pt in pts for c in pt], fill="#ff5fa218",
+                *[c for pt in pts for c in pt], fill="",
                 outline="#ff5fa2", width=2, tags="planar_fill")
         elif len(pts) == 2:
             self.c_before.create_line(
@@ -2103,6 +2150,17 @@ class ReviewPanel(tk.Frame):
             if hit is not None:
                 self._on_roi_drag_start(hit)
                 return
+        cw = self.c_before.winfo_width()
+        if event.y < RULER_MARGIN and RULER_MARGIN <= event.x <= cw - RULER_MARGIN:
+            self._ruler_y = max(2, min(RULER_MARGIN - 2, event.y))
+            self._ruler_visible = True
+            self._ruler_dragging = True
+            self.c_before.config(cursor="sb_h_arrow")
+            self._schedule_redraw()
+            return
+        if getattr(self, "v_sam", None) is not None and self.v_sam.get():
+            self._on_sam_press(event)
+            return
         if getattr(self, "v_stroke", None) is not None and self.v_stroke.get():
             self._stroke_start(x, y)
             return
@@ -2246,6 +2304,14 @@ class ReviewPanel(tk.Frame):
         _attach_tooltip(self._brush_chk, "Paint a mask over regions to exclude from line detection. Right-click or Alt+click to erase.")
         ttk.Spinbox(row, from_=8, to=160, increment=4, width=3,
                     textvariable=self.v_stroke_w).pack(side="left", padx=(4, 0))
+        if getattr(self, "v_sam", None) is None:
+            self.v_sam = tk.BooleanVar(value=False)
+            self._sam_box = None
+            self._sam_points = []
+            self._sam_selection = None
+        _b = ttk.Button(row, text="SAM", command=self._on_sam_toggle)
+        _b.pack(side="left", padx=(10, 0))
+        _attach_tooltip(_b, "SAM: drag a box over the subject to segment it; right-click clears the prompt")
 
         # Mark-vertical gesture and strike-slanted: moved from the lower-right
         # control strip (2026-09-13) because they operate on the before image's
@@ -2281,16 +2347,26 @@ class ReviewPanel(tk.Frame):
         _b = ttk.Button(msk, text="mask folder...", command=self._pick_mask_folder)
         _b.grid(row=0, column=2, sticky="w")
         _attach_tooltip(_b, "Choose the folder containing mask PNG files (one per image)")
-        _b = ttk.Button(msk, text="BiRefNet model...", command=self._pick_birefnet_model)
-        _b.grid(row=0, column=4, sticky="w", padx=(10, 0))
-        _attach_tooltip(_b, "Select the BiRefNet segmentation model to use")
-        _b = ttk.Button(msk, text="Mask Apply", command=self._apply_mask)
-        _b.grid(row=0, column=5, sticky="w", padx=(10, 0))
-        _attach_tooltip(_b, "Re-apply the current mask to filter detected lines")
+        self.v_mask_active = tk.BooleanVar(value=False)
+        self.msk_active_cb = ttk.Checkbutton(msk, text="active",
+                        variable=self.v_mask_active,
+                        command=self._on_mask_active_toggle)
+        self.msk_active_cb.grid(row=0, column=3, sticky="w", padx=(10, 0))
+        _attach_tooltip(self.msk_active_cb,
+                        "Toggle mask on/off without clearing the painted region")
         self.v_maskinv = tk.BooleanVar(value=self.settings.mask_invert)
         ttk.Checkbutton(msk, text="mask marks what to KEEP",
                         variable=self.v_maskinv, command=self._apply_mask
-                        ).grid(row=0, column=3, sticky="w", padx=10)
+                        ).grid(row=0, column=4, sticky="w", padx=(10, 0))
+        _b = ttk.Button(msk, text="BiRefNet model...", command=self._pick_birefnet_model)
+        _b.grid(row=0, column=5, sticky="w", padx=(10, 0))
+        _attach_tooltip(_b, "Select the BiRefNet segmentation model to use")
+        _b = ttk.Button(msk, text="Mask Apply", command=self._apply_mask)
+        _b.grid(row=0, column=6, sticky="w", padx=(10, 0))
+        _attach_tooltip(_b, "Re-apply the current mask to filter detected lines")
+        _b = ttk.Button(msk, text="Clear Mask", command=self._clear_mask)
+        _b.grid(row=0, column=7, sticky="w", padx=(10, 0))
+        _attach_tooltip(_b, "Remove all painted mask and SAM selection")
         self.lbl_mask = ttk.Label(msk, text="", wraplength=760, justify="left")
         self.lbl_mask.grid(row=1, column=0, columnspan=4, sticky="w", pady=(4, 0))
         self.v_alpha = tk.DoubleVar(value=0.28)
@@ -2318,6 +2394,10 @@ class ReviewPanel(tk.Frame):
     def _on_before_b1motion(self, event):
         if getattr(self, "_loupe", None) is not None:
             self._loupe_move(event)
+        if getattr(self, "_ruler_dragging", False):
+            self._ruler_y = max(2, min(RULER_MARGIN - 2, event.y))
+            self._schedule_redraw()
+            return
         if getattr(self, "_roi_drag", None) is not None:
             self._on_roi_drag_move(event)
             return
@@ -2330,6 +2410,11 @@ class ReviewPanel(tk.Frame):
             self._on_planar_drag(event)
 
     def _on_before_b1release(self, event):
+        if getattr(self, "_ruler_dragging", False):
+            self._ruler_dragging = False
+            self.c_before.config(cursor="sb_h_arrow")
+            self._schedule_redraw()
+            return
         if getattr(self, "_roi_drag", None) is not None:
             self._on_roi_drag_release()
             return
@@ -2632,8 +2717,11 @@ class ReviewPanel(tk.Frame):
             self._draw_empty()
             return
         try:
-            box_b = (self.c_before.winfo_width(), self.c_before.winfo_height())
-            box_a = (self.c_after.winfo_width(), self.c_after.winfo_height())
+            rm = RULER_MARGIN
+            box_b = (max(1, self.c_before.winfo_width() - 2 * rm),
+                     max(1, self.c_before.winfo_height() - 2 * rm))
+            box_a = (max(1, self.c_after.winfo_width() - 2 * rm),
+                     max(1, self.c_after.winfo_height() - 2 * rm))
             # An unmapped canvas is starved as well, and its winfo_* values are
             # stale -- the last size it had, not zero -- so the <20 test alone
             # misses it and would "draw" into a widget with no place on screen.
@@ -2671,9 +2759,10 @@ class ReviewPanel(tk.Frame):
             ph_b, s_b = _to_photo(before, box_b)
             # scale from the *original* image to what is on screen
             self._before_scale = s_b * (before.shape[1] / self.session.w)
-            self._before_off = ((box_b[0] - ph_b.width()) // 2,
-                                (box_b[1] - ph_b.height()) // 2)
+            self._before_off = (rm + (box_b[0] - ph_b.width()) // 2,
+                                rm + (box_b[1] - ph_b.height()) // 2)
             self.c_before.delete("all")
+            self._sam_selection = None
             self.c_before.create_image(self._before_off[0], self._before_off[1],
                                        anchor="nw", image=ph_b)
             self._ph_b = ph_b
@@ -2686,19 +2775,22 @@ class ReviewPanel(tk.Frame):
                 self._draw_planar_quad()
             else:
                 self._draw_marks()
+            self._draw_rulers(self.c_before, *self._before_off,
+                              ph_b.width(), ph_b.height())
             self._draw_roi_rulers()
+            self._draw_sam_prompts()
             self._show_after(self.session.crop_rect, planar_on)
             self._set_status(self.session.status_text())
         except Exception:
             tb = traceback.format_exc()
             try:
                 log = os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                   "..", "..", "bpc_errors.log")
+                                   "..", "..", "pc_errors.log")
                 with open(log, "a", encoding="utf-8") as fh:
                     fh.write(tb + "\n" + "=" * 60 + "\n")
             except OSError:
                 pass
-            self._set_status("preview failed (full log: bpc_errors.log):\n" + tb)
+            self._set_status("preview failed (full log: pc_errors.log):\n" + tb)
 
     def _grid_step(self):
         """Grid spacing from the field: pixels per cell, or a division count.
@@ -2746,9 +2838,6 @@ class ReviewPanel(tk.Frame):
             self._palette_btns.append(b)
             return b
 
-        tool("●", self.v_stroke, self._on_stroke_toggle,
-             "Mask brush - drag to paint the ignored region, right-drag to erase, "
-             "Alt+right-drag sizes the pen")
         tool("│", self.v_mark, self._on_mark_toggle,
              "Mark a line that is truly vertical (or horizontal) by hand")
         tool("◱", self.v_planar, self._on_planar_toggle,
@@ -2824,50 +2913,17 @@ class ReviewPanel(tk.Frame):
                 canvas.create_line(ox, y, ox + iw, y, **kw)
 
     def _draw_rulers(self, canvas, ox, oy, iw, ih):
-        """Numeric rulers in the static 20px border zone around the corrected frame.
+        """Ruler line in the top black border (Q2).
 
-        Ticks point inward from the canvas edge toward the image.  Top ruler
-        spans the full image width; left and right rulers span the full image
-        height.  Minor ticks at every grid step, a longer major tick with its
-        pixel offset every fifth -- top and left offset from the image's
-        top-left corner, right offset from the top-right corner."""
-        if not self.v_grid.get():
+        Invisible until clicked; then a thin grey horizontal line shows at
+        the dragged Y position."""
+        if canvas is not self.c_before:
             return
-        step, _n = self._grid_step()
-        if step == 0:
+        if not getattr(self, "_ruler_visible", False):
             return
-        m = RULER_MARGIN
-        minor = dict(fill="#9fd8ff", width=1, stipple="gray50", tags="ruler")
-        # Top ruler: ticks hang down from y=0 into the top margin
-        for p, major in layout.ruler_ticks(iw, step):
-            ln = m - 4 if major else (m - 8)
-            canvas.create_line(ox + p, 0, ox + p, ln, **minor)
-            if major and p > 0:
-                canvas.create_text(ox + p, ln + 2, text=str(p),
-                                   anchor="s", fill="#9fd8ff",
-                                   font=("TkDefaultFont", 7), tags="ruler")
-        # Left ruler: ticks point right from x=0 into the left margin
-        for p, major in layout.ruler_ticks(ih, step):
-            ln = m - 4 if major else (m - 8)
-            canvas.create_line(0, oy + p, ln, oy + p, **minor)
-            if major and p > 0:
-                canvas.create_text(ln + 2, oy + p, text=str(p),
-                                   anchor="w", fill="#9fd8ff",
-                                   font=("TkDefaultFont", 7), tags="ruler")
-        # Right ruler: ticks point left from x=canvas_width into the right margin
         cw = canvas.winfo_width()
-        for p, major in layout.ruler_ticks(ih, step):
-            ln = m - 4 if major else (m - 8)
-            canvas.create_line(cw, oy + p, cw - ln, oy + p, **minor)
-            if major and p > 0:
-                canvas.create_text(cw - ln - 2, oy + p, text=str(p),
-                                   anchor="e", fill="#9fd8ff",
-                                   font=("TkDefaultFont", 7), tags="ruler")
-        # Bottom ruler: ticks point up from y=canvas_height into the bottom margin
-        ch = canvas.winfo_height()
-        for p, major in layout.ruler_ticks(iw, step):
-            ln = m - 4 if major else (m - 8)
-            canvas.create_line(ox + p, ch, ox + p, ch - ln, **minor)
+        ry = getattr(self, "_ruler_y", RULER_MARGIN // 2)
+        canvas.create_line(0, ry, cw, ry, fill="#aaaaaa", width=1, tags="ruler")
 
     def _draw_marks(self):
         """Control lines (vertical and horizontal), over the preview.
@@ -2926,6 +2982,121 @@ class ReviewPanel(tk.Frame):
         d = 4
         self.c_before.create_line(cx - d, cy, cx + d, cy, fill=col, **kw)
         self.c_before.create_line(cx, cy - d, cx, cy + d, fill=col, **kw)
+
+    # -- SAM2 box-prompt segmentation --------------------------------------
+    def _on_sam_toggle(self):
+        self.v_sam.set(not self.v_sam.get())
+        if not self.v_sam.get():
+            self._sam_box = None
+            self._sam_points = []
+            self._sam_selection = None
+            self.c_before.delete("sam_prompts")
+            self._redraw()
+
+    def _on_sam_press(self, event):
+        if not self.v_sam.get():
+            return
+        ox, oy = self._before_off
+        x = (event.x - ox) / self._before_scale
+        y = (event.y - oy) / self._before_scale
+        self._sam_drag_start = (x, y)
+        self._sam_box = None
+
+    def _on_sam_drag(self, event):
+        if not self.v_sam.get() or not hasattr(self, '_sam_drag_start'):
+            return
+        ox, oy = self._before_off
+        x0, y0 = self._sam_drag_start
+        x1 = (event.x - ox) / self._before_scale
+        y1 = (event.y - oy) / self._before_scale
+        self.c_before.delete("sam_prompts")
+        # Draw in CANVAS coordinates (add offset)
+        cx0, cy0 = min(x0, x1), min(y0, y1)
+        cx1, cy1 = max(x0, x1), max(y0, y1)
+        self.c_before.create_rectangle(ox + cx0, oy + cy0, ox + cx1, oy + cy1,
+                                       outline="#5ac37f", width=2, tags="sam_prompts")
+
+    def _on_sam_release(self, event):
+        if not self.v_sam.get() or not hasattr(self, '_sam_drag_start'):
+            return
+        ox, oy = self._before_off
+        x0, y0 = self._sam_drag_start
+        del self._sam_drag_start
+        x1 = (event.x - ox) / self._before_scale
+        y1 = (event.y - oy) / self._before_scale
+        cx0, cy0 = min(x0, x1), min(y0, y1)
+        cx1, cy1 = max(x0, x1), max(y0, y1)
+        if (cx1 - cx0) < 5 or (cy1 - cy0) < 5:
+            return  # too small, ignore
+        self._sam_box = (cx0 / self.session.w, cy0 / self.session.h,
+                         cx1 / self.session.w, cy1 / self.session.h)
+        self._draw_sam_prompts()
+        self._on_sam_apply()
+
+    def _on_sam_apply(self):
+        if self._sam_box is None:
+            return
+        box = self._sam_box
+        pts = getattr(self, '_sam_points', None) or None
+        self.c_before.config(cursor="watch")
+
+        def _run():
+            try:
+                png = sam2seg.run_subprocess(self.session.path, box, pts)
+                self.after(0, lambda p=png: self._on_sam_done(p))
+            except Exception as exc:
+                self.after(0, lambda e=exc: self._on_sam_fail(e))
+
+        import threading
+        threading.Thread(target=_run, daemon=True).start()
+
+    def _on_sam_done(self, png_path):
+        self.c_before.config(cursor="")
+        from . import sam2seg
+        ignore = sam2seg.load_mask_png(png_path, (self.session.h, self.session.w))
+        self._sam_selection = ~ignore
+        self._draw_sam_prompts()
+        frac = self._sam_selection.mean() if self._sam_selection is not None else 0
+        self._set_status(f"SAM selection: {frac:.1%} of frame")
+
+    def _on_sam_fail(self, exc):
+        self.c_before.config(cursor="")
+        self._set_status(f"SAM error: {exc}")
+
+    def _draw_sam_prompts(self):
+        self.c_before.delete("sam_prompts")
+        if not self.v_sam.get():
+            return
+        ox, oy = self._before_off
+        s = self._before_scale
+        # Box
+        if self._sam_box is not None:
+            x0, y0, x1, y1 = self._sam_box
+            self.c_before.create_rectangle(ox + x0 * self.session.w * s, oy + y0 * self.session.h * s,
+                                           ox + x1 * self.session.w * s, oy + y1 * self.session.h * s,
+                                           outline="#5ac37f", width=2, tags="sam_prompts")
+        # Points
+        for px, py, pos in (getattr(self, '_sam_points', None) or []):
+            col = "#5ac37f" if pos else "#ff5555"
+            self.c_before.create_oval(ox + px * s - 4, oy + py * s - 4,
+                                      ox + px * s + 4, oy + py * s + 4,
+                                      fill=col, outline="", tags="sam_prompts")
+        # Selection indicator: green border in the off-border area
+        sel = getattr(self, "_sam_selection", None)
+        if sel is not None and sel.any():
+            cw = self.c_before.winfo_width()
+            ch = self.c_before.winfo_height()
+            self.c_before.create_rectangle(2, 2, cw - 2, ch - 2,
+                                           outline="#5ac37f", width=3,
+                                           tags="sam_prompts")
+
+    def _on_sam_right_click(self, event):
+        if not self.v_sam.get():
+            return
+        self._sam_box = None
+        self._sam_points = []
+        self._sam_selection = None
+        self.c_before.delete("sam_prompts")
 
     def _set_status(self, text):
         pass

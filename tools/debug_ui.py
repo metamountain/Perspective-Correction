@@ -6,11 +6,11 @@ fresh clone has to be able to run.
 
     python tools/debug_ui.py
 
-Ends "FAILURES: none" with bpc_errors.log clean, or names what broke.
+Ends "FAILURES: none" with pc_errors.log clean, or names what broke.
 """
 import os, sys, time, glob, types, traceback
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src"))
-from bpc.gui import App
+from pc.gui import App
 
 ASSET = sorted(glob.glob(os.path.join("tests", "assets", "*.jpg")))[1]
 fails = []

@@ -6,8 +6,8 @@ import tempfile
 import numpy as np
 
 import synth
-from bpc.config import Settings
-from bpc.review import AUTO, MANUAL, ReviewSession, darken_outside_crop
+from pc.config import Settings
+from pc.review import AUTO, MANUAL, ReviewSession, darken_outside_crop
 
 
 def _session(**kw):
@@ -600,8 +600,8 @@ def test_single_image_save_runs_the_fill_when_a_mode_is_set():
     import tempfile
 
     import cv2
-    from bpc import inpaint as FILL
-    from bpc import warp as W
+    from pc import inpaint as FILL
+    from pc import warp as W
 
     s, _ = _session(seed=51)
     s.settings = s.settings.replace(fill="lama")
@@ -642,7 +642,7 @@ def test_single_image_save_does_not_load_a_backend_when_fill_is_off():
     import os
     import tempfile
 
-    from bpc import inpaint as FILL
+    from pc import inpaint as FILL
 
     s, _ = _session(seed=52)
     s.settings = s.settings.replace(fill="none")
@@ -670,7 +670,7 @@ def test_save_with_real_lama_produces_a_filled_frame():
     absent, like every other optional-backend test in this suite."""
     import cv2
 
-    from bpc.inpaint import available as _fill_available
+    from pc.inpaint import available as _fill_available
     if not _fill_available("lama"):
         raise SkipTest("simple-lama-inpainting is not installed")
 
@@ -686,7 +686,7 @@ def test_save_with_real_lama_produces_a_filled_frame():
         assert out.shape[2] == 3
 
     # The output must be the planned output size (larger than input due to padding).
-    from bpc import warp as W
+    from pc import warp as W
     roll, pitch, f, _ = s.current_angles()
     H = W.build(s.w, s.h, f, roll, pitch)
     planned = W.plan(s.w, s.h, H, s.settings)
@@ -725,7 +725,7 @@ def test_the_auto_crop_contains_no_invented_pixel():
     same margin.  Asserted at every definition so the two cannot drift apart.
     """
     import math
-    from bpc import warp as W
+    from pc import warp as W
 
     s, _ = _session(seed=31)
     s.settings = s.settings.replace(crop="none")

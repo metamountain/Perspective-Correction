@@ -16,7 +16,7 @@ import tempfile
 
 import numpy as np
 
-from bpc import birefnet as BN
+from pc import birefnet as BN
 
 
 def test_the_resolution_comes_from_the_checkpoint_name():
@@ -191,7 +191,7 @@ def test_the_cached_masks_mark_what_to_ignore_not_what_to_keep():
     than 55 % of the line evidence, so such a cache entry is ignored rather than
     obeyed. Asserted below, so the degenerate case stays a known one.
     """
-    from bpc import masks as MK
+    from pc import masks as MK
     if not _cached():
         raise SkipTest("no cached masks")                      # noqa: F821
     degenerate = []
@@ -223,7 +223,7 @@ def test_every_asset_has_a_cached_mask_matched_by_stem():
     loses its mask and the run quietly stops masking."""
     import glob
 
-    from bpc import masks as MK
+    from pc import masks as MK
     assets = sorted(glob.glob(os.path.join(os.path.dirname(_MASKS), "*.jpg")))
     if not assets or not _cached():
         raise SkipTest("no assets or no cached masks")         # noqa: F821

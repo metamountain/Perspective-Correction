@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import math
 import os
+from typing import Optional, Tuple
 
 import cv2
 import numpy as np
@@ -106,6 +107,12 @@ class ReviewSession:
         # verticals stay global on purpose, because both facades share the
         # world-vertical VP and restricting them would only burn evidence.
         self.roi_x = None
+        # SAM2 click-to-select: box prompt (x0,y0,x1,y1) in analysis-res pixels,
+        # positive/negative rework points, and the resulting ignore mask
+        # (True = ignore) or None until computed.
+        self.sam_box: Optional[Tuple[int, int, int, int]] = None
+        self.sam_points: list = []
+        self.sam_mask = None
         self.refit()
 
     # -- detection -------------------------------------------------------
@@ -677,6 +684,55 @@ class ReviewSession:
             hit = inside(seg[:, 0], seg[:, 1]) & inside(seg[:, 2], seg[:, 3])
             self._paint_struck = hit
             self.enabled[hit] = False
+
+    # -- SAM2 click-to-select --------------------------------------------
+    def set_sam_box(self, box: Optional[Tuple[int, int, int, int]]):
+        """Set (or clear) the box prompt in analysis-res pixels."""
+        self.sam_box = box
+
+    def add_sam_point(self, x: float, y: float, positive: bool):
+        """Record a click in analysis-res pixels.  ``positive`` True = inside
+        the building (Shift+click), False = outside (Alt+click)."""
+        self.sam_points.append((int(round(x)), int(round(y)), 1 if positive else 0))
+
+    def clear_sam_prompts(self):
+        """Forget box, points, and the computed mask."""
+        self.sam_box = None
+        self.sam_points.clear()
+        self._apply_sam_mask()
+
+    def apply_sam_mask(self, ignore: np.ndarray):
+        """Install a SAM2-produced ignore mask (True = ignore) and refit.
+
+        ``ignore`` is at analysis-image resolution.  It is merged into
+        ``detect_info["mask"]`` the same way the paint brush does, so the two
+        sources compose: a pixel is ignored when either the paint or the SAM
+        segment says so.
+        """
+        self.sam_mask = ignore
+        self._apply_sam_mask()
+        self.refit()
+
+    def _apply_sam_mask(self):
+        """Merge ``self.sam_mask`` into the shown mask, or clear it."""
+        shown = self.detect_info.get("mask") if self.detect_info else None
+        if self.sam_mask is None:
+            if shown is not None and self.paint is not None:
+                # Rebuild from paint alone so removing the SAM mask doesn't
+                # leave a stale union behind.
+                self.detect_info["mask"] = self.paint
+            elif shown is not None:
+                self.detect_info["mask"] = None
+            return
+        if shown is None and self.paint is None:
+            self.detect_info["mask"] = self.sam_mask
+        elif shown is None:
+            self.detect_info["mask"] = np.logical_or(self.paint, self.sam_mask)
+        elif self.paint is None:
+            self.detect_info["mask"] = np.logical_or(shown, self.sam_mask)
+        else:
+            self.detect_info["mask"] = np.logical_or(
+                np.logical_or(shown, self.paint), self.sam_mask)
 
     # -- current correction ----------------------------------------------
     def current_angles(self):

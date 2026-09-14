@@ -11,11 +11,11 @@ import math
 import numpy as np
 
 import synth
-from bpc import geometry as G
-from bpc import vanishing as V
-from bpc.config import Settings
-from bpc.lines import LineSet, split_by_orientation
-from bpc.pipeline import analyse
+from pc import geometry as G
+from pc import vanishing as V
+from pc.config import Settings
+from pc.lines import LineSet, split_by_orientation
+from pc.pipeline import analyse
 
 
 def test_parallel_verticals_score_full_marks_not_zero():
@@ -36,8 +36,8 @@ def test_the_parallel_model_is_an_explicit_candidate():
     straight photo is decided by whichever noise realisation won."""
     sc = synth.Scene(pitch_deg=0, roll_deg=0, seed=31)
     s = Settings()
-    from bpc import imageio as IO
-    from bpc import lines as L
+    from pc import imageio as IO
+    from pc import lines as L
     gray, _ = IO.analysis_gray(sc.img, s.detect_max_edge)
     _, vert, _, _, _ = L.prepare(gray, s)
     par = V.parallel_hypothesis(vert, s)
@@ -69,7 +69,7 @@ def test_the_warp_is_a_camera_rotation_so_it_cannot_shear():
     """The reference builds a general projective transform plus an affine
     "make the axes orthogonal" step, which can shear a building into a
     trapezoid.  ``K R K^-1`` has three degrees of freedom, all physical."""
-    from bpc import warp as W
+    from pc import warp as W
     H = W.build(1200, 800, 900.0, math.radians(5), math.radians(12))
     K = G.intrinsics(900.0, 600.0, 400.0)
     R = np.linalg.inv(K) @ H @ K

@@ -5,8 +5,8 @@ covered in test_pipeline and test_review; what this module pins is that the
 command line can actually switch it on -- a flag that parses to a pair and a
 job tuple that carries it through to ``process``.
 """
-import bpc.cli as cli
-from bpc.config import Settings
+import pc.cli as cli
+from pc.config import Settings
 
 
 def test_roi_x_flag_parses_to_a_pair_and_defaults_off():

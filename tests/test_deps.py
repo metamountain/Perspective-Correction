@@ -6,9 +6,9 @@ refuses to start, while a run left at the defaults must stay runnable wherever
 the core is installed. piexif sits in between -- it degrades (EXIF falls back to
 a default focal length), so its absence is reported, never fatal.
 """
-import bpc.deps as deps
-from bpc import mlsd
-from bpc.config import Settings
+import pc.deps as deps
+from pc import mlsd
+from pc.config import Settings
 
 
 def _patch(obj, name, value):
@@ -152,7 +152,7 @@ def test_the_doctor_agrees_with_mask_info_about_birefnet():
     it used to ignore -- rather than re-deriving the verdict, which would just
     be the same mistake written twice.
     """
-    from bpc import birefnet as BN
+    from pc import birefnet as BN
     b = BN.backends()
     assert "transformers" in b, "backends() no longer reports transformers"
 
@@ -191,7 +191,7 @@ def test_birefnet_requirements_come_from_the_architecture_source():
     was found: --doctor checked torch, then torch+transformers, and the real
     list is five names.
     """
-    from bpc import birefnet as BN
+    from pc import birefnet as BN
     for mod in ("torch", "torchvision", "transformers", "timm", "einops"):
         assert mod in BN.ARCH_REQUIRES, f"{mod} dropped from ARCH_REQUIRES"
     # the boolean and the list must not drift apart

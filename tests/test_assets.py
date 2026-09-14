@@ -15,10 +15,10 @@ import glob
 import math
 import os
 
-from bpc.config import Settings
-from bpc.imageio import READABLE
-from bpc.pipeline import ERROR, OK, SKIPPED, analyse, process
-from bpc.review import ReviewSession
+from pc.config import Settings
+from pc.imageio import READABLE
+from pc.pipeline import ERROR, OK, SKIPPED, analyse, process
+from pc.review import ReviewSession
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ASSETS = os.path.join(HERE, "assets")
@@ -128,7 +128,7 @@ def _load(path):
     they own and may mutate -- while the decode (PIL open, EXIF transpose,
     colour conversion) happens only once per asset instead of once per test.
     """
-    from bpc.imageio import load
+    from pc.imageio import load
     arr = _LOAD_CACHE.get((path,))
     if arr is None:
         arr = _LOAD_CACHE[(path,)] = load(path).bgr
@@ -234,9 +234,9 @@ def _round_trip_error(path, focal_35mm=24.0, edge=1600, inner=_BORDER_GUARD):
         return _RT_CACHE[key]
     import cv2
     import numpy as np
-    from bpc import geometry as G
-    from bpc import imageio as IO
-    from bpc import model as M
+    from pc import geometry as G
+    from pc import imageio as IO
+    from pc import model as M
 
     bgr = IO.load(path).bgr
     h, w = bgr.shape[:2]

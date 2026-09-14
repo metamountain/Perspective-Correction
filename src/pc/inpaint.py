@@ -276,7 +276,7 @@ def _http(url: str, data=None, headers=None, timeout=30.0):
 
 def _upload(base: str, name: str, png: bytes) -> str:
     """POST one PNG to /upload/image and return the name ComfyUI stored it as."""
-    boundary = "----bpc" + uuid.uuid4().hex
+    boundary = "----pc" + uuid.uuid4().hex
     parts = [
         f"--{boundary}\r\nContent-Disposition: form-data; name=\"image\"; "
         f"filename=\"{name}\"\r\nContent-Type: image/png\r\n\r\n".encode(),
@@ -440,7 +440,7 @@ def resolve_models(wf: dict, base: str, timeout: float = 30.0) -> list:
         return [], []                  # unreachable is the caller's problem
     swapped, unresolved = [], []
     for node in wf.values():
-        # Never the nodes BPC fills itself.  Their `image` is a COMBO too --
+        # Never the nodes PC fills itself.  Their `image` is a COMBO too --
         # ComfyUI offers whatever is sitting in its input folder -- so an
         # unguarded resolver helpfully rewrites the photograph about to be
         # uploaded into somebody else's leftover PNG.
@@ -542,7 +542,7 @@ def status(settings) -> tuple:
         return "down", str(exc)
     if _find(wf, TITLE_IMAGE) is None:
         return "down", (f"{_workflow_note(path, chosen)} has no node titled "
-                        f"{TITLE_IMAGE}, so BPC has nowhere to put the "
+                        f"{TITLE_IMAGE}, so PC has nowhere to put the "
                         f"photograph (right-click the LoadImage node in "
                         f"ComfyUI > Title)")
 
@@ -564,7 +564,7 @@ def _fill_comfy(bgr: np.ndarray, hole: np.ndarray, settings) -> np.ndarray:
     base = getattr(settings, "comfy_url", "http://127.0.0.1:8188").rstrip("/")
     wf = load_workflow(workflow_path(settings)[0])
     # Chosen names first, then a guess for anything still absent.  Both happen
-    # before the uploads, so nothing can rewrite the filename BPC just posted.
+    # before the uploads, so nothing can rewrite the filename PC just posted.
     apply_model_choices(wf, settings)
     resolve_models(wf, base)          # (swapped, unresolved) -- `status` reports them
     n_img, n_mask = _find(wf, TITLE_IMAGE), _find(wf, TITLE_MASK)
@@ -577,11 +577,11 @@ def _fill_comfy(bgr: np.ndarray, hole: np.ndarray, settings) -> np.ndarray:
     small = _prime_for_generation(small, m)
     stamp = uuid.uuid4().hex[:12]
     try:
-        wf[n_img]["inputs"]["image"] = _upload(base, f"bpc_{stamp}.png", _png(small))
+        wf[n_img]["inputs"]["image"] = _upload(base, f"pc_{stamp}.png", _png(small))
         # `BPC_MASK` is optional, because a whole family of edit models takes an
         # image and an instruction and has nowhere to put a mask.  For those the
         # priming *is* the signal: the band arrives as flat grey-tinted colour
-        # and the prompt says to replace it.  BPC's own guarantee does not rest
+        # and the prompt says to replace it.  PC's own guarantee does not rest
         # on the workflow honouring a mask in any case -- `_composite` puts the
         # result back through the hole and nowhere else, so a model that repaints
         # the whole frame still cannot touch a photographed pixel.
@@ -604,7 +604,7 @@ def _fill_comfy(bgr: np.ndarray, hole: np.ndarray, settings) -> np.ndarray:
                 if key in node.get("inputs", {}):
                     node["inputs"][key] = seed
 
-    client = "bpc-" + stamp
+    client = "pc-" + stamp
     body = json.dumps({"prompt": wf, "client_id": client}).encode("utf-8")
     try:
         got = json.loads(_http(base + "/prompt", body,

@@ -54,11 +54,11 @@ sys.path.insert(0, _TOOLS)
 import cv2
 import numpy as np
 
-from bpc import geometry as G
-from bpc import imageio as IO
-from bpc import model as M
-from bpc.config import Settings
-from bpc.pipeline import analyse
+from pc import geometry as G
+from pc import imageio as IO
+from pc import model as M
+from pc.config import Settings
+from pc.pipeline import analyse
 from benchmark_detectors import DELTAS, BORDER_GUARD, collect
 
 HR = r"D:\ComfyUI_windows_portable\ComfyUI\models\RMBG\BiRefNet\BiRefNet-HR.safetensors"

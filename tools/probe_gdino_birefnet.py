@@ -49,7 +49,7 @@ _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 GDINO_DIR = os.path.join(_ROOT, "models", "GroundingDINO")
 # HR is the known-good pairing for the shared birefnet.py arch.  The lite
 # checkpoint has a smaller backbone (embed 96 vs 192) and needs its own arch
-# (birefnet_lite.py), which bpc.birefnet does not select yet -- so it is vendored
+# (birefnet_lite.py), which pc.birefnet does not select yet -- so it is vendored
 # but not usable through build_mask until that wiring exists.
 BIREF_WT = os.path.join(_ROOT, "models", "BiRefNet", "BiRefNet-HR.safetensors")
 ASSETS = os.path.join(_ROOT, "tests", "assets")
@@ -185,7 +185,7 @@ def _combined_mask(bgr, box, BN):
 
 def main():
     import cv2
-    from bpc import birefnet as BN
+    from pc import birefnet as BN
 
     # Prompts come from argv (comma-separated); default keeps the original single run.
     prompts = ["building"]
