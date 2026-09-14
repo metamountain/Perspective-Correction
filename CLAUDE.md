@@ -44,7 +44,7 @@ paused — why, and how to resume it, in `docs/qwen-knowledge.md`.
 
 ## Running things (do not rediscover this)
 
-- Project root `D:\Coding\Batch-Perspective-Correction`, Windows, PowerShell 7,
+- Project root `D:\Coding\Perspective-Correction`, Windows, PowerShell 7,
   Python 3.12.9 (python.org), 32 cores.
 - Compile: `python -m py_compile src/bpc/gui.py` (and anything else touched).
 - One module: `python tests/run_tests.py test_gui` — fast.
