@@ -1,4 +1,4 @@
-# Batch Perspective Correction
+# Perspective Correction
 
 ![left: detected verticals, horizontals and the implied horizon. right: corrected, the opened band filled by an optional ComfyUI backend rather than cropped](docs/hero-before-after.jpg)
 

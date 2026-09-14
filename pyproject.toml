@@ -3,9 +3,9 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "batch-perspective-correction"
+name = "perspective-correction"
 version = "0.1.0"
-description = "Robust batch perspective correction for architectural photography"
+description = "Perspective correction for architectural photography, one photograph at a time"
 readme = "README.md"
 requires-python = ">=3.9"
 license = { file = "LICENSE" }
