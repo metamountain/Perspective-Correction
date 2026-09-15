@@ -38,14 +38,28 @@ def tint_mask(canvas, mask, colour=(60, 60, 200), alpha=0.28):
     """Wash the masked region so it is obvious what was excluded."""
     if mask is None:
         return canvas
-    m = mask.astype(np.uint8)
+    # The mask is painted at analysis resolution (long edge `detect_max_edge`,
+    # 1600 by default) while the canvas is the full photograph, so this resize
+    # is an upscale of several times.  It used to be INTER_NEAREST, which has no
+    # sub-pixel blending: every round edge `cv2.circle` painted arrived here as a
+    # staircase of right angles, and the brush read as rectangular on screen even
+    # though nothing anywhere draws a rectangle.  Linear gives a soft edge, and
+    # since this is only a wash -- nothing downstream tests it -- a fractional
+    # edge is exactly what is wanted.
+    m = mask.astype(np.uint8) * 255
     if m.shape[:2] != canvas.shape[:2]:
         m = cv2.resize(m, (canvas.shape[1], canvas.shape[0]),
-                       interpolation=cv2.INTER_NEAREST)
-    wash = np.zeros_like(canvas)
-    wash[:] = colour
-    sel = m.astype(bool)
-    canvas[sel] = (canvas[sel] * (1 - alpha) + wash[sel] * alpha).astype(np.uint8)
+                       interpolation=cv2.INTER_LINEAR)
+    sel = m > 0
+    if not sel.any():
+        return canvas
+    # Blend per pixel by the resized coverage, not by a hard in/out test, so the
+    # soft edge survives into the picture instead of being rounded back to a
+    # step.  Only the touched pixels are converted to float: the canvas can be
+    # several thousand pixels on a side and a full-frame float copy is not free.
+    a = (m[sel].astype(np.float32) / 255.0 * alpha)[:, None]
+    canvas[sel] = (canvas[sel] * (1.0 - a)
+                   + np.asarray(colour, np.float32) * a).astype(np.uint8)
     return canvas
 
 
