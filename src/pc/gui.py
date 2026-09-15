@@ -3409,6 +3409,10 @@ class App(_ROOT_CLASS):
             self._add(list(initial))
         self._fullscreen = False
         self.bind("<F11>", lambda _e: self._toggle_fullscreen())
+        self.bind("<m>", lambda _e: self._tool_key("v_mark", "_on_mark_toggle"))
+        self.bind("<b>", lambda _e: self._tool_key("v_stroke", "_on_stroke_toggle"))
+        self.bind("<p>", lambda _e: self._tool_key("v_planar", "_on_planar_toggle"))
+        self.bind("<s>", lambda _e: self._tool_key(None, "_on_sam_toggle"))
         self.after(120, self._pump)
         if start_maximized:
             self.after(50, self._maximize)
@@ -3429,6 +3433,35 @@ class App(_ROOT_CLASS):
             pass
         if hasattr(self, "v_fullscreen"):
             self.v_fullscreen.set(self._fullscreen)
+
+    def _tool_key(self, var_name, handler_name):
+        """Flip one tool mode from the keyboard.
+
+        Every one of these was already a trip to a button. The variable is
+        flipped here and the handler read it, except SAM whose handler flips
+        its own -- passing var_name=None says so rather than making the caller
+        remember which is which.
+
+        Typing is not a shortcut: a key that lands while an entry, spinbox or
+        combobox has focus belongs to that widget, so it is ignored here.
+        """
+        w = self.focus_get()
+        if w is not None:
+            try:
+                if w.winfo_class() in ("Entry", "TEntry", "Spinbox", "TSpinbox",
+                                       "TCombobox", "Text"):
+                    return
+            except Exception:
+                pass
+        r = getattr(self, "review", None)
+        if r is None or getattr(r, "session", None) is None:
+            return
+        if var_name is not None:
+            v = getattr(r, var_name, None)
+            if v is None:
+                return
+            v.set(not v.get())
+        getattr(r, handler_name)()
 
     def _switch_theme(self, theme_name):
         """Swap the active palette: update INK in place, re-apply ttk styles,
