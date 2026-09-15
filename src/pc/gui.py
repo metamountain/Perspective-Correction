@@ -2434,9 +2434,9 @@ class ReviewPanel(tk.Frame):
                         "off - none.  file - one PNG per photograph.\n"
                         "birefnet - cut the subject out automatically.\n"
                         "gdino - say what to find, see the prompt below.\n"
-                        "gdino needs 'transformers', which THIS window's Python "
-                        "does not have: it will report an error until that is "
-                        "installed in the system interpreter.")
+                        "gdino finds the building by name, then mattes inside "
+                        "that box with BiRefNet - so it needs a BiRefNet model "
+                        "set below, or it refuses.")
         _b = ttk.Button(msk, text="mask folder...", command=self._pick_mask_folder)
         _b.grid(row=0, column=2, sticky="w")
         _attach_tooltip(_b, "Choose the folder containing mask PNG files (one per image)")
