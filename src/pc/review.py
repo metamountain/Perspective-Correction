@@ -133,6 +133,14 @@ class ReviewSession:
         # hand-painted region has to be laid back over it -- otherwise switching
         # detector or mask source silently discards what the user painted.
         self._apply_paint()
+        # SAM's selection is hand work too.  Re-detect used to re-apply the
+        # paint and forget this, so picking a different mask source kept
+        # what you brushed and silently dropped what you selected -- two
+        # manual layers treated alike on arrival and differently on the
+        # next automatic change.  ``sam_mask`` is not set until after the first
+        # _detect in __init__, so guard that one call.
+        if getattr(self, "sam_mask", None) is not None:
+            self._apply_sam_mask()
 
     def set_mask(self, mode, path="", invert=None):
         """Switch the region mask and re-detect.
