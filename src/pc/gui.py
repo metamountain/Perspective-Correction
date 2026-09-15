@@ -3528,7 +3528,16 @@ class ReviewPanel(tk.Frame):
 
         def _run():
             try:
-                png = sam2seg.run_subprocess(self.session.path, box, pts)
+                # settings.sam_model and settings.sam_device were declared,
+                # shipped in every asdict(), and read by nobody: the call went
+                # out bare and run_subprocess fell back to its own defaults, so
+                # pointing sam_model at a smaller hiera checkpoint changed
+                # nothing and said nothing. Both still fall back on "" -- the
+                # empty case is the same code path it was taking anyway.
+                png = sam2seg.run_subprocess(
+                    self.session.path, box, pts,
+                    ckpt=getattr(self.session.settings, "sam_model", ""),
+                    device=getattr(self.session.settings, "sam_device", ""))
                 self.after(0, lambda p=png: self._on_sam_done(p))
             except Exception as exc:
                 self.after(0, lambda e=exc: self._on_sam_fail(e))
