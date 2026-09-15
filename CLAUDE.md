@@ -56,7 +56,7 @@ shelved and is history now, not instruction.
   windows and real photograph sweeps, together most of the old wall time). It
   says so on exit — `!! FAST RUN -- did NOT run: test_assets, test_gui` — and
   **green there does not mean green**. Full suite: `python tests/run_tests.py
-  --full` (or `PC_FULL=1`) — 306 tests, ~55 s, modules in worker processes; `-s`
+  --full` (or `PC_FULL=1`) — 307 tests, ~61 s, modules in worker processes; `-s`
   for the old sequential run. The line this replaces claimed "282 tests, ~135 s"
   for the bare command, which now measures neither that count nor that set:
   any suite number quoted anywhere must say which mode produced it.
@@ -144,13 +144,13 @@ declared `mlsd` extra) is installed in the **system** interpreter, so
 
 ## Ledger — the only place status lives
 
-**Suite 2026-09-15, `--full` at `04f58df`: 306 tests, 2 failed, 2 skipped,
+**Suite 2026-09-15, `--full` at `ca08399`+: 307 tests, 2 failed, 2 skipped,
 52.2 s** (the fast run is 264 in ~24 s, and is not the suite). Both failures are the single receding-row photograph in the bug entry
 below (3.71° round-trip on one asset) — the long-standing limitation, nothing
 else, and the only red the suite has. The earlier ruler regression is gone for
 good: that test was superseded when rulers became guides pulled from the cross
 (see Done). Wall time fell 160 s → ~55 s when the runner was split in parallel;
-that is the split, not tests disappearing, and only `--full` produces 306.
+that is the split, not tests disappearing, and only `--full` produces 307.
 Re-run before trusting this — it is a measurement, not a
 promise, and no entry below may restate it. An item stays under **Open** until
 nothing is left to do; **Done** is only for finished work. `Pn` labels are short
@@ -239,6 +239,19 @@ everything else. The list below is not in that order; this is.
    and a second flip cancels the first, leaving a tool that looks dead.
    **Still open: more tools**, and only where a gesture is already being done the
    long way. Not a wish for its own sake.
+
+   **[2026-09-15, user] The planar tool is gone from the window.** It left the
+   palette on 09-14 with the note "nothing in the window points at them" — and
+   then a `p` shortcut added on 09-15 pointed at it again, and a display-scale
+   bug was fixed in its drawing before anyone noticed it was drawing nothing
+   anyone could reach. That is what carrying dead UI costs: attention, twice.
+   `src/pc/planar.py`, `session.save_planar` and `tests/test_planar.py` **stay**
+   — the module works and is tested; only the window tool is gone. **The removal
+   itself is the cautionary tale:** the worker hit its turn limit mid-edit, so
+   `_show_after` lost the `planar_on` parameter while its body still read it —
+   a `NameError` that compiles cleanly, that `App()` construction does not reach,
+   and that only a loaded photograph would hit. **A turn-limited edit package is
+   a half-finished tree; check it before believing it.**
 
    **[2026-09-15, user] One mask registry: every source is the same thing, and
    they add.** Four sources had four mechanisms — `prepare` OR-ed the automatic
