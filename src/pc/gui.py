@@ -1035,7 +1035,7 @@ class ReviewPanel(tk.Frame):
         _b.pack(side="right", padx=6)
         _attach_tooltip(_b, "Skip correction and keep the unmodified file")
 
-        # Row two: crop operations.  Mark vertical / mark kind / Strike slanted
+        # Row two: crop operations.  Mark / Strike slanted
         # moved to the lower-left tools field (2026-09-13).
         btns2 = ttk.Frame(top, padding=(0, 8))
         self._btns2 = btns2
@@ -1064,7 +1064,6 @@ class ReviewPanel(tk.Frame):
             self.v_stroke_w = tk.IntVar(value=10)
         if getattr(self, "v_mark", None) is None:
             self.v_mark = tk.BooleanVar(value=False)
-            self.v_mark_kind = tk.StringVar(value="vertical")
         if getattr(self, "v_sam", None) is None:
             self.v_sam = tk.BooleanVar(value=False)
             self._sam_box = None
@@ -1506,8 +1505,8 @@ class ReviewPanel(tk.Frame):
         self._sync_from_session()
 
     def _on_mark_toggle(self):
-        """Entering or leaving vertical-marking mode; a half-finished line is
-        forgotten rather than left dangling."""
+        """Entering or leaving marking mode; a half-finished line is forgotten
+        rather than left dangling."""
         on = self.v_mark.get()
         if on:
             if self.v_stroke.get():
@@ -1522,15 +1521,19 @@ class ReviewPanel(tk.Frame):
         self._set_status(self.session.status_text())
         self._redraw()
 
-    def _mark_kind(self):
-        """Which plane the mark gesture asserts: ``"v"`` or ``"h"``."""
-        return "h" if str(self.v_mark_kind.get()).lower().startswith("h") else "v"
+    @staticmethod
+    def _kind_for(x0, y0, x1, y1):
+        """Which plane a drawn segment asserts, read off the segment itself.
 
-    def _on_mark_kind(self, _event=None):
-        """Switching orientation mid-gesture would strand a half-line in the
-        wrong array; forget it rather than guess which plane it meant."""
-        self._pending_mark = None
-        self._redraw()
+        One Mark tool, not two (2026-09-15, user): the orientation *is* the
+        drawing.  A segment that falls more than it runs is a vertical, else
+        a horizontal -- and the rubberband is tinted by this while it is
+        being dragged, so the answer is visible before release rather than
+        after.  Exactly 45 deg counts as vertical: an arbitrary tiebreak, but
+        a stated one, and a facade edge somebody is tracing is never within a
+        degree of the diagonal.
+        """
+        return "v" if abs(y1 - y0) >= abs(x1 - x0) else "h"
 
     # -- planar (four-corner) correction ---------------------------------
     _PLANAR_NAMES = ("top-left", "top-right", "bottom-right", "bottom-left")
@@ -2186,25 +2189,30 @@ class ReviewPanel(tk.Frame):
         horizontal) comes from the selector beside the Mark toggle, so pick/add/
         remove all stay inside one array.
         """
-        kind = self._mark_kind()
-        ep = self.session.pick_control_line_endpoint(x, y,
-                                                     display_scale=self._before_scale,
-                                                     radius=10.0, kind=kind)
-        if ep is not None:
-            self._pending_mark = None
-            self._mark_drag = (ep, kind)
-            return
-        hit = self.session.pick_control_line(x, y, display_scale=self._before_scale,
-                                             kind=kind)
-        if hit is not None and self._pending_mark is None:
-            self.session.remove_control_line(hit, kind=kind)
-            self._sync_from_session()
-            return
+        # Both planes are on screen at once now, so an index means nothing
+        # without the array it came from -- hence (index, kind) everywhere.
+        # Verticals are searched first; with one line of each under the
+        # cursor the vertical wins.  A tiebreak, not nearest-wins.
+        for k in ("v", "h"):
+            ep = self.session.pick_control_line_endpoint(
+                x, y, display_scale=self._before_scale, radius=10.0, kind=k)
+            if ep is not None:
+                self._pending_mark = None
+                self._mark_drag = (ep, k)
+                return
+        if self._pending_mark is None:
+            for k in ("v", "h"):
+                hit = self.session.pick_control_line(
+                    x, y, display_scale=self._before_scale, kind=k)
+                if hit is not None:
+                    self.session.remove_control_line(hit, kind=k)
+                    self._sync_from_session()
+                    return
         if self._pending_mark is None:
             self._pending_mark = (x, y)
             self._mark_moved = False
-            what = "horizontal" if kind == "h" else "vertical"
-            self._set_status(f"marking a {what}: click the other end\n"
+            self._set_status("marking an edge: click the other end -- whichever "
+                             "way it leans decides the plane\n"
                              "(as far from the first point as the structure allows)")
             self._redraw()
             return
@@ -2212,7 +2220,7 @@ class ReviewPanel(tk.Frame):
         self._pending_mark = None
         added = self.session.add_control_line(x0, y0, x, y,
                                               display_scale=self._before_scale,
-                                              kind=kind)
+                                              kind=self._kind_for(x0, y0, x, y))
         if added is None:
             self._set_status("too short to be trusted -- mark the full length of "
                              "the structure, not a few pixels of it")
@@ -2231,7 +2239,11 @@ class ReviewPanel(tk.Frame):
         ox, oy = self._before_off
         x0, y0 = self._pending_mark
         self.c_before.delete("mark_rubber")
-        col = "#e040fb" if self._mark_kind() == "h" else "#00e5ff"
+        # Tinted by the plane this drag would land in, recomputed on every
+        # motion: the classification is invisible otherwise until too late.
+        col = ("#00e5ff"
+               if self._kind_for(x0, y0, event.x - ox, event.y - oy) == "v"
+               else "#e040fb")
         self.c_before.create_line(ox + x0, oy + y0, event.x, event.y,
                                   fill=col, width=2, dash=(4, 3),
                                   tags="mark_rubber")
@@ -2255,7 +2267,7 @@ class ReviewPanel(tk.Frame):
         y = event.y - self._before_off[1]
         added = self.session.add_control_line(x0, y0, x, y,
                                               display_scale=self._before_scale,
-                                              kind=self._mark_kind())
+                                              kind=self._kind_for(x0, y0, x, y))
         if added is None:
             self._set_status("too short to be trusted -- mark the full length of "
                              "the structure, not a few pixels of it")
@@ -2361,16 +2373,10 @@ class ReviewPanel(tk.Frame):
         mrow.pack(fill="x", pady=(0, 4))
         if getattr(self, "v_mark", None) is None:
             self.v_mark = tk.BooleanVar(value=False)
-            self.v_mark_kind = tk.StringVar(value="vertical")
-        _cb = ttk.Checkbutton(mrow, text="Mark vertical",
+        _cb = ttk.Checkbutton(mrow, text="Mark",
                               variable=self.v_mark, command=self._on_mark_toggle)
         _cb.pack(side="left")
-        _attach_tooltip(_cb, "Click on the image to place a control line that anchors a known-vertical or horizontal edge. Drag endpoints to refine.")
-        self._mark_kind_cb = ttk.Combobox(mrow, textvariable=self.v_mark_kind,
-                                          state="readonly",
-                                          values=["vertical", "horizontal"], width=9)
-        self._mark_kind_cb.pack(side="left", padx=(4, 0))
-        self._mark_kind_cb.bind("<<ComboboxSelected>>", self._on_mark_kind)
+        _attach_tooltip(_cb, "Drag along a known-straight edge to anchor it. Which way it leans decides whether it counts as a vertical or a horizontal. Drag endpoints to refine.")
         _b = ttk.Button(mrow, text="Strike slanted",
                         command=self._strike_slanted)
         _b.pack(side="left", padx=(6, 0))
@@ -3150,9 +3156,9 @@ class ReviewPanel(tk.Frame):
         pend = getattr(self, "_pending_mark", None)
         if pend is not None:
             px, py = ox + pend[0], oy + pend[1]
-            col = "#e040fb" if self._mark_kind() == "h" else "#00e5ff"
+            # One point leans no way yet, so it wears neither plane colour.
             self.c_before.create_oval(px - 6, py - 6, px + 6, py + 6,
-                                       outline=col, width=2)
+                                       outline="#9e9e9e", width=2)
 
     def _draw_delete_handle(self, cx, cy, col, tag=""):
         r = 8
