@@ -300,7 +300,7 @@ def _retint_bg(widget, old_palette, new_palette):
                 new_val = _swap(val, old_palette, new_palette)
                 if new_val:
                     widget.configure(**{cfg: new_val})
-        elif wclass in ("Label", "Button"):
+        elif wclass in ("Label", "Button", "Checkbutton"):
             bg = widget.cget("background")
             fg = widget.cget("foreground")
             new_bg = _swap(bg, old_palette, new_palette)
@@ -520,9 +520,17 @@ def _attach_tooltip(widget, text):
 
 
 def _brand_header(parent, on_select=None):
-    """Emblem + wordmark, packed at the top of a window."""
+    """Emblem + wordmark, packed at the top of a window.
+
+    The bar is registered on the toplevel so `_switch_theme` can find it again;
+    its emblem is a rendered image and has to be redrawn, not re-optioned.
+    """
     bar = ttk.Frame(parent)
     bar.pack(fill="x", side="top")
+    top = parent.winfo_toplevel()
+    if not hasattr(top, "_brand_bars"):
+        top._brand_bars = []
+    top._brand_bars.append(bar)
     size = _emblem_size(parent)
     mark = _logo_image(size, INK["text"])
     if mark is not None:
@@ -530,6 +538,11 @@ def _brand_header(parent, on_select=None):
         lbl = ttk.Label(bar, image=photo)
         lbl.image = photo               # a Label keeps no reference of its own
         lbl.pack(side="left", padx=(2, 8), pady=4)
+        # Handed back so a theme switch can re-render it: the mark is tinted
+        # INK["text"] into its pixels, and no walk over widget options can
+        # reach a colour that is part of an image.
+        bar._brand_lbl = lbl
+        bar._brand_size = size
     else:
         # Drawn only when the PNG is missing.  On `<Configure>` rather than
         # after `update_idletasks`, because a canvas that has not been mapped
@@ -3731,6 +3744,32 @@ class App(_ROOT_CLASS):
         INK.update(new)
         apply_theme(self, new)
         _retint_bg(self, old, new)
+        # A walk cannot fix a PhotoImage: the icons carry their tint in their
+        # PIXELS, rendered once at build with the palette that was current then.
+        # Rebuilding the palette re-renders them, and it is also the only thing
+        # that reaches those keys at all -- `_retint_bg` matches widgets by
+        # class, and the tool keys are Checkbuttons, which it did not walk.
+        rev = getattr(self, "review", None)
+        if rev is not None and hasattr(rev, "_build_tool_palette"):
+            try:
+                rev._build_tool_palette()
+            except tk.TclError:
+                pass                       # window going away mid-switch
+        # The brand mark is a rendered image too, tinted INK["text"] into its
+        # pixels at build time and never re-rendered.
+        for bar in getattr(self, "_brand_bars", []):
+            lbl = getattr(bar, "_brand_lbl", None)
+            if lbl is None:
+                continue
+            mark = _logo_image(getattr(bar, "_brand_size", 24), INK["text"])
+            if mark is None:
+                continue
+            try:
+                photo = ImageTk.PhotoImage(mark)
+                lbl.configure(image=photo)
+                lbl.image = photo
+            except tk.TclError:
+                pass
 
     def _build(self):
         pad = dict(padx=6, pady=2)
