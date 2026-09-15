@@ -2558,23 +2558,10 @@ class ReviewPanel(tk.Frame):
         # only read when the source combobox says gdino, so it stays inert in the
         # other three modes rather than needing to be hidden.
         self.v_gdino_prompt = tk.StringVar(value=self.settings.gdino_prompt or "building")
-        ttk.Label(msk, text="gdino prompt", width=18).grid(
-            row=3, column=0, sticky="w", pady=(4, 0))
-        gentry = ttk.Entry(msk, textvariable=self.v_gdino_prompt, width=24)
-        gentry.grid(row=3, column=1, columnspan=2, sticky="ew", padx=6, pady=(4, 0))
-        # Return already applied it, which is a gesture nobody discovers. The
-        # button says the field is not just a note to self.
-        _b = ttk.Button(msk, text="apply", width=7, command=self._apply_gdino)
-        _b.grid(row=3, column=3, sticky="w", pady=(4, 0))
-        _attach_tooltip(_b, "Find that, and mask everything around it")
-        gentry.bind("<Return>", lambda e: self._apply_mask())
-        _attach_tooltip(gentry,
-                        "Grounding DINO: name what to look for in plain words - "
-                        "'building', 'facade', 'house' - and it boxes that, "
-                        "instead of guessing from colour.\n"
-                        "The mini T-Rex of the mask sources: small, quick, and "
-                        "it only bites what you name.\n"
-                        "Press Return to apply.")
+        # The prompt row left this panel (user, 2026-09-15): it belongs to the
+        # dinosaur key in the palette, which is where it is asked for now.  A
+        # labelled entry three rows away from anything that used it was the only
+        # way in.  The variable stays -- `_apply_mask` reads it.
         msk.columnconfigure(3, weight=1)
 
         # The Lines/Mask/Grid overlay switches used to live here.  They now sit on
@@ -3067,14 +3054,16 @@ class ReviewPanel(tk.Frame):
             self._palette_blank = tk.PhotoImage(width=1, height=1)
         side, gap = layout.tool_key()
 
-        def tool(codepoint, var, command, tip, invert=False, lead=False):
+        def tool(codepoint, var, command, tip, invert=False, lead=False,
+                 emoji=False):
             # Inverted is for the mask brush ALONE (2026-09-15, user): it is the
             # one tool whose glyph stands for the thing it paints, so a dark
             # circle on a light key reads as the brush tip itself.  Inverting
             # the whole palette instead made every tool shout equally, which is
             # no emphasis at all.
             fg = INK["field"] if invert else INK["dim"]
-            img = _icon_pil(codepoint, layout.tool_glyph(), fg)
+            img = _icon_pil(codepoint, layout.tool_glyph(), fg,
+                            emoji=emoji, mono=emoji)
             if img is not None:
                 self._palette_imgs.append(ImageTk.PhotoImage(img))
             b = tk.Checkbutton(bar, variable=var, command=command,
@@ -3093,34 +3082,6 @@ class ReviewPanel(tk.Frame):
             # group are different kinds of thing, and one skipped pitch says so
             # without a separator line.
             b.pack(side="top", pady=(gap * 2 if lead else gap, 0))
-            _attach_tooltip(b, tip)
-            self._palette_btns.append(b)
-            return b
-
-        def action(codepoint, command, tip, emoji=False):
-            """A palette key that DOES something rather than holding a mode.
-
-            gdino is not a tool you pick up -- it is a mask source you ask for
-            once -- so it must not join `_TOOL_MODES` and must not put the brush
-            down when pressed.  Same size, same colours, so the bar still reads
-            as one set; a Button rather than a Checkbutton so it never looks
-            held in.
-            """
-            img = _icon_pil(codepoint, layout.tool_glyph(), INK["dim"],
-                            emoji=emoji, mono=emoji)
-            if img is not None:
-                self._palette_imgs.append(ImageTk.PhotoImage(img))
-            b = tk.Button(bar, command=command,
-                          image=(self._palette_imgs[-1] if img is not None
-                                 else self._palette_blank),
-                          compound="center",
-                          width=side, height=side, bd=0, relief="flat",
-                          font=("Segoe UI", 20), cursor="hand2",
-                          padx=0, pady=0, highlightthickness=0,
-                          background=INK["field"], foreground=INK["dim"],
-                          activebackground=INK["line"],
-                          activeforeground=INK["text"])
-            b.pack(side="top", pady=(gap, 0))
             _attach_tooltip(b, tip)
             self._palette_btns.append(b)
             return b
@@ -3152,11 +3113,19 @@ class ReviewPanel(tk.Frame):
         # The dinosaur moved up here from the prompt label (user, 2026-09-15),
         # and lost its colours on the way: one coloured glyph among five
         # monochrome ones reads as a mistake, however charming.
-        self._gdino_btn = action(
-            "1F996", self._apply_gdino,
+        # A toggle, not an action.  In the layer registry gdino is a LAYER, and
+        # a layer is on or off -- which is also the answer to "how do I turn it
+        # off again", a question an action key cannot answer at all.  It stays
+        # out of `_TOOL_MODES`: it is a source of mask, not something you hold,
+        # so switching it on must not put the brush down.
+        if getattr(self, "v_gdino", None) is None:
+            self.v_gdino = tk.BooleanVar(value=False)
+        self._gdino_btn = tool(
+            "1F996", self.v_gdino, self._on_gdino_toggle,
             "Grounding DINO: find the building by name and mask everything "
-            "else. Type what to look for in the gdino prompt field below.",
+            "else.\nRight-click to say what to look for.",
             emoji=True)
+        self._gdino_btn.bind("<Button-3>", lambda _e: self._ask_gdino_prompt())
         self._sam_btn = tool("EF3C", self.v_sam, self._on_sam_toggle,
                              "Box-select the subject with SAM; right-click "
                              "clears the prompt")
@@ -3416,17 +3385,39 @@ class ReviewPanel(tk.Frame):
         self.c_before.create_line(cx, cy - d, cx, cy + d, fill=col, **kw)
 
     # -- SAM2 box-prompt segmentation --------------------------------------
-    def _apply_gdino(self):
-        """Ask Grounding DINO for the building and mask the rest.
+    def _on_gdino_toggle(self):
+        """Switch the Grounding DINO layer on or off.
 
-        An action, not a mode: there is nothing to hold down afterwards. It
-        drives the same combobox a user would, so there is one path into
-        `_apply_mask` and the control keeps saying what is in force.
+        It drives the same combobox a user would, so there is one path into
+        `_apply_mask` and the control panel keeps saying what is actually in
+        force rather than disagreeing with the key.
         """
         if not self.session or getattr(self, "v_maskmode", None) is None:
             return
-        self.v_maskmode.set("gdino")
+        self.v_maskmode.set("gdino" if self.v_gdino.get() else "off")
         self._apply_mask()
+
+    def _ask_gdino_prompt(self):
+        """Right-click: say what to look for, then go and look for it.
+
+        The prompt used to be a labelled entry in the mask panel, three rows
+        away from anything that used it.  It belongs to this key, so it is asked
+        for from this key -- and asking is also applying, because a prompt you
+        typed and did not apply is a note to yourself.
+        """
+        if not self.session or getattr(self, "v_gdino_prompt", None) is None:
+            return "break"
+        from tkinter import simpledialog
+        answer = simpledialog.askstring(
+            "Grounding DINO",
+            "What should it look for?\n(a plain word: building, facade, house)",
+            initialvalue=self.v_gdino_prompt.get(), parent=self)
+        if not answer:
+            return "break"              # cancelled: leave the layer as it was
+        self.v_gdino_prompt.set(answer.strip())
+        self.v_gdino.set(True)
+        self._on_gdino_toggle()
+        return "break"
 
     def _on_sam_toggle(self):
         """Entering or leaving box-select; the caller owns the flip.
