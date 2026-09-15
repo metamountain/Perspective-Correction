@@ -31,8 +31,10 @@ probe runs against the repo copy without touching the ComfyUI install:
 
 ## 2. Interpreter (same split as the debug skill)
 
-Runs in **`python_embeded`** only: it has torch+CUDA, `transformers`, and `sam2`. System python 3.12
-has no `transformers`, so the GDINO import fails there. No tkinter is needed for a mask probe, so this
+**Corrected 2026-09-15 by measurement:** system python 3.12 DOES have `transformers` (5.17.0)
+and torch 2.12.1+cu130, and GDINO loads and runs there — this file's earlier claim that the
+import fails in system python was false and produced a wrong diagnosis. `python_embeded` is
+still required for `sam2`, which system python lacks. No tkinter is needed for a mask probe, so this
 is headless-friendly (unlike BiRefNet's GUI-adjacent path). Quick check:
 
 ```

@@ -88,15 +88,23 @@ shelved and is history now, not instruction.
 
 ## Environment split (short version)
 
+**Re-measured 2026-09-15, and the split this section described is gone.** The
+table below said the system interpreter had no `transformers`; it has 5.17.0, and
+torch 2.12.1+cu130. That single stale cell produced a confidently wrong diagnosis
+of why `--mask gdino` fails — *by both the worker and the architect*, because both
+read it instead of running it. **Ask the interpreter, never this table.**
+
 | | torch | transformers | tkinter | BiRefNet |
 |---|---|---|---|---|
-| system python.org 3.12 | yes (CUDA) | **absent** | yes | no |
+| system python.org 3.12 | **yes** 2.12.1+cu130 | **yes** 5.17.0 | yes | **yes** |
 | ComfyUI `python_embeded` | yes | yes | **no** | yes |
 
-BiRefNet wants torch **+ transformers** + timm + einops; the GUI interpreter has no
-transformers, so `--mask birefnet` runs from the ComfyUI interpreter via
-`--mask-export` (writes one PNG per photo, consumed later through `--mask file`).
-The full interpreter split is the table above.
+Measured in the system interpreter on the 33-asset pool's first photograph:
+`--mask birefnet` ignores 60.3 % of the frame, and `--mask gdino` finds its box
+(score 0.52) and ignores 98.2 %. **Both run in the GUI's own Python.** The
+`--mask-export` bridge and the ComfyUI route still exist and still work; they are
+no longer the only way. SAM2 is the one that genuinely still subprocesses, because
+it needs the `sam2` package rather than `transformers`.
 
 M-LSD needs no second interpreter: its TFLite runtime (`ai-edge-litert`, the
 declared `mlsd` extra) is installed in the **system** interpreter, so
@@ -232,17 +240,21 @@ everything else. The list below is not in that order; this is.
    cited. The weights are present (`models/GroundingDINO/` has `config.json` and
    `model.safetensors`), the call site is fully wired (combobox → `_apply_mask`
    → `set_mask` → `L.prepare` → `MK.build` → `gdino_mask`), and it still cannot
-   run: `masks.py:139-140` does `import torch` and `from transformers import ...`
-   **in-process**, and the GUI's system Python has no `transformers` (the
-   Environment split table above). SAM2 solved the same problem with a subprocess
-   into `python_embeded` (`sam2seg.run_subprocess`) and BiRefNet with the
-   `--mask-export` bridge; **gdino has neither**. `_detect` swallows the
-   ImportError and silently re-runs with `mask_mode="off"` (`review.py:124-129`),
-   so the window shows a label rather than a failure — which is why this looked
-   like "gdino is broken" rather than "gdino is in the wrong interpreter".
-   **The fix is a bridge, not a debug session.** Until then the combobox tooltip
-   says so out loud. Note `deps.py:196-202` already records BiRefNet hitting the
-   identical "doctor said yes, first photo failed" shape.
+   run — **and that diagnosis was wrong.** It rested on the environment table
+   above, which was stale. Measured instead: `transformers` 5.17.0 is installed,
+   `gdino_available()` is True, the model loads (978 weights), and a full
+   `MK.build` run returns a box at score 0.52 ignoring 98.2 % of the frame.
+   **gdino works.** The real blocker is one line:
+   `ValueError: --mask gdino needs --birefnet-model <weights> for the matte`
+   (`masks.py:209-211`) — gdino finds the box and then asks BiRefNet to matte
+   inside it, and `settings.birefnet_model` defaults to `""`. The weights are
+   vendored at `models/BiRefNet/BiRefNet_lite.safetensors` and nothing points at
+   them. **So: not an interpreter problem, not a bridge, a missing default.**
+   The lesson is the expensive part and it is the third time today: *a document
+   claiming something is not evidence of it.* `_load`'s docstring claimed a caller
+   that could not exist, `add_sam_point`'s claimed bindings that did not exist,
+   and this table claimed a package that was installed. The worker quoted each
+   faithfully — it reads what is written, so what is written has to be true.
 
    **[fixed 2026-09-15] The mask "active" box lied, and off did not mean off.**
    User: *"if the mask is shown it should act; if you switch the display off it
