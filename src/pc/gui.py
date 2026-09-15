@@ -129,15 +129,21 @@ THEMES = {
         "text": "#6b7a86", "dim": "#9aa5ae",
         "accent": "#6fa8d6", "ok": "#7dc49a", "warn": "#d4ad5e", "err": "#cf8a82",
     },
-    # --- Phosphor: CRT terminal glow.  Pure black canvas, pale cyan text
-    #     (hackfirst's #E9F7FC), bright green accent (buena's #55ff55 hover).
-    #     Hairline borders at low opacity.  Consolas evokes the mono terminal. ---
+    # --- Phosphor: the CRT after the tube has warmed up.  It began as pure
+    #     black with a #55ff55 hover, which is accurate and shouts; this is the
+    #     same glow left to settle.  Every accent is a pastel -- mint, apricot,
+    #     dusty rose -- and each is faint on purpose, because they sit around a
+    #     photograph and a loud chrome shifts every tone in it.  The one thing
+    #     no other palette has is `grad`: the two picture wells get a ramp from
+    #     slate-indigo down to teal ink instead of a flat fill, which is where
+    #     the phosphor is still visible.  Consolas keeps the terminal in it. ---
     "Phosphor": {
-        "bg": "#000000", "panel": "#0d1113", "field": "#07090a",
-        "cross": "#020304", "line": "#1a2628",
-        "text": "#e9f7fc", "dim": "#5a7a80",
-        "accent": "#55ff55", "ok": "#55ff55", "warn": "#e0b24c", "err": "#ef6b6b",
+        "bg": "#151b22", "panel": "#1c242d", "field": "#111820",
+        "cross": "#0b1016", "line": "#2a3642",
+        "text": "#e2eef0", "dim": "#8ba1a7",
+        "accent": "#9fd6cb", "ok": "#b6e0c2", "warn": "#efd9ab", "err": "#eeb3b3",
         "ui_font": "Segoe UI", "mono_font": "Consolas",
+        "grad": ("#27323f", "#0e151a", "#9fd6cb"),
     },
 }
 
@@ -311,6 +317,39 @@ def _retint_bg(widget, old_palette, new_palette):
         pass
     for child in widget.winfo_children():
         _retint_bg(child, old_palette, new_palette)
+
+
+def _rgb(hexcol):
+    """``"#rrggbb"`` -> a float RGB triple."""
+    return np.array([int(hexcol[i:i + 2], 16) for i in (1, 3, 5)], dtype=float)
+
+
+def _gradient_photo(w, h, top, bottom, glow=None):
+    """The graded ground as a PhotoImage *w* x *h*: a vertical ramp from *top*
+    to *bottom*, with an optional soft bloom of *glow* in the middle.
+
+    Tk fills flat -- a Canvas has no gradient option and no alpha -- so a ramp
+    has to arrive as pixels, like everything else rendered in this window.  The
+    bloom is what makes it worth having: the photograph sits in the middle of
+    this, so the light gathers just outside the frame and falls away to the
+    corners.  Faint on purpose (16% at its strongest): the ground is behind a
+    picture being judged, and a ground that announces itself has already won an
+    argument it should not have been in.
+    """
+    w, h = max(int(w), 1), max(int(h), 1)
+    ca, cb = _rgb(top), _rgb(bottom)
+    t = np.linspace(0.0, 1.0, h)[:, None, None]
+    img = np.repeat(ca[None, None, :] + (cb - ca)[None, None, :] * t, w, axis=1)
+    if glow:
+        yy = (np.arange(h)[:, None] - (h - 1) / 2.0) / max(h / 2.0, 1.0)
+        xx = (np.arange(w)[None, :] - (w - 1) / 2.0) / max(w / 2.0, 1.0)
+        # Squared falloff, not linear: linear leaves a visible disc edge where
+        # it reaches zero, and the whole point is that you cannot see where it
+        # stops.
+        f = np.clip(1.0 - np.sqrt(yy ** 2 + xx ** 2), 0.0, 1.0) ** 2
+        img += (_rgb(glow)[None, None, :] - img) * (0.16 * f[:, :, None])
+    return ImageTk.PhotoImage(
+        Image.fromarray(np.clip(img, 0, 255).astype(np.uint8)))
 
 
 def _to_photo(bgr, box):
@@ -2108,6 +2147,7 @@ class ReviewPanel(tk.Frame):
         aoy = (box[1] - ph.height()) // 2
         self._after_off = (aox, aoy)
         self.c_after.delete("all")
+        self._paint_ground(self.c_after)
         self.c_after.create_image(aox, aoy, anchor="nw", image=ph)
         self._ph_a = ph
         self._draw_grid(self.c_after, *self._after_off, ph.width(), ph.height())
@@ -2872,6 +2912,31 @@ class ReviewPanel(tk.Frame):
         self._busy = True
         self.after(60, self._redraw)
 
+    def _paint_ground(self, canvas):
+        """Lay the theme's gradient under everything else on *canvas*.
+
+        Only Phosphor carries a `grad`; for every other palette the canvas keeps
+        its flat `field` and this does nothing.  It has to run after each
+        `delete("all")` rather than once at build, because that call takes the
+        ground with it -- the same reason the tool icons are re-rendered on a
+        theme switch instead of re-coloured.
+        """
+        grad = INK.get("grad")
+        if not grad:
+            return
+        w, h = canvas.winfo_width(), canvas.winfo_height()
+        if min(w, h) < 2:
+            return
+        ph = _gradient_photo(w, h, grad[0], grad[1],
+                             grad[2] if len(grad) > 2 else None)
+        canvas.create_image(0, 0, anchor="nw", image=ph, tags="ground")
+        canvas.tag_lower("ground")
+        # A PhotoImage nothing holds is collected and the item goes blank: the
+        # reference must outlive the canvas item, not the function.
+        if getattr(self, "_grounds", None) is None:
+            self._grounds = {}
+        self._grounds[str(canvas)] = ph
+
     def _draw_empty(self):
         """The startup cross has no session: show a drop prompt, draw nothing
         else.  Runs instead of the real render so an empty canvas never reaches
@@ -2882,6 +2947,7 @@ class ReviewPanel(tk.Frame):
             if not c.winfo_ismapped():
                 return
             c.delete("all")
+            self._paint_ground(c)
         b = (self.c_before.winfo_width(), self.c_before.winfo_height())
         if min(b) >= 20:
             self.c_before.create_text(
@@ -2940,6 +3006,7 @@ class ReviewPanel(tk.Frame):
             self._before_off = ((box_b[0] - ph_b.width()) // 2,
                                 (box_b[1] - ph_b.height()) // 2)
             self.c_before.delete("all")
+            self._paint_ground(self.c_before)
             self._sam_selection = None
             self.c_before.create_image(self._before_off[0], self._before_off[1],
                                        anchor="nw", image=ph_b)
@@ -3700,6 +3767,11 @@ class App(_ROOT_CLASS):
             return
         self._last_applied_theme = theme_name
         INK.update(new)
+        # INK is updated, never rebuilt, so a key only one palette defines would
+        # outlive it: switch Phosphor -> Light and the light panes would keep
+        # the dark ramp. A palette without a gradient has to say so.
+        if "grad" not in new:
+            INK.pop("grad", None)
         apply_theme(self, new)
         _retint_bg(self, old, new)
         # A walk cannot fix a PhotoImage: the icons carry their tint in their
@@ -3711,6 +3783,10 @@ class App(_ROOT_CLASS):
         if rev is not None and hasattr(rev, "_build_tool_palette"):
             try:
                 rev._build_tool_palette()
+                # Same argument for the ground: it is pixels, and the walk above
+                # cannot re-tint pixels. Only a redraw lays a new one down.
+                if hasattr(rev, "_schedule_redraw"):
+                    rev._schedule_redraw()
             except tk.TclError:
                 pass                       # window going away mid-switch
         # The brand mark is a rendered image too, tinted INK["text"] into its
