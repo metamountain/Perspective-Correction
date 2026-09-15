@@ -1207,3 +1207,39 @@ def test_a_mark_is_dragged_out_in_one_gesture_and_a_still_click_still_removes():
         assert len(s.control_lines) == 0, "a few pixels is not a control line"
     finally:
         app.destroy()
+
+
+def test_each_tool_mode_has_a_key_and_the_keys_do_not_replace_each_other():
+    """m / b / p / s reach the four tool modes, and SAM is not flipped twice.
+
+    Tk's `bind()` *replaces* a handler for the same sequence, so four modes on
+    one key would silently leave three dead -- this asserts four distinct
+    sequences are actually registered, not just that the dispatcher works.
+
+    The SAM case is the one worth pinning: `_on_sam_toggle` flips `v_sam`
+    itself, while the other three read a variable Tk already flipped. Flipping
+    it in the dispatcher too would cancel out and the key would do nothing.
+    """
+    app = _app()
+    try:
+        _loaded(app, 1280, 800)
+        r = app.review
+        for seq in ("<m>", "<b>", "<p>", "<s>"):
+            assert app.bind(seq), f"{seq} is not bound"
+
+        for seq, var, handler in (("<m>", "v_mark", "_on_mark_toggle"),
+                                  ("<b>", "v_stroke", "_on_stroke_toggle"),
+                                  ("<p>", "v_planar", "_on_planar_toggle")):
+            before = getattr(r, var).get()
+            app._tool_key(var, handler)
+            assert getattr(r, var).get() != before, f"{seq} did not flip {var}"
+            app._tool_key(var, handler)          # and back, so modes do not stack
+
+        before = r.v_sam.get()
+        app._tool_key(None, "_on_sam_toggle")
+        assert r.v_sam.get() != before, (
+            "s must flip v_sam exactly once -- the handler owns that flip")
+        app._tool_key(None, "_on_sam_toggle")
+        assert r.v_sam.get() == before, "pressing s twice must return to the start"
+    finally:
+        app.destroy()
