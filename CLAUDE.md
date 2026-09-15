@@ -169,6 +169,14 @@ everything else. The list below is not in that order; this is.
    survives — but only as a *first* click, since `pick_control_line` is guarded by
    `_pending_mark is None`. Mid-placement, a click cannot delete. That is the
    contract the test now pins.
+   **Superseded in part 2026-09-15 (user): one Mark tool, not two.** The
+   vertical/horizontal combobox is gone; `ReviewPanel._kind_for` reads the plane
+   off the drawn segment (falls more than it runs → vertical, exactly 45° →
+   vertical, stated not incidental), and the rubberband is tinted by that
+   decision *while dragging* so it is visible before release. Both planes are on
+   screen together now, so every pick carries `(index, kind)` — an index into
+   `control_lines` means nothing against `control_hlines`, and verticals are
+   searched first as a deliberate tiebreak, not nearest-wins.
 2. **Tool icons as one coherent set; bigger buttons; typography and spacing.** The
    window is judged by this. Do it as a **single pass** — icons, font sizes, button
    sizes and spacing share a visual language, and split across sessions they will
