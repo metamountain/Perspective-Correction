@@ -2923,7 +2923,10 @@ class ReviewPanel(tk.Frame):
         # Kept under the old attribute name because a test presses the real
         # widget -- the brush once broke by having the box and the click
         # handler read two different variables, which only pressing catches.
-        self._brush_chk = tool("▨", self.v_stroke, self._on_stroke_toggle,
+        # A round brush gets a round button.  The first attempt used a
+        # shaded SQUARE glyph, which is exactly the wrong promise for a
+        # tool whose whole point is that it paints circles.
+        self._brush_chk = tool("●", self.v_stroke, self._on_stroke_toggle,
                                "Paint a mask over regions to exclude from line "
                                "detection. Right-click or Alt+click to erase.")
         self._sam_btn = tool("⬚", self.v_sam, self._on_sam_toggle,
