@@ -82,7 +82,9 @@ DO NOT APPLY ANYTHING. You have no str_replace in this run. The architect reads
 every proposal, checks it against the file, and applies the ones that hold.
 
 RULES
-- Read the whole file first with read_file. It is {lines} lines.
+- Read {span} first with read_file. Do not read past it: another run covers
+  the rest, and reading the whole of a long file is what blew the context
+  window on the first attempt.
 - Cite only lines you actually read. Do not guess.
 - Use grep with files="*" to check whether a name is used elsewhere before
   calling it unused -- tests and tools count as users.
@@ -93,12 +95,48 @@ RULES
 """
 
 
+# A 4000-line file does not fit the worker's context: `read_file` on the whole
+# of gui.py came back HTTP 400 and the run produced nothing at all.  Long files
+# go in overlapping slices instead -- overlapping, because a defect that spans
+# the cut would otherwise be invisible from both sides.
+CHUNK = 700
+OVERLAP = 60
+
+
+def slices(n):
+    """``[(start, end), ...]`` covering ``n`` lines, or one slice for a short file."""
+    if n <= CHUNK:
+        return [(1, n)]
+    out, a = [], 1
+    while a <= n:
+        b = min(a + CHUNK - 1, n)
+        out.append((a, b))
+        if b >= n:
+            break
+        a = b - OVERLAP + 1
+    return out
+
+
 def modules(names):
     paths = sorted(glob.glob(os.path.join(REPO, "src", "pc", "*.py")))
     if names:
         want = {n if n.endswith(".py") else n + ".py" for n in names}
         paths = [p for p in paths if os.path.basename(p) in want]
     return paths
+
+
+def _run_one(pkg_path, header):
+    """One worker run; returns just what it said, not its tool trace."""
+    # utf-8 with replacement: Windows hands this process cp1252 and the worker
+    # writes arrows like any model will.  The third time today that this exact
+    # class of bug ate a run -- decoding its answer must never be able to fail.
+    r = subprocess.run([sys.executable, os.path.join(HERE, "worker_agent.py"),
+                        pkg_path], cwd=REPO, capture_output=True, text=True,
+                       encoding="utf-8", errors="replace")
+    body = (r.stdout or "") + (r.stderr or "")
+    mark = "=== worker finished"
+    said = body.split(mark, 1)[1] if mark in body else body[-4000:]
+    return header + said.strip()
 
 
 def main() -> None:
@@ -115,22 +153,21 @@ def main() -> None:
             continue
         rel = os.path.relpath(path, REPO).replace("\\", "/")
         n = sum(1 for _ in open(path, encoding="utf-8"))
-        pkg = PACKAGE.format(path=rel, name=name, lines=n)
-        pkg_path = os.path.join(OUT, "_package.txt")
-        with open(pkg_path, "w", encoding="utf-8") as fh:
-            fh.write(pkg)
+        parts = slices(n)
         t0 = time.time()
-        # utf-8 with replacement, because Windows hands this process cp1252 and
-        # the worker writes arrows and dashes like any model will.  The third
-        # time this exact class of bug has eaten a run today: decoding its
-        # answer must never be able to fail.
-        r = subprocess.run([sys.executable, os.path.join(HERE, "worker_agent.py"),
-                            pkg_path], cwd=REPO, capture_output=True, text=True,
-                           encoding="utf-8", errors="replace")
-        body = (r.stdout or "") + (r.stderr or "")
-        # keep only what the worker said at the end, not its tool trace
-        mark = "=== worker finished"
-        report = body.split(mark, 1)[1] if mark in body else body[-4000:]
+        report = ""
+        for k, (a, b) in enumerate(parts, 1):
+            span = (f"lines {a} to {b} of {rel} (part {k} of {len(parts)})"
+                    if len(parts) > 1 else f"the whole file, {n} lines")
+            pkg = PACKAGE.format(path=rel, name=name, span=span)
+            pkg_path = os.path.join(OUT, "_package.txt")
+            with open(pkg_path, "w", encoding="utf-8") as fh:
+                fh.write(pkg)
+            head = ""
+            if len(parts) > 1:
+                head = f"\n\n## part {k}: lines {a}-{b}\n"
+            report += _run_one(pkg_path, head)
+
         with open(dest, "w", encoding="utf-8") as fh:
             fh.write(f"# {name} ({n} lines)\n\n{report.strip()}\n")
         hi = report.upper().count("HIGH")
