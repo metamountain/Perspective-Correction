@@ -1299,3 +1299,36 @@ def test_the_mark_tool_reads_the_plane_off_the_drawing_and_removes_the_right_one
             "the array it came from")
     finally:
         app.destroy()
+
+
+def test_the_facade_strip_still_works_after_a_second_photograph_loads():
+    """The strip moved into `_build`, which re-runs per photograph.
+
+    That is the trap this file has already paid for twice: `_build` runs again
+    for every load while the widgets elsewhere were made once, so a rebuilt
+    variable leaves a control pointing at something nobody reads and the tool
+    dies silently from the second photograph on. The guard is only as good as a
+    test that actually loads twice and then presses the real widget.
+    """
+    app = _app()
+    try:
+        _loaded(app, 1280, 800)
+        r = app.review
+        first = (r.v_roi, r.v_roi_x0, r.v_roi_x1)
+        r.load(r.session.path, r.settings, r.dest_path)   # a second photograph
+        _settle(app)
+        assert (r.v_roi, r.v_roi_x0, r.v_roi_x1) == first, (
+            "the strip's variables were rebuilt by the second load -- the "
+            "checkbox now sets one nobody reads")
+        # And the widget the user presses must still drive the session.
+        assert r._roi_chk.winfo_exists(), "the strip checkbox vanished"
+        r._roi_chk.invoke()
+        _settle(app)
+        assert r.v_roi.get(), "pressing the real checkbox must turn the strip on"
+        assert r.session.roi_x is not None, (
+            "the strip is on, so the session must be restricted")
+        r._roi_chk.invoke()
+        _settle(app)
+        assert r.session.roi_x is None, "turning it off must lift the restriction"
+    finally:
+        app.destroy()

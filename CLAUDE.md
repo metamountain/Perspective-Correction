@@ -201,6 +201,32 @@ everything else. The list below is not in that order; this is.
    **Still open: more tools**, and only where a gesture is already being done the
    long way. Not a wish for its own sake.
 
+   **[2026-09-15] The facade strip sits beside the switch it serves, and is not
+   called ROI any more.** It only ever changes which *horizontals* count, so it
+   belongs under the horizontal (yaw) checkbox and nowhere else; "ROI x" was
+   jargon a new user cannot decode. Both now carry hover help that names the
+   real situation (two facades pulling the fit apart) instead of restating the
+   label. **It moved from `_build_tools` into `_build`, which re-runs per
+   photograph**, so its three variables are behind the `getattr(...) is None`
+   guard and `test_the_facade_strip_still_works_after_a_second_photograph_loads`
+   loads twice and then presses the real checkbox — the third time this file has
+   met that trap, and the first time a test was written for it up front.
+
+   **[audited 2026-09-15] SAM's polarity is correct; the confusion is elsewhere.**
+   Worker traced the whole chain: the child writes selection-white
+   (`sam2seg.py:113`), `load_mask_png` inverts to ignore (`sam2seg.py:207`), and
+   that convention survives to the red wash and the estimator. **Red lands around
+   the building, the building keeps its colours and its lines** — the stated
+   intent, already true. Two real findings underneath: **`mask_invert` applies
+   only to the `file` source** (`masks.py:259`) — birefnet, gdino and SAM all
+   bypass the checkbox, so the same semantic decision exists twice, once
+   toggleable and once hardwired. And `_draw_sam_prompts` draws a border around
+   the *whole canvas*, not an outline of the subject: it reads as a contour and
+   is only an "active" light. **Do not invert the brush globally** (user asked):
+   most frames need a small exclusion, so starting fully masked means carving the
+   building out by hand every time. One rule already holds — *red is what the
+   estimator ignores* — and SAM obeys it.
+
    **[diagnosed 2026-09-15, NOT fixed] `--mask gdino` cannot work from the
    window, and the reason is structural.** Worker investigation, every claim
    cited. The weights are present (`models/GroundingDINO/` has `config.json` and
