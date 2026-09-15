@@ -201,6 +201,23 @@ everything else. The list below is not in that order; this is.
    **Still open: more tools**, and only where a gesture is already being done the
    long way. Not a wish for its own sake.
 
+   **[diagnosed 2026-09-15, NOT fixed] `--mask gdino` cannot work from the
+   window, and the reason is structural.** Worker investigation, every claim
+   cited. The weights are present (`models/GroundingDINO/` has `config.json` and
+   `model.safetensors`), the call site is fully wired (combobox → `_apply_mask`
+   → `set_mask` → `L.prepare` → `MK.build` → `gdino_mask`), and it still cannot
+   run: `masks.py:139-140` does `import torch` and `from transformers import ...`
+   **in-process**, and the GUI's system Python has no `transformers` (the
+   Environment split table above). SAM2 solved the same problem with a subprocess
+   into `python_embeded` (`sam2seg.run_subprocess`) and BiRefNet with the
+   `--mask-export` bridge; **gdino has neither**. `_detect` swallows the
+   ImportError and silently re-runs with `mask_mode="off"` (`review.py:124-129`),
+   so the window shows a label rather than a failure — which is why this looked
+   like "gdino is broken" rather than "gdino is in the wrong interpreter".
+   **The fix is a bridge, not a debug session.** Until then the combobox tooltip
+   says so out loud. Note `deps.py:196-202` already records BiRefNet hitting the
+   identical "doctor said yes, first photo failed" shape.
+
    **[fixed 2026-09-15] The mask "active" box lied, and off did not mean off.**
    User: *"if the mask is shown it should act; if you switch the display off it
    is useless"* — **display and effect were never coupled** (worker traced it:

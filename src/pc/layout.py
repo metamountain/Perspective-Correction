@@ -326,12 +326,25 @@ def tool_key(unit=GRID):
     than something you press, and every key is the same size because they are
     the same kind of thing -- nothing in the palette earns being bigger.
 
-    Both numbers are whole multiples of one grid unit, which is the point: the
-    column then lines up with anything else built on ``GRID`` instead of each
+    Key plus gap is 9 units, so the column advances on one pitch from the top
+    icon to the last tool. Both numbers are whole multiples of one grid unit:
+    the column then lines up with anything else built on ``GRID`` instead of each
     gap being chosen by eye.  It lives here and not in ``gui.py`` for the reason
     the hard rules give -- a size tuned in the window is a size no test can see.
     """
-    return 9 * unit, 2 * unit       # 36 px key, 8 px below it
+    return 8 * unit, unit           # 32 px key, 4 px below it -> 36 px pitch
+
+
+def tool_glyph(unit=GRID):
+    """Optical size in px of what sits inside a tool key.
+
+    One number for every key, because "the same size" is what makes six
+    different marks read as one set -- a 22 px icon beside a 27 px glyph reads
+    as two languages however well each is drawn. Five units inside an eight
+    unit key leaves a ring of empty on every side, which is what centres them
+    to the eye rather than only to the pixel.
+    """
+    return 5 * unit
 
 
 def mark_line_width(short_edge):

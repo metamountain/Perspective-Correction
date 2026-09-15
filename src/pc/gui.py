@@ -421,16 +421,19 @@ def _folder_pil(size, colour):
     left, right = round(0.11 * s), round(0.89 * s)
     tab_top, body_top, bottom = round(0.28 * s), round(0.44 * s), round(0.83 * s)
     tab_right = round(0.56 * s)
+    w = max(1, round(s / 11))
     d.polygon([(left, tab_top), (tab_right, tab_top), (tab_right, body_top),
-               (right, body_top), (right, bottom), (left, bottom)], fill=c)
+               (right, body_top), (right, bottom), (left, bottom)], outline=c, width=w)
     return img
 
 
 def _paste_pil(size, colour):
     """A flat monochrome clipboard glyph at ``size``, tinted to ``colour``.
 
-    A rounded-rectangle body with a small clip bump at the top centre --
-    reads as "paste from clipboard" at 22 px without needing a label."""
+    An outline clipboard: a rounded-rectangle body with a small clip bump at
+    the top centre, both drawn as strokes rather than filled so it matches the
+    other glyphs in the column -- reads as "paste from clipboard" without
+    needing a label."""
     from PIL import ImageDraw
     img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
@@ -438,10 +441,13 @@ def _paste_pil(size, colour):
     s = size
     left, right = round(0.18 * s), round(0.82 * s)
     top, bottom = round(0.22 * s), round(0.86 * s)
-    d.rounded_rectangle([left, top, right, bottom], radius=max(1, s // 8), fill=c)
+    w = max(1, round(s / 11))
+    d.rounded_rectangle([left, top, right, bottom], radius=max(1, s // 8),
+                        outline=c, width=w, fill=None)
     clip_l, clip_r = round(0.38 * s), round(0.62 * s)
     clip_top, clip_bot = round(0.10 * s), round(0.30 * s)
-    d.rounded_rectangle([clip_l, clip_top, clip_r, clip_bot], radius=max(1, s // 10), fill=c)
+    d.rounded_rectangle([clip_l, clip_top, clip_r, clip_bot], radius=max(1, s // 10),
+                        outline=c, width=w, fill=None)
     return img
 
 
@@ -747,25 +753,32 @@ class ReviewPanel(tk.Frame):
         # is a tool palette, and a palette reads as a column.  Load is the big one
         # -- it is the only thing to press on an empty window, so it earns the
         # size; the tools below it are small and uniform.
+        if getattr(self, "_palette_blank", None) is None:
+            self._palette_blank = tk.PhotoImage(width=1, height=1)
+        _side, _gap = layout.tool_key()
         self.add_btn = tk.Button(addbar, text="+", font=("Segoe UI", 20, "bold"),
-                                 width=2, relief="flat", bd=0, cursor="hand2",
+                                 image=self._palette_blank, compound="center",
+                                 width=_side, height=_side,
+                                 relief="flat", bd=0, cursor="hand2",
                                  background=INK["field"], foreground=INK["dim"],
                                  activebackground=INK["line"],
                                  activeforeground=INK["text"],
-                                 command=self._on_add_files)
+                                 padx=0, pady=0, highlightthickness=0, command=self._on_add_files)
         self.add_btn.pack(side="top")
         _attach_tooltip(self.add_btn, "Add image files")
-        self._folder_img = ImageTk.PhotoImage(_folder_pil(22, INK["dim"]))
+        self._folder_img = ImageTk.PhotoImage(_folder_pil(layout.tool_glyph(), INK["dim"]))
         self.add_folder_btn = tk.Button(addbar, image=self._folder_img, relief="flat",
                                         bd=0, cursor="hand2", background=INK["field"],
-                                        command=self._on_add_folder)
-        self.add_folder_btn.pack(side="top", pady=(2, 0))
+                                        width=_side, height=_side, compound="center",
+                                        padx=0, pady=0, highlightthickness=0, command=self._on_add_folder)
+        self.add_folder_btn.pack(side="top", pady=(_gap, 0))
         _attach_tooltip(self.add_folder_btn, "Add a folder of images")
-        self._paste_img = ImageTk.PhotoImage(_paste_pil(22, INK["dim"]))
+        self._paste_img = ImageTk.PhotoImage(_paste_pil(layout.tool_glyph(), INK["dim"]))
         self.add_paste_btn = tk.Button(addbar, image=self._paste_img, relief="flat",
                                        bd=0, cursor="hand2", background=INK["field"],
-                                       command=self._on_paste)
-        self.add_paste_btn.pack(side="top", pady=(2, 0))
+                                       width=_side, height=_side, compound="center",
+                                       padx=0, pady=0, highlightthickness=0, command=self._on_paste)
+        self.add_paste_btn.pack(side="top", pady=(_gap, 0))
         _attach_tooltip(self.add_paste_btn, "Paste screenshot from clipboard")
         # Placed rather than packed: the frame is a child of the canvas and sits
         # over its top-left corner, in front of whatever the picture shows.  A
@@ -2385,6 +2398,14 @@ class ReviewPanel(tk.Frame):
                                         values=["off", "file", "birefnet", "gdino"])
         self.cb_maskmode.grid(row=0, column=1, sticky="w", padx=(6, 6))
         self.cb_maskmode.bind("<<ComboboxSelected>>", lambda e: self._apply_mask())
+        _attach_tooltip(self.cb_maskmode,
+                        "Where the ignore mask comes from.\n"
+                        "off - none.  file - one PNG per photograph.\n"
+                        "birefnet - cut the subject out automatically.\n"
+                        "gdino - say what to find, see the prompt below.\n"
+                        "gdino needs 'transformers', which THIS window's Python "
+                        "does not have: it will report an error until that is "
+                        "installed in the system interpreter.")
         _b = ttk.Button(msk, text="mask folder...", command=self._pick_mask_folder)
         _b.grid(row=0, column=2, sticky="w")
         _attach_tooltip(_b, "Choose the folder containing mask PNG files (one per image)")
@@ -2427,6 +2448,13 @@ class ReviewPanel(tk.Frame):
         gentry = ttk.Entry(msk, textvariable=self.v_gdino_prompt, width=24)
         gentry.grid(row=3, column=1, columnspan=3, sticky="ew", padx=6, pady=(4, 0))
         gentry.bind("<Return>", lambda e: self._apply_mask())
+        _attach_tooltip(gentry,
+                        "Grounding DINO: name what to look for in plain words - "
+                        "'building', 'facade', 'house' - and it boxes that, "
+                        "instead of guessing from colour.\n"
+                        "The mini T-Rex of the mask sources: small, quick, and "
+                        "it only bites what you name.\n"
+                        "Press Return to apply.")
         msk.columnconfigure(3, weight=1)
 
         # The Lines/Mask/Grid overlay switches used to live here.  They now sit on
@@ -2910,7 +2938,7 @@ class ReviewPanel(tk.Frame):
             self._palette_blank = tk.PhotoImage(width=1, height=1)
         side, gap = layout.tool_key()
 
-        def tool(glyph, var, command, tip, invert=False):
+        def tool(glyph, var, command, tip, invert=False, lead=False):
             # Inverted is for the mask brush ALONE (2026-09-15, user): it is the
             # one tool whose glyph stands for the thing it paints, so a dark
             # circle on a light key reads as the brush tip itself.  Inverting
@@ -2920,6 +2948,7 @@ class ReviewPanel(tk.Frame):
             b = tk.Checkbutton(bar, text=glyph, variable=var, command=command,
                                image=self._palette_blank, compound="center",
                                indicatoron=False, width=side, height=side,
+                               padx=0, pady=0, highlightthickness=0,
                                bd=0, relief="flat",
                                font=("Segoe UI", 20), cursor="hand2",
                                background=INK["text"] if invert else INK["field"],
@@ -2927,14 +2956,17 @@ class ReviewPanel(tk.Frame):
                                activebackground=INK["dim"] if invert else INK["line"],
                                activeforeground=fg if invert else INK["text"],
                                selectcolor=INK["dim"] if invert else INK["line"])
-            b.pack(side="top", pady=(gap, 0))
+            # A double gap above the first tool: the load group and the tool
+            # group are different kinds of thing, and one skipped pitch says so
+            # without a separator line.
+            b.pack(side="top", pady=(gap * 2 if lead else gap, 0))
             _attach_tooltip(b, tip)
             self._palette_btns.append(b)
             return b
 
         tool("│", self.v_mark, self._on_mark_toggle,
              "Mark a straight edge by hand -- which way it leans decides "
-             "whether it counts as a vertical or a horizontal")
+             "whether it counts as a vertical or a horizontal", lead=True)
         # Brush and box-select joined Mark here (2026-09-15, user: "either the
         # toolbar or the marker, I would prefer only the tool").  They were
         # text controls in the lower-left field while Mark was in both places,
