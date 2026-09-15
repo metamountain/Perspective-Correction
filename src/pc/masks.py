@@ -131,6 +131,20 @@ def default_gdino_dir() -> str:
     return os.path.join(root, "models", "GroundingDINO")
 
 
+def default_birefnet() -> str:
+    """The vendored BiRefNet weights, or "" when they are not there.
+
+    `birefnet_model` defaults to empty, and both `--mask birefnet` and
+    `--mask gdino` refuse without it -- gdino finds its box and then asks
+    BiRefNet to matte inside it. So two working backends presented as broken
+    while their weights sat in the repo, unreferenced. An explicit setting
+    still wins; this only fills the blank.
+    """
+    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    path = os.path.join(root, "models", "BiRefNet", "BiRefNet_lite.safetensors")
+    return path if os.path.isfile(path) else ""
+
+
 _GDINO_CACHE = {}
 
 
@@ -206,7 +220,7 @@ def gdino_mask(bgr: np.ndarray, settings):
     """
     from . import birefnet as BN
 
-    weights = getattr(settings, "birefnet_model", "")
+    weights = getattr(settings, "birefnet_model", "") or default_birefnet()
     if not weights:
         raise ValueError("--mask gdino needs --birefnet-model <weights> for the matte")
     prompt = (getattr(settings, "gdino_prompt", "") or "building").strip() or "building"
@@ -261,7 +275,7 @@ def _build_one(mode: str, bgr: np.ndarray, settings, image_path: str = ""):
                     getattr(settings, "mask_invert", False)), "painted mask"
     if mode == "birefnet":
         from . import birefnet as BN
-        path = getattr(settings, "birefnet_model", "")
+        path = getattr(settings, "birefnet_model", "") or default_birefnet()
         if not path:
             raise ValueError("--mask birefnet needs --birefnet-model <weights>")
         return BN.build_mask(
