@@ -107,31 +107,6 @@ print("== 4. toggles ==")
 step("grid on", lambda: (app.review.v_grid.set(True), app.review._schedule_redraw(), pump(app,15), "on")[-1])
 step("grid off", lambda: (app.review.v_grid.set(False), app.review._schedule_redraw(), pump(app,15), "off")[-1])
 
-print("== 5. planar corners ==")
-def _planar_on():
-    r.v_planar.set(True); r._on_planar_toggle(); pump(app, 15)
-    return "on"
-step("planar mode on", _planar_on)
-def _place():
-    for dx, dy in [(10, 10), (300, 14), (16, 250), (296, 246)]:
-        r._on_planar_click(dx, dy)
-    pump(app, 15)
-    return f"corners={len(r.session.planar_quad)}"
-step("place four corners", _place)
-def _drag():
-    before = r.session.planar_quad[0]
-    r._on_planar_click(10, 10)              # click on corner 0 grabs it
-    grabbed = "grabbed" if r._planar_drag == 0 else f"!! not grabbed ({r._planar_drag})"
-    ev = types.SimpleNamespace(x=120 + r._before_off[0], y=130 + r._before_off[1])
-    r._on_planar_drag(ev); r._on_planar_release(None)
-    moved = "moved" if r.session.planar_quad[0] != before else "!! did not move"
-    return f"{grabbed}, {moved}"
-step("grab and drag corner 0", _drag)
-def _planar_off():
-    r.v_planar.set(False); r._on_planar_toggle(); pump(app, 15)
-    return "off"
-step("planar mode off", _planar_off)
-
 print("== 6. clear back to empty ==")
 def _clear():
     app.items = []

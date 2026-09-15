@@ -127,71 +127,6 @@ def test_shorten_middle_keeps_the_end_never_just_truncates():
     assert "\u2026" in out, "only the middle is elided"
 
 
-def test_save_routes_to_planar_when_four_corners_are_placed():
-    """Planar Save must write the rectified view, not the roll/pitch correction.
-
-    Four placed corners with the planar toggle on route to `save_planar`; the
-    toggle off, or fewer than four corners, routes to `save`.  The regression is
-    silent: without the branch, Save wrote the rotation-only image and the quad
-    was gone with no error and nothing on screen saying so.
-    """
-    app = _app()
-    try:
-        _loaded(app, 1280, 800)
-        r = app.review
-        s = r.session
-        calls = []
-        s.save = lambda dst: (calls.append("save"), dst)[1]
-        s.save_planar = lambda dst: (calls.append("save_planar"), dst)[1]
-        r.on_saved = None
-        r.v_planar.set(False)
-        r._save()
-        s.clear_planar()
-        s.set_planar_point(0, 10, 10)
-        s.set_planar_point(1, 200, 10)      # two corners: still cannot rectify
-        r.v_planar.set(True)
-        r._save()
-        for i, (x, y) in enumerate([(10, 10), (500, 12), (12, 800), (498, 795)]):
-            s.set_planar_point(i, x, y)     # four corners: the rectified view
-        r._save()
-        assert calls == ["save", "save", "save_planar"], f"wrong routing: {calls}"
-    finally:
-        app.destroy()
-
-
-def test_planar_corners_can_be_placed_and_dragged():
-    """Off-screen coverage for the planar quad itself.
-
-    The Save-routing test covers what four corners *produce*; this covers that a
-    person can actually *build* and *adjust* them: four clicks place four corners
-    through the real click handler, clicking a placed corner grabs it, and a drag
-    moves the grabbed corner before release ends it.  Without this, P11/P12's own
-    bug (a grabbable radius that only worked at scale ~1) had no off-screen guard.
-    """
-    app = _app()
-    try:
-        _loaded(app, 1280, 800)
-        r = app.review
-        s = r.session
-        r.v_planar.set(True)
-        r._on_planar_toggle()            # real mode entry: also brings up the loupe
-        pts = [(10, 10), (300, 14), (16, 250), (296, 246)]
-        for dx, dy in pts:                     # display coords, image-origin relative
-            r._on_planar_click(dx, dy)
-        assert len(s.planar_quad) == 4, "four clicks should place four corners"
-        before = s.planar_quad[0]
-        r._on_planar_click(*pts[0])            # click on corner 0 grabs it
-        assert r._planar_drag == 0, "clicking a placed corner grabs it"
-        ev = types.SimpleNamespace(
-            x=120 + r._before_off[0], y=130 + r._before_off[1])
-        r._on_planar_drag(ev)                  # canvas coords carry the offset
-        r._on_planar_release(None)
-        assert s.planar_quad[0] != before, "dragging moves the grabbed corner"
-        assert r._planar_drag is None, "release ends the drag"
-    finally:
-        app.destroy()
-
-
 def test_the_mask_brush_still_works_after_a_second_photograph_loads():
     """Press the real checkbox, drag with real events, on the *second* load.
 
@@ -1220,13 +1155,13 @@ def test_a_mark_is_dragged_out_in_one_gesture_and_a_still_click_still_removes():
 
 
 def test_each_tool_mode_has_a_key_and_the_keys_do_not_replace_each_other():
-    """m / b / p / s reach the four tool modes, and SAM is not flipped twice.
+    """m / b / s reach the three tool modes, and SAM is not flipped twice.
 
-    Tk's `bind()` *replaces* a handler for the same sequence, so four modes on
-    one key would silently leave three dead -- this asserts four distinct
+    Tk's `bind()` *replaces* a handler for the same sequence, so three modes on
+    one key would silently leave two dead -- this asserts three distinct
     sequences are actually registered, not just that the dispatcher works.
 
-    All four handlers read their variable and none flips it, so the flip is the
+    All three handlers read their variable and none flips it, so the flip is the
     caller's -- the contract the palette buttons rely on too. `_on_sam_toggle`
     used to flip its own; a second flip anywhere cancels the first and the tool
     looks dead, which is what this asserts against.
@@ -1235,12 +1170,11 @@ def test_each_tool_mode_has_a_key_and_the_keys_do_not_replace_each_other():
     try:
         _loaded(app, 1280, 800)
         r = app.review
-        for seq in ("<m>", "<b>", "<p>", "<s>"):
+        for seq in ("<m>", "<b>", "<s>"):
             assert app.bind(seq), f"{seq} is not bound"
 
         for seq, var, handler in (("<m>", "v_mark", "_on_mark_toggle"),
                                   ("<b>", "v_stroke", "_on_stroke_toggle"),
-                                  ("<p>", "v_planar", "_on_planar_toggle"),
                                   ("<s>", "v_sam", "_on_sam_toggle")):
             before = getattr(r, var).get()
             app._tool_key(var, handler)
