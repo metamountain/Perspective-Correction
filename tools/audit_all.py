@@ -162,7 +162,15 @@ def _run_one(pkg_path, header):
         return (header + "**RUN DID NOT FINISH** (turn limit or error). No "
                 "findings were produced; this module is NOT cleared." + chr(10) * 2
                 + chr(10).join("    " + t[:160] for t in tail))
-    return header + body.split(mark, 1)[1].strip()
+    out = body.split(mark, 1)[1].strip()
+    # A rescued run answers from what it can still see. Both reports that came
+    # back this way cited something that does not exist, so the provenance
+    # belongs in the file rather than in whoever happened to watch the run.
+    if out.startswith(": forced answer"):
+        out = ("**FORCED ANSWER** -- this run was cut short and answered from "
+               "what it had; weigh the citations accordingly." + chr(10) * 2
+               + out.lstrip(": "))
+    return header + out
 
 
 def main() -> None:
