@@ -137,6 +137,12 @@ class ReviewSession:
         # None until computed.  The *prompts* -- box and rework points -- live
         # in the GUI, in frame fractions; the session only ever sees the result.
         self.sam_mask = None
+        # One switch over the whole union (user, 2026-09-15): whatever the
+        # layers ignore, keep, and keep what they ignore.  It belongs here and
+        # not per source, because "invert" is a statement about the RESULT --
+        # per-source flags would need an answer for what inverting two of four
+        # sources means, and there isn't one.
+        self.invert_mask = False
         self.refit()
 
     # -- detection -------------------------------------------------------
@@ -266,6 +272,8 @@ class ReviewSession:
             if arr is None or not arr.any():
                 continue
             out = arr.copy() if out is None else np.logical_or(out, arr)
+        if out is not None and getattr(self, "invert_mask", False):
+            out = ~out
         return out
 
     def _refresh_mask(self):

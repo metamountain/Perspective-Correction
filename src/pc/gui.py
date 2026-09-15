@@ -1422,6 +1422,15 @@ class ReviewPanel(tk.Frame):
         self._mask_enabled = self.v_mask_active.get()
         self._apply_mask()
 
+    def _on_invert_toggle(self):
+        """Flip the whole mask and re-fit."""
+        if not self.session:
+            return
+        self.session.invert_mask = bool(self.v_invert.get())
+        self.session._refresh_mask()
+        self.session.refit()
+        self._sync_from_session()
+
     # -- ComfyUI, which lives on the App -----------------------------------
     # A fixed list, and it must stay one.  `_sync_comfy` copies from the App's
     # `_settings()`, which is a *whole* Settings -- strength, confidence, crop,
@@ -2500,6 +2509,15 @@ class ReviewPanel(tk.Frame):
         ttk.Checkbutton(msk, text="mask marks what to KEEP",
                         variable=self.v_maskinv, command=self._apply_mask
                         ).grid(row=0, column=4, sticky="w", padx=(10, 0))
+        self.v_invert = tk.BooleanVar(value=False)
+        _cb = ttk.Checkbutton(msk, text="invert mask",
+                              variable=self.v_invert,
+                              command=self._on_invert_toggle)
+        _attach_tooltip(_cb, "Swap it: what is red becomes the part that "
+                             "counts, and the rest is ignored.\n"
+                             "Applies to every source at once - brush, SAM, "
+                             "gdino, BiRefNet and the facade strip together.")
+        _cb.grid(row=0, column=8, sticky="w", padx=(10, 0))
         _b = ttk.Button(msk, text="BiRefNet model...", command=self._pick_birefnet_model)
         _b.grid(row=0, column=5, sticky="w", padx=(10, 0))
         _attach_tooltip(_b, "Select the BiRefNet segmentation model to use")
