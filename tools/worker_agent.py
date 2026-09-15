@@ -169,7 +169,8 @@ def run(package: str) -> str:
                 out = str(IMPL[name](**args))
             except Exception as e:                       # a bad call is data, not a crash
                 args, out = {}, f"ERROR: {type(e).__name__}: {e}"
-            print(f"[{turn}] {name}({json.dumps(args)[:100]}) -> {out.splitlines()[0][:120]}")
+            head = (out.splitlines() or [""])[0][:120]
+            print(f"[{turn}] {name}({json.dumps(args)[:100]}) -> {head}")
             msgs.append({"role": "tool", "tool_call_id": c["id"], "content": out[:6000]})
     print(f"\n=== turn limit ({MAX_TURNS}) reached ===")
     return ""
