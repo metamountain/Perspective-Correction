@@ -41,7 +41,10 @@ for _s in (sys.stdout, sys.stderr):
 REPO = pathlib.Path(__file__).resolve().parent.parent
 BASE = os.environ.get("UNSLOTH_STUDIO_URL", "http://127.0.0.1:8888").rstrip("/") + "/v1"
 MODEL = os.environ.get("UNSLOTH_MODEL", "unsloth/Qwen3.8-27B-GGUF")
-MAX_TURNS = 16
+# 16 was enough for an edit package and not for a read-only audit: a sweep
+# across every widget in gui.py ran out mid-search and returned nothing at
+# all, having done the reading.  A turn is cheap here -- the model is local.
+MAX_TURNS = int(os.environ.get("WORKER_MAX_TURNS", "40"))
 
 # `invalid command name ..._pump` is Tk teardown noise, documented in CLAUDE.md
 # under "Running things".  It is NOT a failure, and a harness that hands it back
