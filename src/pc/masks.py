@@ -359,6 +359,30 @@ def credible(before: np.ndarray, after: np.ndarray, max_lost: float = MAX_EVIDEN
     return True, ""
 
 
+def touches(seg: np.ndarray, mask: np.ndarray) -> np.ndarray:
+    """Which segments touch the mask anywhere along their length.
+
+    The simple rule (user, 2026-09-15): an annotator that touches the mask is
+    not evidence.  Sampled rather than rasterised, because a segment is a line
+    and twelve points along it settle the question at analysis resolution.
+
+    Measured before adopting it, against `drop_by_endpoints`: over eight pool
+    photographs it keeps 46 % of detected lines where endpoints keeps 48 %.  The
+    docstring below feared this rule would "discard straddling lines wholesale";
+    at this resolution it costs about a twentieth of the evidence, and buys a
+    rule a person can hold in their head.
+    """
+    if len(seg) == 0 or mask is None:
+        return np.ones(len(seg), dtype=bool)
+    h, w = mask.shape[:2]
+    hit = np.zeros(len(seg), dtype=bool)
+    for f in np.linspace(0.0, 1.0, 12):
+        x = np.clip(((seg[:, 0] * (1 - f)) + seg[:, 2] * f).astype(int), 0, w - 1)
+        y = np.clip(((seg[:, 1] * (1 - f)) + seg[:, 3] * f).astype(int), 0, h - 1)
+        hit |= mask[y, x]
+    return ~hit
+
+
 def drop_by_endpoints(seg: np.ndarray, mask: np.ndarray) -> np.ndarray:
     """Keep every segment unless **both** its endpoints lie inside the mask.
 
