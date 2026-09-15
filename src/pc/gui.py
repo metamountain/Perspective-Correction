@@ -401,54 +401,50 @@ def _hex_rgba(hexc, alpha=255):
     return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16), alpha)
 
 
-def _folder_pil(size, colour):
-    """A flat monochrome folder glyph at ``size``, tinted to ``colour``.
-
-    Drawn rather than shipped as an asset: it follows the palette (so it reads
-    grey on the dark ground, like the "+" beside it) and a missing file cannot
-    take the window down with it.
-
-    One continuous silhouette -- a body whose top edge steps up into a short tab
-    over the left half -- not two stacked rectangles: at 18px those read as a
-    single blob rather than a folder (measured, analysis/folder_icon_8x.png).
-    Every edge is axis-aligned, so the small render stays crisp with no
-    stair-stepped diagonals."""
-    from PIL import ImageDraw
-    img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    d = ImageDraw.Draw(img)
-    c = _hex_rgba(colour)
-    s = size
-    left, right = round(0.11 * s), round(0.89 * s)
-    tab_top, body_top, bottom = round(0.28 * s), round(0.44 * s), round(0.83 * s)
-    tab_right = round(0.56 * s)
-    w = max(1, round(s / 11))
-    d.polygon([(left, tab_top), (tab_right, tab_top), (tab_right, body_top),
-               (right, body_top), (right, bottom), (left, bottom)], outline=c, width=w)
-    return img
+_ICON_FONTS = ("segoeicons.ttf", "SegMDL2.ttf")   # Fluent, then MDL2
 
 
-def _paste_pil(size, colour):
-    """A flat monochrome clipboard glyph at ``size``, tinted to ``colour``.
+def _icon_pil(codepoint, size, colour):
+    """One stock Windows icon, tinted, centred on its ink in a size x size box.
 
-    An outline clipboard: a rounded-rectangle body with a small clip bump at
-    the top centre, both drawn as strokes rather than filled so it matches the
-    other glyphs in the column -- reads as "paste from clipboard" without
-    needing a label."""
-    from PIL import ImageDraw
-    img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
-    d = ImageDraw.Draw(img)
-    c = _hex_rgba(colour)
-    s = size
-    left, right = round(0.18 * s), round(0.82 * s)
-    top, bottom = round(0.22 * s), round(0.86 * s)
-    w = max(1, round(s / 11))
-    d.rounded_rectangle([left, top, right, bottom], radius=max(1, s // 8),
-                        outline=c, width=w, fill=None)
-    clip_l, clip_r = round(0.38 * s), round(0.62 * s)
-    clip_top, clip_bot = round(0.10 * s), round(0.30 * s)
-    d.rounded_rectangle([clip_l, clip_top, clip_r, clip_bot], radius=max(1, s // 10),
-                        outline=c, width=w, fill=None)
-    return img
+    Stock rather than hand-drawn: a shipped icon set is already consistent, and
+    drawing six marks by hand to look like a family is work with no upside.
+
+    Centred on the INK and not on the text box, which is the whole reason this
+    renders to an image instead of being a glyph in a Checkbutton: text sits on
+    a baseline with its descent below, so a circle in a fixed key reads high
+    even when the widget is centring it perfectly.  Cropping to the drawn
+    pixels and re-centring those is the only way the eye agrees.
+
+    Falls back to None when neither font is present, so a caller can keep a
+    plain text glyph rather than showing nothing.
+    """
+    from PIL import ImageDraw, ImageFont
+    import os
+    ch = chr(int(codepoint, 16))
+    font = None
+    for name in _ICON_FONTS:
+        path = os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "Fonts", name)
+        if os.path.exists(path):
+            try:
+                font = ImageFont.truetype(path, size)
+                break
+            except Exception:
+                continue
+    if font is None:
+        return None
+    pad = size // 2
+    scratch = Image.new("RGBA", (size + 2 * pad, size + 2 * pad), (0, 0, 0, 0))
+    ImageDraw.Draw(scratch).text((pad, pad), ch, font=font, fill=_hex_rgba(colour))
+    ink = scratch.getbbox()
+    if ink is None:
+        return None
+    glyph = scratch.crop(ink)
+    out = Image.new("RGBA", (size, size), (0, 0, 0, 0))
+    if glyph.width > size or glyph.height > size:
+        glyph.thumbnail((size, size))
+    out.paste(glyph, ((size - glyph.width) // 2, (size - glyph.height) // 2), glyph)
+    return out
 
 
 def _beholder_pil(size=64):
@@ -756,8 +752,9 @@ class ReviewPanel(tk.Frame):
         if getattr(self, "_palette_blank", None) is None:
             self._palette_blank = tk.PhotoImage(width=1, height=1)
         _side, _gap = layout.tool_key()
-        self.add_btn = tk.Button(addbar, text="+", font=("Segoe UI", 20, "bold"),
-                                 image=self._palette_blank, compound="center",
+        self._add_img = ImageTk.PhotoImage(_icon_pil("E710", layout.tool_glyph(), INK["dim"]))
+        self.add_btn = tk.Button(addbar,
+                                 image=self._add_img, compound="center",
                                  width=_side, height=_side,
                                  relief="flat", bd=0, cursor="hand2",
                                  background=INK["field"], foreground=INK["dim"],
@@ -766,14 +763,14 @@ class ReviewPanel(tk.Frame):
                                  padx=0, pady=0, highlightthickness=0, command=self._on_add_files)
         self.add_btn.pack(side="top")
         _attach_tooltip(self.add_btn, "Add image files")
-        self._folder_img = ImageTk.PhotoImage(_folder_pil(layout.tool_glyph(), INK["dim"]))
+        self._folder_img = ImageTk.PhotoImage(_icon_pil("E8B7", layout.tool_glyph(), INK["dim"]))
         self.add_folder_btn = tk.Button(addbar, image=self._folder_img, relief="flat",
                                         bd=0, cursor="hand2", background=INK["field"],
                                         width=_side, height=_side, compound="center",
                                         padx=0, pady=0, highlightthickness=0, command=self._on_add_folder)
         self.add_folder_btn.pack(side="top", pady=(_gap, 0))
         _attach_tooltip(self.add_folder_btn, "Add a folder of images")
-        self._paste_img = ImageTk.PhotoImage(_paste_pil(layout.tool_glyph(), INK["dim"]))
+        self._paste_img = ImageTk.PhotoImage(_icon_pil("E77F", layout.tool_glyph(), INK["dim"]))
         self.add_paste_btn = tk.Button(addbar, image=self._paste_img, relief="flat",
                                        bd=0, cursor="hand2", background=INK["field"],
                                        width=_side, height=_side, compound="center",
@@ -2927,6 +2924,7 @@ class ReviewPanel(tk.Frame):
             except tk.TclError:
                 pass
         self._palette_btns = []
+        self._palette_imgs = []
 
         # A Checkbutton sizes `width`/`height` in TEXT units, so a glyph button
         # comes out oblong however you count -- and a tool key has to be square.
@@ -2938,15 +2936,19 @@ class ReviewPanel(tk.Frame):
             self._palette_blank = tk.PhotoImage(width=1, height=1)
         side, gap = layout.tool_key()
 
-        def tool(glyph, var, command, tip, invert=False, lead=False):
+        def tool(codepoint, var, command, tip, invert=False, lead=False):
             # Inverted is for the mask brush ALONE (2026-09-15, user): it is the
             # one tool whose glyph stands for the thing it paints, so a dark
             # circle on a light key reads as the brush tip itself.  Inverting
             # the whole palette instead made every tool shout equally, which is
             # no emphasis at all.
             fg = INK["field"] if invert else INK["dim"]
-            b = tk.Checkbutton(bar, text=glyph, variable=var, command=command,
-                               image=self._palette_blank, compound="center",
+            img = _icon_pil(codepoint, layout.tool_glyph(), fg)
+            if img is not None:
+                self._palette_imgs.append(ImageTk.PhotoImage(img))
+            b = tk.Checkbutton(bar, variable=var, command=command,
+                               image=(self._palette_imgs[-1] if img is not None else self._palette_blank),
+                               text="" if img is not None else chr(0x25CF), compound="center",
                                indicatoron=False, width=side, height=side,
                                padx=0, pady=0, highlightthickness=0,
                                bd=0, relief="flat",
@@ -2964,7 +2966,7 @@ class ReviewPanel(tk.Frame):
             self._palette_btns.append(b)
             return b
 
-        tool("│", self.v_mark, self._on_mark_toggle,
+        tool("E7A8", self.v_mark, self._on_mark_toggle,
              "Mark a straight edge by hand -- which way it leans decides "
              "whether it counts as a vertical or a horizontal", lead=True)
         # Brush and box-select joined Mark here (2026-09-15, user: "either the
@@ -2977,11 +2979,11 @@ class ReviewPanel(tk.Frame):
         # A round brush gets a round button.  The first attempt used a
         # shaded SQUARE glyph, which is exactly the wrong promise for a
         # tool whose whole point is that it paints circles.
-        self._brush_chk = tool("●", self.v_stroke, self._on_stroke_toggle,
+        self._brush_chk = tool("E7E6", self.v_stroke, self._on_stroke_toggle,
                                "Paint a mask over regions to exclude from line "
                                "detection. Right-click or Alt+click to erase.",
                                invert=True)
-        self._sam_btn = tool("⬚", self.v_sam, self._on_sam_toggle,
+        self._sam_btn = tool("EF3C", self.v_sam, self._on_sam_toggle,
                              "Box-select the subject with SAM; right-click "
                              "clears the prompt")
         # Planar left the palette (2026-09-14, "less is more"). The quad was
