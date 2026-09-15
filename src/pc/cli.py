@@ -577,6 +577,13 @@ def main(argv=None) -> int:
         print("--mask file needs --mask-file <png or folder>")
         return 2
     if args.gui or not args.inputs:
+        # No files and no --gui: a terminal gets the help, anything else gets
+        # the window. The tty test is the whole rule -- double-clicking the
+        # .bat or launching from a shortcut has no tty and wants the GUI, while
+        # someone who typed the command and forgot the path wants to be told
+        # what the arguments are, not to have a window open on top of them.
+        # Read on its own the branch looks unreachable, and an audit filed it
+        # as a defect; it is reached by --gui and by every non-tty start.
         if args.gui or sys.stdin is None or not sys.stdin.isatty():
             try:
                 from .gui import run as run_gui
