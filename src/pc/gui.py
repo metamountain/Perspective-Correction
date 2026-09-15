@@ -1680,19 +1680,23 @@ class ReviewPanel(tk.Frame):
     def _on_before_motion(self, event):
         if getattr(self, "_loupe", None) is not None:
             self._loupe_move(event)
-        # Hover cursor in the top black border (Q2 ruler zone): sb_h_arrow
+        # Hover cursor in the top black border (Q2 ruler zone).  NOT
+        # `sb_h_arrow`: that is an X11 name this Tk build rejects, and
+        # `config(cursor=...)` raising inside an event handler means the
+        # whole gesture dies -- under pythonw, with no console, silently.
+        # Every cursor name in this file is checked against the live Tk.
         # indicates the invisible ruler area.  Click activates + drags.
         cw = self.c_before.winfo_width()
         ch = self.c_before.winfo_height()
         in_top_border = event.y < RULER_MARGIN and RULER_MARGIN <= event.x <= cw - RULER_MARGIN
         if in_top_border:
-            self.c_before.config(cursor="sb_h_arrow")
+            self.c_before.config(cursor="sb_v_double_arrow")
         elif getattr(self, "v_roi", None) is not None and self.v_roi.get() \
                 and getattr(self, "_ph_b", None) is not None:
             oy = self._before_off[1]
             ih = self._ph_b.height()
             near = any(abs(event.y - (oy + ty)) <= 5 for ty in (0.0, ih))
-            self.c_before.config(cursor="sb_h_arrow" if near else "")
+            self.c_before.config(cursor="sb_v_double_arrow" if near else "")
         else:
             cur = self.c_before.cget("cursor")
             if cur != "":
@@ -1813,13 +1817,6 @@ class ReviewPanel(tk.Frame):
         if ix1 > ix0 and iy1 > iy0:
             buf[iy0 - y0:iy1 - y0, ix0 - x0:ix1 - x0] = \
                 self.session.bgr[iy0:iy1, ix0:ix1]
-        # Round by masking the PIXELS, not by covering the corners afterwards.
-        # The covering version drew four ovals centred on the corners, each of
-        # radius size/2 -- which meet in the middle and hide exactly the part
-        # you are looking at.  A radius test cannot be inside-out.
-        yy, xx = np.ogrid[:crop, :crop]
-        cc = (crop - 1) / 2.0
-        buf[((yy - cc) ** 2 + (xx - cc) ** 2) > (cc * cc)] = 0
         ph, _s = _to_photo(buf, (size, size))
         c = self._loupe
         c.delete("all")
@@ -1833,7 +1830,13 @@ class ReviewPanel(tk.Frame):
         # Round, and it says "glass" rather than "a second window". Tk cannot
         # clip a canvas, so the corners are covered rather than cut: four arcs
         # of the cross colour outside the circle, then a ring on top.
-        c.create_oval(1, 1, size - 1, size - 1, outline=INK["line"], width=2)
+        # Square, filled to the edge.  It was round for a while, masked out of a
+        # square canvas -- and since Tk gives a Canvas no alpha, the corners had
+        # to be painted black, which reads as a hole cut badly rather than as
+        # glass.  Round with nothing behind it is not on offer here, so: square,
+        # every pixel of it picture, and one hairline to say where it ends.
+        c.create_rectangle(1, 1, size - 1, size - 1,
+                           outline=INK["line"], width=2)
         # Parked in the middle of the cross, where the gutter is, instead of
         # trailing the cursor across whatever switch happens to be underneath.
         # A fixed place is one you learn once; a wandering one has to be dodged
@@ -2268,7 +2271,7 @@ class ReviewPanel(tk.Frame):
             self._ruler_y = max(2, min(RULER_MARGIN - 2, event.y))
             self._ruler_visible = True
             self._ruler_dragging = True
-            self.c_before.config(cursor="sb_h_arrow")
+            self.c_before.config(cursor="sb_v_double_arrow")
             self._schedule_redraw()
             return
         if getattr(self, "v_sam", None) is not None and self.v_sam.get():
@@ -2309,6 +2312,11 @@ class ReviewPanel(tk.Frame):
             if ep is not None:
                 self._pending_mark = None
                 self._mark_drag = (ep, k)
+                # Nudging an endpoint is the finest placement this window asks
+                # for -- finer than drawing the line in the first place, which
+                # at least has two chances to be right.  The glass belongs here
+                # even more than there.
+                self._loupe_show()
                 return
         if self._pending_mark is None:
             for k in ("v", "h"):
@@ -2390,6 +2398,8 @@ class ReviewPanel(tk.Frame):
 
     def _on_mark_drag(self, event):
         """Drag an endpoint of a placed control line to refine its position."""
+        if getattr(self, "_loupe", None) is not None:
+            self._loupe_move(event)
         (line_idx, ep_idx), kind = self._mark_drag
         x = event.x - self._before_off[0]
         y = event.y - self._before_off[1]
@@ -2551,7 +2561,7 @@ class ReviewPanel(tk.Frame):
             return
         if getattr(self, "_ruler_dragging", False):
             self._ruler_dragging = False
-            self.c_before.config(cursor="sb_h_arrow")
+            self.c_before.config(cursor="sb_v_double_arrow")
             self._schedule_redraw()
             return
         if getattr(self, "_roi_drag", None) is not None:
@@ -2563,6 +2573,7 @@ class ReviewPanel(tk.Frame):
             return
         if getattr(self, "_mark_drag", None) is not None:
             self._mark_drag = None
+            self._loupe_hide()
             self._sync_from_session()
             return
         if getattr(self, "v_stroke", None) is not None and self.v_stroke.get():
@@ -3278,6 +3289,18 @@ class ReviewPanel(tk.Frame):
         ph_b = getattr(self, "_ph_b", None)
         short = min(ph_b.width(), ph_b.height()) if ph_b is not None else 0
         lw = layout.mark_line_width(short)
+        # Handles turn INWARD at the picture's edge instead of hanging over it.
+        # A mark drawn along a facade at the frame's edge put its endpoint dots
+        # and its delete button partly outside the photograph -- measured 4 px
+        # out for a dot and 8 for the button -- where they are clipped, and
+        # where a handle you cannot fully see is a handle you cannot aim at.
+        iw = ph_b.width() if ph_b is not None else 0
+        ih = ph_b.height() if ph_b is not None else 0
+
+        def inside(cx, cy, rad):
+            """Canvas coords for a handle of radius ``rad``, kept in frame."""
+            return (min(max(cx, ox + rad), ox + max(iw - rad, rad)),
+                    min(max(cy, oy + rad), oy + max(ih - rad, rad)))
         active_v = self.session.control_active
         for i, (x0, y0, x1, y1) in enumerate(
                 self.session.control_lines_for_display(self._before_scale)):
@@ -3285,11 +3308,11 @@ class ReviewPanel(tk.Frame):
             self.c_before.create_line(ox + x0, oy + y0, ox + x1, oy + y1,
                                       fill=col, width=lw)
             for ex, ey in ((x0, y0), (x1, y1)):
-                self.c_before.create_oval(ox + ex - 4, oy + ey - 4,
-                                          ox + ex + 4, oy + ey + 4,
+                hx, hy = inside(ox + ex, oy + ey, 4)
+                self.c_before.create_oval(hx - 4, hy - 4, hx + 4, hy + 4,
                                           fill=col, outline="")
             mx, my = (x0 + x1) / 2.0, (y0 + y1) / 2.0
-            self._draw_delete_handle(ox + mx, oy + my, col,
+            self._draw_delete_handle(*inside(ox + mx, oy + my, 8), col,
                                      tag=f"mark_del_v_{i}")
         active_h = len(self.session.control_hlines) >= 2
         for i, (x0, y0, x1, y1) in enumerate(
@@ -3300,11 +3323,11 @@ class ReviewPanel(tk.Frame):
                                       fill=col, width=lw, arrow="both",
                                       arrowshape=(9, 11, 4))
             for ex, ey in ((x0, y0), (x1, y1)):
-                self.c_before.create_oval(ox + ex - 4, oy + ey - 4,
-                                          ox + ex + 4, oy + ey + 4,
+                hx, hy = inside(ox + ex, oy + ey, 4)
+                self.c_before.create_oval(hx - 4, hy - 4, hx + 4, hy + 4,
                                           fill=col, outline="")
             mx, my = (x0 + x1) / 2.0, (y0 + y1) / 2.0
-            self._draw_delete_handle(ox + mx, oy + my, col,
+            self._draw_delete_handle(*inside(ox + mx, oy + my, 8), col,
                                      tag=f"mark_del_h_{i}")
         pend = getattr(self, "_pending_mark", None)
         if pend is not None:
