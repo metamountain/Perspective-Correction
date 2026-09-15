@@ -31,12 +31,33 @@ import numpy as np
 from . import geometry as G
 from . import imageio as IO
 from . import lines as L
+from . import masks as MK
 from . import model as M
 from . import planar as P
 from . import preview as PV
 from . import warp as W
 
 AUTO, MANUAL = "auto", "manual"
+
+
+def _drop_touching(ls, mask):
+    """A LineSet without the segments that touch ``mask``.
+
+    Kept beside the session rather than inside it because it is the same
+    operation for both pools and both kinds of line, and the point of the layer
+    registry is that there is exactly one of it.
+    """
+    if mask is None or ls is None or not len(ls.seg):
+        return ls
+    keep = MK.touches(ls.seg, mask)
+    if keep.all():
+        return ls
+    if not keep.any():
+        # A mask that swallows a whole pool is a user error, not a fit: keeping
+        # nothing would make the estimator answer from noise. Say nothing and
+        # keep the pool -- refit's own floors then decide.
+        return ls
+    return ls.subset(keep)
 
 
 class ReviewSession:
@@ -107,6 +128,11 @@ class ReviewSession:
         # verticals stay global on purpose, because both facades share the
         # world-vertical VP and restricting them would only burn evidence.
         self.roi_x = None
+        # Every automatic source lands here and STAYS here, separate from the
+        # union, so that switching source replaces only the source and the hand
+        # work underneath it survives.  Merging them into one array was what made
+        # "which of these four things put that red there" unanswerable.
+        self.source_mask = None
         # SAM2 click-to-select: the resulting ignore mask (True = ignore), or
         # None until computed.  The *prompts* -- box and rework points -- live
         # in the GUI, in frame fractions; the session only ever sees the result.
@@ -127,6 +153,10 @@ class ReviewSession:
             safe = self.settings.replace(mask_mode="off")
             (_, self.vert, self.horiz, self.detector,
              self.detect_info) = L.prepare(self.gray, safe, self._small, self.path)
+        # The automatic source keeps its own slot.  `prepare` hands its mask
+        # back in detect_info; taking a copy here is what lets a later source
+        # switch replace only the source while paint and SAM stay untouched.
+        self.source_mask = (self.detect_info or {}).get("mask")
         # per-line manual state: True = may be used, False = struck out by the user
         self.enabled = np.ones(len(self.vert), dtype=bool)
         # A re-detect rebuilds the mask from the automatic sources, so the
@@ -181,6 +211,68 @@ class ReviewSession:
         return info.get("mask") is not None
 
     # -- fitting ---------------------------------------------------------
+    # One ignore mask, assembled from named layers.  Every contributor is the
+    # same kind of thing -- a boolean array at analysis resolution plus which
+    # line pools it speaks for -- so there is one union and one rule, instead of
+    # four mechanisms that each had to be remembered separately.  They ADD: a
+    # pixel is ignored when any layer ignores it, because each layer is an
+    # independent claim and ignoring twice costs nothing.
+    #
+    # `roi` is the only layer that does not speak for both pools.  That is a
+    # measurement, not a carve-out: a strip that also cut verticals left the
+    # angles alone (pitch within 0.4 deg on every asset tried) and dropped
+    # confidence by about 0.11 every single time, because confidence is
+    # multiplicative and counts verticals.  It would refuse photographs that are
+    # corrected today and buy nothing for it.  One string here flips that back.
+    LAYER_SCOPE = (("source", "vh"), ("paint", "vh"),
+                   ("sam", "vh"), ("roi", "h"))
+
+    def _roi_layer(self):
+        """The facade strip as an ignore layer: everything outside it.
+
+        The strip used to be a filter on line midpoints, which made it the one
+        masking idea with its own mechanism, its own place in the pipeline and
+        its own failure mode.  As a layer it is just another claim about which
+        pixels do not count.
+        """
+        if self.roi_x is None:
+            return None
+        gh, gw = self.gray.shape[:2]
+        x0 = int(round(self.roi_x[0] / max(self.w, 1) * gw))
+        x1 = int(round(self.roi_x[1] / max(self.w, 1) * gw))
+        x0, x1 = max(0, min(x0, gw)), max(0, min(x1, gw))
+        if x1 <= x0:
+            return None
+        out = np.ones((gh, gw), dtype=bool)
+        out[:, x0:x1] = False
+        return out
+
+    def layer(self, name):
+        """One ignore layer by name, or None when it is not in force."""
+        if name == "roi":
+            return self._roi_layer()
+        return getattr(self, "sam_mask" if name == "sam" else name, None)
+
+    def ignore_mask(self, pool="vh"):
+        """Union of every layer that speaks for ``pool``; None when empty.
+
+        ``pool`` is "v", "h", or "vh" for everything -- what the red wash shows.
+        """
+        out = None
+        for name, scope in self.LAYER_SCOPE:
+            if not any(p in scope for p in pool):
+                continue
+            arr = self.layer(name)
+            if arr is None or not arr.any():
+                continue
+            out = arr.copy() if out is None else np.logical_or(out, arr)
+        return out
+
+    def _refresh_mask(self):
+        """Recompute the shown mask from the layers.  One place, one rule."""
+        if self.detect_info is not None:
+            self.detect_info["mask"] = self.ignore_mask("vh")
+
     def refit(self):
         """Re-run the estimator over the currently enabled lines.
 
@@ -210,14 +302,18 @@ class ReviewSession:
             horiz = L.LineSet(self.control_hlines)
             settings = settings.replace(min_horizontal_support=0.0)
         else:
+            # The strip is a mask layer now, applied below with every other
+            # one, so there is nothing to filter here.  It used to be the single
+            # masking idea with its own mechanism and its own place in the
+            # pipeline, which is exactly the chaos the registry removes.
             horiz = self.horiz
-            if self.roi_x is not None:
-                keep = L.in_xband(self.horiz.seg, *self.roi_x)
-                if keep.any():
-                    horiz = self.horiz.subset(keep)
-                # else: the strip holds no horizontal evidence; fall back to the
-                # full frame rather than fitting nothing -- a selection that
-                # selects nothing must not silently zero the yaw
+        # The one rule, applied in the one place, to both pools and to hand
+        # drawn lines as well as detected ones: an annotator that TOUCHES the
+        # mask is not evidence.  Control lines are not exempt -- they replace
+        # the detected pool, so a marked edge running through a masked region
+        # would otherwise be the only thing left and unchallenged.
+        vert = _drop_touching(vert, self.ignore_mask("v"))
+        horiz = _drop_touching(horiz, self.ignore_mask("h"))
         exif_px = IO.focal_px_from_exif(self.src, self.w, self.h) \
             if self.settings.use_exif_focal else None
         m = M.estimate(vert, horiz, gw, gh, settings,
@@ -673,9 +769,7 @@ class ReviewSession:
         self._paint_struck = np.zeros(len(self.vert), dtype=bool)
         if paint is None or not paint.any():
             return
-        shown = self.detect_info.get("mask")
-        self.detect_info["mask"] = (paint if shown is None
-                                    else np.logical_or(shown, paint))
+        self._refresh_mask()
         seg = self.vert.seg
         if len(seg):
             ph, pw = paint.shape[:2]
@@ -716,25 +810,15 @@ class ReviewSession:
         self.refit()
 
     def _apply_sam_mask(self):
-        """Merge ``self.sam_mask`` into the shown mask, or clear it."""
-        shown = self.detect_info.get("mask") if self.detect_info else None
-        if self.sam_mask is None:
-            if shown is not None and self.paint is not None:
-                # Rebuild from paint alone so removing the SAM mask doesn't
-                # leave a stale union behind.
-                self.detect_info["mask"] = self.paint
-            elif shown is not None:
-                self.detect_info["mask"] = None
-            return
-        if shown is None and self.paint is None:
-            self.detect_info["mask"] = self.sam_mask
-        elif shown is None:
-            self.detect_info["mask"] = np.logical_or(self.paint, self.sam_mask)
-        elif self.paint is None:
-            self.detect_info["mask"] = np.logical_or(shown, self.sam_mask)
-        else:
-            self.detect_info["mask"] = np.logical_or(
-                np.logical_or(shown, self.paint), self.sam_mask)
+        """Recompute the shown mask now that the SAM layer changed.
+
+        This was eight branches enumerating which of three arrays were present
+        and OR-ing the live ones in the right order -- and it still had to know,
+        at each branch, what "removing the SAM mask" should leave behind.  The
+        registry answers all of that by construction: ask for the union, get the
+        union.  Adding a fifth source now costs one line in `LAYER_SCOPE`.
+        """
+        self._refresh_mask()
 
     # -- current correction ----------------------------------------------
     def current_angles(self):

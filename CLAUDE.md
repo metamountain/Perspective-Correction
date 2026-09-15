@@ -209,6 +209,26 @@ everything else. The list below is not in that order; this is.
    **Still open: more tools**, and only where a gesture is already being done the
    long way. Not a wish for its own sake.
 
+   **[2026-09-15, user] One mask registry: every source is the same thing, and
+   they add.** Four sources had four mechanisms — `prepare` OR-ed the automatic
+   mask in at detect time, paint and SAM each merged themselves into the shown
+   array through an eight-branch function that had to know what removing one
+   should leave behind, and the strip was not a mask at all but a filter on line
+   *midpoints* applied in `refit`. "Which of these put that red there" had no
+   answer. Now `LAYER_SCOPE` names them, `ignore_mask(pool)` unions them, and
+   `_drop_touching` applies **one rule: an annotator that touches the mask is not
+   evidence** — hand-drawn control lines included, since they *replace* the
+   detected pool and would otherwise be the only thing left, unchallenged.
+   **The strip is the only layer not speaking for both pools, and that is
+   measured, not a carve-out.** Cutting verticals with it left the angles alone
+   (pitch within 0.4° on every asset tried) and cost ~0.11 of confidence every
+   single time — confidence is multiplicative and counts verticals, so it would
+   refuse photographs that are corrected today and buy nothing. One string in
+   `LAYER_SCOPE` flips it back if that is ever wanted. The touch rule itself was
+   measured before adoption: it keeps 46 % of detected lines where the endpoint
+   rule keeps 48 %, against a docstring that feared it would "discard straddling
+   lines wholesale". `--full` unchanged at the same two receding-row failures.
+
    **[2026-09-15] The facade strip sits beside the switch it serves, and is not
    called ROI any more.** It only ever changes which *horizontals* count, so it
    belongs under the horizontal (yaw) checkbox and nowhere else; "ROI x" was

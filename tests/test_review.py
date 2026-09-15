@@ -944,3 +944,49 @@ def test_a_sam_segment_reaches_the_estimator_and_composes_with_the_paint():
     shown = s.detect_info.get("mask")
     assert shown is None or not shown[:, -2:].all(), (
         "clearing the segment must not leave a stale union behind")
+
+
+def test_every_mask_source_is_one_kind_of_layer_and_they_add():
+    """One registry, one union, one rule -- including the facade strip.
+
+    Before this, four sources had four mechanisms: the automatic mask was OR-ed
+    in by `prepare`, paint and SAM each merged themselves into the shown array
+    through an eight-branch function that had to know what removing one should
+    leave behind, and the strip was not a mask at all but a filter on line
+    midpoints applied somewhere else entirely. Asking "which of these put that
+    red there" had no answer.
+
+    The strip is the only layer that does not speak for both pools, and that is
+    a measurement rather than a carve-out: cutting verticals with it left the
+    angles alone (pitch within 0.4 deg on every asset tried) and cost about 0.11
+    of confidence every time, which is multiplicative and counts verticals.
+    """
+    s, sc = _session()
+    gh, gw = s.gray.shape[:2]
+    assert s.ignore_mask("vh") is None, "nothing painted, nothing masked"
+
+    # The strip speaks for horizontals only.
+    s.roi_x = (0.20 * s.w, 0.80 * s.w)
+    assert s.ignore_mask("v") is None, (
+        "the facade strip must not touch the verticals -- they are what the "
+        "correction is built on, and restricting them only costs confidence")
+    h = s.ignore_mask("h")
+    assert h is not None and 0.1 < h.mean() < 0.9, f"strip covers {h}"
+
+    # Layers add: the union contains each one.
+    s.paint = np.zeros((gh, gw), dtype=bool)
+    s.paint[:, :gw // 10] = True
+    s.sam_mask = np.zeros((gh, gw), dtype=bool)
+    s.sam_mask[-gh // 10:, :] = True
+    union = s.ignore_mask("vh")
+    for name in ("paint", "sam", "roi"):
+        layer = s.layer(name)
+        assert not (layer & ~union).any(), (
+            f"the {name} layer is not inside the union -- sources must add, "
+            f"never replace one another")
+
+    # And removing them leaves nothing behind.
+    s.paint = None
+    s.sam_mask = None
+    s.roi_x = None
+    assert s.ignore_mask("vh") is None, "clearing every layer must clear the mask"
