@@ -1203,7 +1203,15 @@ class ReviewPanel(tk.Frame):
         if not self.session:
             return                     # no photo loaded; nothing to mask yet
         if getattr(self, "_mask_enabled", True) is False:
+            # Off has to mean off.  This used to return early, which blocked new
+            # applications but left an already-applied mask in force -- the box
+            # said inactive while the fit was still missing every line the mask
+            # had removed.  `set_mask("off")` re-detects without it, and the
+            # painted region is untouched by this: `paint` lives on the session
+            # and is re-applied by refit, which is what the tooltip promises.
             self.lbl_mask.configure(text="mask inactive")
+            self.session.set_mask("off")
+            self._sync_from_session()
             return
         mode = self.v_maskmode.get()
         if mode == "file" and not self.session.settings.mask_file:
@@ -2380,7 +2388,10 @@ class ReviewPanel(tk.Frame):
         _b = ttk.Button(msk, text="mask folder...", command=self._pick_mask_folder)
         _b.grid(row=0, column=2, sticky="w")
         _attach_tooltip(_b, "Choose the folder containing mask PNG files (one per image)")
-        self.v_mask_active = tk.BooleanVar(value=False)
+        # True, because `_apply_mask` defaults `_mask_enabled` to True: a box
+        # drawn unchecked while masks were in fact being applied is a control
+        # that lies about the state it reports.
+        self.v_mask_active = tk.BooleanVar(value=True)
         self.msk_active_cb = ttk.Checkbutton(msk, text="active",
                         variable=self.v_mask_active,
                         command=self._on_mask_active_toggle)
