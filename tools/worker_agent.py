@@ -25,6 +25,7 @@ import re
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.request
 
 # Windows hands this process a cp1252 stdout, and the worker writes arrows and
@@ -135,25 +136,73 @@ def _key() -> str | None:
         return None
 
 
-def _call(messages: list) -> dict:
+class _Overflow(Exception):
+    """The server refused the conversation -- on this llama.cpp build, too long."""
+
+
+def _call(messages: list, tools: bool = True) -> dict:
     # Non-thinking sampling per the Qwen3.8 card; tool calling is only measured
     # on this path.  Thinking-mode tool calling is untested -- see CLAUDE.md.
-    body = {"model": MODEL, "messages": messages, "tools": SPEC, "tool_choice": "auto",
+    body = {"model": MODEL, "messages": messages,
             "temperature": 0.7, "top_p": 0.8, "top_k": 20, "presence_penalty": 1.5,
             "max_tokens": 8192, "chat_template_kwargs": {"enable_thinking": False}}
+    if tools:
+        body.update(tools=SPEC, tool_choice="auto")
     key = _key()
     req = urllib.request.Request(
         BASE + "/chat/completions", data=json.dumps(body).encode(),
         headers={"Content-Type": "application/json",
                  **({"Authorization": "Bearer " + key} if key else {})})
-    return json.load(urllib.request.urlopen(req, timeout=900))
+    try:
+        return json.load(urllib.request.urlopen(req, timeout=900))
+    except urllib.error.HTTPError as e:
+        # 400 here is the context window, not a malformed request: every field
+        # above is the one that worked on turn 1.  Three audit runs died this
+        # way with the reading already done and nothing written down.
+        if e.code == 400:
+            raise _Overflow(f"{len(json.dumps(messages))} chars of conversation") from e
+        raise
+
+
+def _finish(msgs: list, why: str) -> str:
+    """One last turn with no tools on the table: say what you found.
+
+    A run that dies of a full context has usually done the reading -- what it
+    has not done is write the report.  Elide the older tool results to make
+    room, take the tools away so the only move left is prose, and ask.  A
+    partial report beats a trace; if even this fails the caller returns nothing
+    and the driver marks the module NOT cleared.
+    """
+    idx = [i for i, m in enumerate(msgs) if m.get("role") == "tool"]
+    for i in idx[:max(0, len(idx) - 3)]:
+        msgs[i] = {**msgs[i], "content": "(elided to make room for your answer)"}
+    msgs.append({"role": "user", "content":
+                 "Stop searching -- " + why + ".  Report your findings NOW, from "
+                 "what you have already read, in the format the package asked "
+                 "for.  If you found nothing, say that in one line."})
+    try:
+        final = (_call(msgs, tools=False)["choices"][0]["message"]
+                 .get("content") or "").strip()
+    except Exception as e:
+        print(f"\n=== forced answer failed: {type(e).__name__}: {e} ===")
+        return ""
+    if not final:
+        print("\n=== forced answer came back empty ===")
+        return ""
+    print(f"\n=== worker finished: forced answer ({why}) ===")
+    print(final)
+    return final
 
 
 def run(package: str) -> str:
     msgs = [{"role": "user", "content": package}]
+    seen = set()
     t0 = time.time()
     for turn in range(MAX_TURNS):
-        m = _call(msgs)["choices"][0]["message"]
+        try:
+            m = _call(msgs)["choices"][0]["message"]
+        except _Overflow as e:
+            return _finish(msgs, f"the context is full ({e})")
         calls = m.get("tool_calls")
         msgs.append({"role": "assistant", "content": m.get("content") or "",
                      **({"tool_calls": calls} if calls else {})})
@@ -164,16 +213,26 @@ def run(package: str) -> str:
             return final
         for c in calls:
             name = c["function"]["name"]
+            raw = c["function"]["arguments"] or "{}"
+            # The same grep three times over is what fills the window: one audit
+            # asked for `def (available|describe)` in birefnet.py on turns 15,
+            # 17 and 31 and got the same 900 characters back each time.  Reads
+            # are pure, so the second answer can be four words long.
+            if name in ("read_file", "grep") and (name, raw) in seen:
+                print(f"[{turn}] {name}({raw[:100]}) -> repeat, not re-run")
+                msgs.append({"role": "tool", "tool_call_id": c["id"],
+                             "content": "(identical call already answered above)"})
+                continue
+            seen.add((name, raw))
             try:
-                args = json.loads(c["function"]["arguments"] or "{}")
+                args = json.loads(raw)
                 out = str(IMPL[name](**args))
             except Exception as e:                       # a bad call is data, not a crash
                 args, out = {}, f"ERROR: {type(e).__name__}: {e}"
             head = (out.splitlines() or [""])[0][:120]
             print(f"[{turn}] {name}({json.dumps(args)[:100]}) -> {head}")
             msgs.append({"role": "tool", "tool_call_id": c["id"], "content": out[:6000]})
-    print(f"\n=== turn limit ({MAX_TURNS}) reached ===")
-    return ""
+    return _finish(msgs, f"the turn budget ({MAX_TURNS}) is spent")
 
 
 if __name__ == "__main__":

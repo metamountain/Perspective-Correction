@@ -82,12 +82,14 @@ DO NOT APPLY ANYTHING. You have no str_replace in this run. The architect reads
 every proposal, checks it against the file, and applies the ones that hold.
 
 RULES
-- Read {span} first with read_file. Do not read past it: another run covers
-  the rest, and reading the whole of a long file is what blew the context
-  window on the first attempt.
-- Cite only lines you actually read. Do not guess.
-- Use grep with files="*" to check whether a name is used elsewhere before
-  calling it unused -- tests and tools count as users.
+- THE LINES ARE PRINTED BELOW, numbered. You do not need read_file for them
+  and must not call it on {path}: you already have the file in front of you.
+- Cite only lines printed below. Do not guess.
+- Use grep (files="*") to check whether a name is used elsewhere before
+  calling it unused -- tests and tools count as users. That is what the tools
+  are for here; reading OTHER modules at length is not. Three runs died with
+  a full context after wandering off into pipeline.py and gui.py, and a run
+  that dies reports nothing.
 - AN EMPTY REPORT IS A GOOD ANSWER. Most files are fine. Do not manufacture
   findings to look thorough.
 - At most 6 findings. If there are more, report the 6 worst.
@@ -125,17 +127,31 @@ def modules(names):
     return paths
 
 
+def numbered(path, a, b):
+    """Lines *a*..*b* of *path*, numbered, ready to paste into the package.
+
+    The worker used to be told to fetch these itself. It fetched them, and then
+    it fetched pipeline.py, gui.py and birefnet.py as well, repeated one grep
+    three times, and hit the server's context limit with the reading done and
+    nothing written down -- three modules whose "report" was a tool trace. The
+    span is not negotiable, so it is not a request.
+    """
+    text = open(path, encoding="utf-8").read().splitlines()
+    return chr(10).join(f"{i:5d}  {t}" for i, t in enumerate(text[a - 1:b], a))
+
+
 def _run_one(pkg_path, header):
     """One worker run; returns just what it said, not its tool trace."""
     # utf-8 with replacement: Windows hands this process cp1252 and the worker
     # writes arrows like any model will.  The third time today that this exact
     # class of bug ate a run -- decoding its answer must never be able to fail.
-    # 70, not the worker default of 40: asking for an exact patch costs turns,
-    # and a run that stops mid-file produces no report at all.
+    # The turn budget stays at the worker default. It was raised to 70 here on
+    # the theory that the three dead runs had run out of turns; counting the
+    # traces afterwards showed two of them died on turn 30 and 35 of 40. They
+    # ran out of CONTEXT, and more turns would only have filled it sooner.
     r = subprocess.run([sys.executable, os.path.join(HERE, "worker_agent.py"),
                         pkg_path], cwd=REPO, capture_output=True, text=True,
-                       encoding="utf-8", errors="replace",
-                       env={**os.environ, "WORKER_MAX_TURNS": "70"})
+                       encoding="utf-8", errors="replace")
     body = (r.stdout or "") + (r.stderr or "")
     mark = "=== worker finished"
     if mark not in body:
@@ -169,7 +185,11 @@ def main() -> None:
         for k, (a, b) in enumerate(parts, 1):
             span = (f"lines {a} to {b} of {rel} (part {k} of {len(parts)})"
                     if len(parts) > 1 else f"the whole file, {n} lines")
-            pkg = PACKAGE.format(path=rel, name=name, span=span)
+            # Appended, not formatted in: source is full of braces and
+            # str.format would choke on the first dict literal it met.
+            pkg = (PACKAGE.format(path=rel, name=name, span=span)
+                   + chr(10) * 2 + "THE FILE -- " + span + ":" + chr(10) * 2
+                   + numbered(path, a, b) + chr(10))
             pkg_path = os.path.join(OUT, "_package.txt")
             with open(pkg_path, "w", encoding="utf-8") as fh:
                 fh.write(pkg)
