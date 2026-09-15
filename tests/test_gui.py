@@ -997,6 +997,49 @@ def test_theme_switch_retints_canvas_backgrounds():
         app.destroy()
 
 
+def test_phosphor_lays_a_graded_ground_and_takes_it_away_again():
+    """Phosphor is the one palette with a `grad`, and the ramp is PIXELS -- the
+    re-tint walk cannot produce it and cannot remove it.  Two halves, and the
+    second is the one that bites: INK is updated and never rebuilt, so a key
+    only one palette defines outlives that palette unless something pops it.
+    Switch Phosphor -> Light without that and the light panes keep the dark
+    ramp."""
+    from pc.gui import INK
+
+    app = _app()
+    try:
+        app.geometry("1200x800-4000+0")
+        app.update(); time.sleep(0.02)
+        app._add([ASSET])
+        _settle(app)
+        review = app.review
+        assert review is not None, "no review panel"
+
+        app._switch_theme("Phosphor")
+        _settle(app)
+        assert INK.get("grad"), "Phosphor did not put a gradient in INK"
+        for name in ("c_before", "c_after"):
+            c = getattr(review, name)
+            ground = c.find_withtag("ground")
+            assert ground, f"{name} has no ground item under Phosphor"
+            # It must cover the canvas, and it must be UNDER the photograph.
+            assert c.bbox(ground[0]) == (0, 0, c.winfo_width(), c.winfo_height()), (
+                f"{name} ground does not cover the canvas: {c.bbox(ground[0])}")
+            assert c.find_all()[0] == ground[0], (
+                f"{name} ground is not the lowest item -- it would cover the picture")
+
+        app._switch_theme("Light")
+        _settle(app)
+        assert INK.get("grad") is None, (
+            "the Phosphor gradient outlived Phosphor: INK still carries it")
+        for name in ("c_before", "c_after"):
+            c = getattr(review, name)
+            assert not c.find_withtag("ground"), (
+                f"{name} still has a graded ground after switching to Light")
+    finally:
+        app.destroy()
+
+
 def test_the_batch_bar_has_each_setting_exactly_once():
     """The 2026-09-13 duplication bug: subfolders and overwrite originals were each
     created twice in the batch options frame -- bound to the same vars, so it was

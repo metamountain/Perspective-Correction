@@ -86,7 +86,16 @@ def scene_brush(app, r):
     _pump(app, 10)
 
 
-SCENES = {"idle": scene_idle, "mark": scene_mark, "brush": scene_brush}
+def scene_phosphor(app, r):
+    """Phosphor's graded ground: the ramp must reach every edge of both wells,
+    the photograph must sit ON it and not behind it, and the chrome around it
+    must have moved with it -- a half-switched theme is the bug this catches."""
+    app._switch_theme("Phosphor")
+    _pump(app, 30)
+
+
+SCENES = {"idle": scene_idle, "mark": scene_mark, "brush": scene_brush,
+          "phosphor": scene_phosphor}
 
 
 def main() -> None:
