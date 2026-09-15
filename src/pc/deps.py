@@ -134,12 +134,19 @@ def preflight(settings):
         if not MK.gdino_available(settings.gdino_model):
             errs.append("--mask gdino needs transformers (pip install transformers timm einops) "
                         "and a Grounding DINO model dir; run --doctor for detail")
-        if not settings.birefnet_model:
+        # Ask the same question `masks._build_one` asks, or the preflight
+        # refuses a setup that works: the matte falls back to the weights
+        # vendored beside the code when nothing is configured, so an empty
+        # `birefnet_model` is not an error -- an empty fallback is.  Found by
+        # the per-module audit; the fallback landed in masks.py today and this
+        # gate was not brought along.
+        bn_path = settings.birefnet_model or MK.default_birefnet()
+        if not bn_path:
             errs.append("--mask gdino needs --birefnet-model <weights> (or 'auto') for the matte")
         else:
             from . import birefnet as BN
-            if not BN.available(settings.birefnet_model):
-                errs.append(f"--mask gdino: BiRefNet weights do not load ({settings.birefnet_model})")
+            if not BN.available(bn_path):
+                errs.append(f"--mask gdino: BiRefNet weights do not load ({bn_path})")
 
     if settings.undistort == "lensfun":
         from . import distortion as DIST
