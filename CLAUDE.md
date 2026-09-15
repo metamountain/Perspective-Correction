@@ -201,6 +201,20 @@ everything else. The list below is not in that order; this is.
    **Still open: more tools**, and only where a gesture is already being done the
    long way. Not a wish for its own sake.
 
+   **[fixed 2026-09-15] The mask "active" box lied, and off did not mean off.**
+   User: *"if the mask is shown it should act; if you switch the display off it
+   is useless"* — **display and effect were never coupled** (worker traced it:
+   `show_mask` / `mask_alpha` are read only at `review.py:800`, nowhere on the
+   effect path), so that premise was wrong. The real defect was the control
+   beside it. `v_mask_active` was built `value=False` while `_apply_mask`
+   defaults `_mask_enabled` to `True` — the box read *off* while masks were being
+   applied. And unticking it merely early-returned, blocking future applications
+   while leaving an applied mask in force, against a tooltip promising "toggle
+   mask on/off". Both fixed: the box starts True, and inactive now calls
+   `set_mask("off")` so the lines come back. **A control that reports a state it
+   does not hold is worse than no control** — it was the likeliest source of the
+   "mask behaves arbitrarily" impression.
+
    **[fixed 2026-09-15] The paint brush looked rectangular and nothing drew a
    rectangle.** Reported by the user, found by the worker on a read-only search.
    The mask *is* round (`cv2.circle`, `review.paint_ignore`) and so is the drag
