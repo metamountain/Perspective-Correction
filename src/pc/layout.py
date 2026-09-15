@@ -344,7 +344,8 @@ def tool_glyph(unit=GRID):
     unit key leaves a ring of empty on every side, which is what centres them
     to the eye rather than only to the pixel.
     """
-    return 5 * unit
+    return 6 * unit        # 24 px in a 32 px key: 5 read too thin beside
+                           # the window's own line weights
 
 
 def mark_line_width(short_edge):

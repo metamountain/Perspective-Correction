@@ -1579,14 +1579,47 @@ class ReviewPanel(tk.Frame):
         self.session.reset_to_auto()
         self._sync_from_session()
 
+    # Every drawing tool, and the handler that owns entering and leaving it.
+    # `_on_click_before` tests them in a fixed order, so two tools on at once is
+    # not "both available" -- it is the earlier one winning every click while the
+    # later one looks broken.  That is exactly how the mask brush went dead: SAM
+    # is tested first, so leaving SAM on made the brush unreachable.
+    _TOOL_MODES = (("v_mark", "_on_mark_toggle"),
+                   ("v_stroke", "_on_stroke_toggle"),
+                   ("v_sam", "_on_sam_toggle"),
+                   ("v_planar", "_on_planar_toggle"))
+
+    def _exclusive(self, keep):
+        """Put down every tool except ``keep``.
+
+        Each one is switched off through its own handler rather than by setting
+        the variable, because leaving a mode is not free: the brush has a half
+        painted stroke and a pointer grab, marking has a dangling first point,
+        planar has the loupe.  Silently clearing the flag would strand all of it.
+
+        Re-entrant by way of `_switching`: those handlers may themselves ask for
+        exclusivity, and without the guard the first pair would bounce forever.
+        """
+        if getattr(self, "_switching", False):
+            return
+        self._switching = True
+        try:
+            for var, handler in self._TOOL_MODES:
+                if var == keep:
+                    continue
+                v = getattr(self, var, None)
+                if v is not None and v.get():
+                    v.set(False)
+                    getattr(self, handler)()
+        finally:
+            self._switching = False
+
     def _on_mark_toggle(self):
         """Entering or leaving marking mode; a half-finished line is forgotten
         rather than left dangling."""
         on = self.v_mark.get()
         if on:
-            if self.v_stroke.get():
-                self.v_stroke.set(False)
-                self._on_stroke_toggle()
+            self._exclusive("v_mark")
             self._pending_mark = None
             self._loupe_show()
         else:
@@ -1616,6 +1649,7 @@ class ReviewPanel(tk.Frame):
     def _on_planar_toggle(self):
         on = self.v_planar.get()
         if on:
+            self._exclusive("v_planar")
             self._pending_mark = None
             n = len(self.session.planar_quad)
             nxt = (self._PLANAR_NAMES[n] + " corner"
@@ -2651,9 +2685,7 @@ class ReviewPanel(tk.Frame):
             self.c_before.delete("brush_cursor")
             self._stroke_pts = []
         else:
-            if getattr(self, "v_mark", None) is not None and self.v_mark.get():
-                self.v_mark.set(False)
-                self._on_mark_toggle()
+            self._exclusive("v_stroke")
             self._set_status("mask brush: drag to paint the ignored region, "
                              "right-drag to erase it, Alt+right-drag sizes the pen")
 
@@ -3284,7 +3316,9 @@ class ReviewPanel(tk.Frame):
         so Tk flips it first and a second flip here would cancel it out and
         the tool would look dead.  Read-only, like the other three.
         """
-        if not self.v_sam.get():
+        if self.v_sam.get():
+            self._exclusive("v_sam")
+        else:
             self._sam_box = None
             self._sam_points = []
             self._sam_selection = None
