@@ -30,7 +30,17 @@ def _app():
     from pc.gui import App
     try:
         app = App(start_maximized=False)
-    except Exception as exc:                       # no display (CI, headless)
+    except Exception as exc:
+        # Only a MISSING DISPLAY may skip.  This caught everything, so a plain
+        # AttributeError in `_build` -- a button wired to a method that no
+        # longer existed -- turned 32 tests into quiet skips and the module
+        # still said "0 failed".  A broken window reading as green is the exact
+        # thing this file exists to prevent, so anything that is not Tk telling
+        # us there is no screen is re-raised.
+        text = f"{type(exc).__name__}: {exc}".lower()
+        if not any(w in text for w in ("display", "no screen", "couldn't connect",
+                                       "can't find a usable", "tclerror: no ")):
+            raise
         raise SkipTest(f"no display ({exc})")      # noqa: F821
     return app
 
