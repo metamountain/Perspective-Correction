@@ -201,6 +201,19 @@ everything else. The list below is not in that order; this is.
    **Still open: more tools**, and only where a gesture is already being done the
    long way. Not a wish for its own sake.
 
+   **[fixed 2026-09-15] The paint brush looked rectangular and nothing drew a
+   rectangle.** Reported by the user, found by the worker on a read-only search.
+   The mask *is* round (`cv2.circle`, `review.paint_ignore`) and so is the drag
+   preview (`create_line(capstyle="round", joinstyle="round")`, the only place in
+   the repo setting either). The squares were made on **display**:
+   `preview.tint_mask` upsampled the analysis-res mask (long edge
+   `detect_max_edge`, 1600) to the full photograph with `INTER_NEAREST`, which has
+   no sub-pixel blending, so every round edge arrived as a staircase of right
+   angles baked into the pixels before `create_image` ever saw them. Now
+   `INTER_LINEAR` plus a per-pixel blend by coverage instead of a hard in/out
+   test. **The lesson is the search order**: two round things and a square result
+   means the fault is between them, not in either.
+
 **B. Estimator defaults — still one constant each.**
 
 4. **Re-decide the remaining batch-era caps as manual-first defaults.**
