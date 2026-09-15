@@ -110,7 +110,12 @@ def download_weights(progress_cb=None) -> str:
     """
     import urllib.request
     dest = os.path.join(BUNDLED, DEFAULT_MODEL)
-    if os.path.isfile(dest) and os.path.getsize(dest) > 10_000_000:
+    # The real archive is 102.9 MB.  The floor here was 10 MB, so a download
+    # cut off after a tenth of the file passed as complete: the button then
+    # reported "weights ready" and torch.load died later on a truncated zip,
+    # naming neither DeepLSD nor the file.  Measured, with room for a
+    # differently packed release.
+    if os.path.isfile(dest) and os.path.getsize(dest) > 90_000_000:
         return dest
     os.makedirs(BUNDLED, exist_ok=True)
     tmp = dest + ".part"
