@@ -1724,6 +1724,30 @@ class ReviewPanel(tk.Frame):
                                   outline="black", width=1, tags="brush_cursor")
 
     # -- the loupe: full-resolution magnifier for placing marks precisely ---
+    def _loupe_park(self, size):
+        """Where the glass sits: the black gutter BETWEEN the two pictures.
+
+        "Centre of the panel" put it half over the mask row, because the panel
+        is pictures on top and controls underneath and its middle is in the
+        controls.  The cross's middle is the gap between the two preview panes,
+        level with them -- the one place on this window where nothing is drawn
+        and nothing can be clicked.
+        """
+        # Screen coordinates, then back into this panel's frame.  `winfo_x` is
+        # relative to a widget's OWN parent, and these canvases live inside the
+        # cross's cells while the glass is placed on the panel -- so mixing the
+        # two put it in the middle of the picture instead of beside it.
+        try:
+            px, py = self.winfo_rootx(), self.winfo_rooty()
+            bx, bw = self.c_before.winfo_rootx(), self.c_before.winfo_width()
+            by, bh = self.c_before.winfo_rooty(), self.c_before.winfo_height()
+            ax = self.c_after.winfo_rootx()
+        except tk.TclError:
+            return (self.winfo_width() - size) // 2, (self.winfo_height() - size) // 2
+        cx = (bx + bw + ax) // 2 - px
+        cy = by + bh // 2 - py
+        return max(0, cx - size // 2), max(0, cy - size // 2)
+
     def _loupe_show(self):
         """Create the glass.  A canvas placed over the panel, not a Toplevel:
         it only has to live while the cursor is over the before field, which
@@ -1739,8 +1763,7 @@ class ReviewPanel(tk.Frame):
         # view and only slid into place on the first MOTION, so pressing to
         # start a mark showed nothing at all until you moved -- and seeing
         # the point before you move it is the entire purpose of the glass.
-        w.place(x=(self.winfo_width() - size) // 2,
-                y=(self.winfo_height() - size) // 2)
+        w.place(**dict(zip(("x", "y"), self._loupe_park(size))))
         # Raise via the raw window command: on a Canvas both `lift()` and
         # `tkraise()` are the item-stacking commands (they need an item id), so
         # neither raises the widget itself.  `raise <window>` does.
@@ -1781,10 +1804,8 @@ class ReviewPanel(tk.Frame):
         W, H = self.session.w, self.session.h
         # Magnify around the damped point, not the raw cursor: the mark end is
         # where the line goes, and the glass must be centred on it.
-        ix, iy = self._damped((event.x - self._before_off[0]) / self._before_scale,
-                              (event.y - self._before_off[1]) / self._before_scale)
-        px = int(round(ix))
-        py = int(round(iy))
+        px = int(round((event.x - self._before_off[0]) / self._before_scale))
+        py = int(round((event.y - self._before_off[1]) / self._before_scale))
         x0, y0 = px - crop // 2, py - crop // 2
         buf = np.zeros((crop, crop, 3), dtype=np.uint8)
         ix0, iy0 = max(0, x0), max(0, y0)
@@ -1792,6 +1813,13 @@ class ReviewPanel(tk.Frame):
         if ix1 > ix0 and iy1 > iy0:
             buf[iy0 - y0:iy1 - y0, ix0 - x0:ix1 - x0] = \
                 self.session.bgr[iy0:iy1, ix0:ix1]
+        # Round by masking the PIXELS, not by covering the corners afterwards.
+        # The covering version drew four ovals centred on the corners, each of
+        # radius size/2 -- which meet in the middle and hide exactly the part
+        # you are looking at.  A radius test cannot be inside-out.
+        yy, xx = np.ogrid[:crop, :crop]
+        cc = (crop - 1) / 2.0
+        buf[((yy - cc) ** 2 + (xx - cc) ** 2) > (cc * cc)] = 0
         ph, _s = _to_photo(buf, (size, size))
         c = self._loupe
         c.delete("all")
@@ -1805,19 +1833,12 @@ class ReviewPanel(tk.Frame):
         # Round, and it says "glass" rather than "a second window". Tk cannot
         # clip a canvas, so the corners are covered rather than cut: four arcs
         # of the cross colour outside the circle, then a ring on top.
-        r = size // 2
-        c.create_oval(-r, -r, r, r, outline="", fill=INK["cross"])
-        c.create_oval(size - r, -r, size + r, r, outline="", fill=INK["cross"])
-        c.create_oval(-r, size - r, r, size + r, outline="", fill=INK["cross"])
-        c.create_oval(size - r, size - r, size + r, size + r,
-                      outline="", fill=INK["cross"])
         c.create_oval(1, 1, size - 1, size - 1, outline=INK["line"], width=2)
         # Parked in the middle of the cross, where the gutter is, instead of
         # trailing the cursor across whatever switch happens to be underneath.
         # A fixed place is one you learn once; a wandering one has to be dodged
         # every time.
-        pw, ph_ = self.winfo_width(), self.winfo_height()
-        c.place(x=(pw - size) // 2, y=(ph_ - size) // 2)
+        c.place(**dict(zip(("x", "y"), self._loupe_park(size))))
 
     def _clear_marks(self):
         if self.session.clear_control_lines() or \
@@ -2119,10 +2140,19 @@ class ReviewPanel(tk.Frame):
         # sized to the radius `_grab_handle` accepts.  The midpoints are how an
         # edge moves on its own -- top/bottom vertically, left/right
         # horizontally -- instead of re-placing the whole rectangle.
+        # Turned INWARD at the edges rather than centred on them.  A handle
+        # centred on the rectangle's corner hangs half its width outside it, and
+        # when the crop is the whole frame that half falls off the canvas and is
+        # clipped -- the top row came out as slivers, and the corner ones sat at
+        # y = -5.  Nudging each one inside by its own half-width keeps every
+        # handle whole and still on the line it grabs.
+        h = 5
         for hx, hy in ((x0, y0), (x1, y0), (x0, y1), (x1, y1),
                        (0.5 * (x0 + x1), y0), (0.5 * (x0 + x1), y1),
                        (x0, 0.5 * (y0 + y1)), (x1, 0.5 * (y0 + y1))):
-            self.c_after.create_rectangle(hx - 5, hy - 5, hx + 5, hy + 5,
+            cx = min(max(hx, x0 + h), x1 - h) if x1 - x0 > 2 * h else hx
+            cy = min(max(hy, y0 + h), y1 - h) if y1 - y0 > 2 * h else hy
+            self.c_after.create_rectangle(cx - h, cy - h, cx + h, cy + h,
                                           fill="#4da3ff", outline="#0b1017",
                                           width=1, tags=tag)
 
@@ -2309,25 +2339,6 @@ class ReviewPanel(tk.Frame):
             return
         self._sync_from_session()
 
-    def _damped(self, x, y):
-        """Where the mark end really is, for a cursor at ``(x, y)``.
-
-        Image coordinates in, image coordinates out.  While the glass is up the
-        hand is geared down by exactly the magnification: the view is twice the
-        size, so the hand covers half the ground, and the two agree.  Without
-        the glass there is nothing to be precise about and the cursor is the
-        answer.
-        """
-        pend = getattr(self, "_pending_mark", None)
-        if pend is None or getattr(self, "_loupe", None) is None:
-            return x, y
-        short = max(1, min(self.c_before.winfo_width(),
-                           self.c_before.winfo_height()))
-        size, crop, _off = layout.loupe(short)
-        mag = max(1.0, size / max(crop, 1))
-        x0, y0 = pend
-        return x0 + (x - x0) / mag, y0 + (y - y0) / mag
-
     def _mark_rubber(self, event):
         """Draw the line being dragged, from the pressed point to the cursor.
 
@@ -2341,7 +2352,7 @@ class ReviewPanel(tk.Frame):
         self.c_before.delete("mark_rubber")
         # Tinted by the plane this drag would land in, recomputed on every
         # motion: the classification is invisible otherwise until too late.
-        dx, dy = self._damped(event.x - ox, event.y - oy)
+        dx, dy = (event.x - ox, event.y - oy)
         col = ("#00e5ff"
                if self._kind_for(x0, y0, dx, dy) == "v"
                else "#e040fb")
@@ -2365,8 +2376,8 @@ class ReviewPanel(tk.Frame):
         self._pending_mark = None
         self._mark_moved = False
         self._loupe_hide()              # the drag is over
-        x, y = self._damped(event.x - self._before_off[0],
-                            event.y - self._before_off[1])
+        x = event.x - self._before_off[0]
+        y = event.y - self._before_off[1]
         added = self.session.add_control_line(x0, y0, x, y,
                                               display_scale=self._before_scale,
                                               kind=self._kind_for(x0, y0, x, y))
