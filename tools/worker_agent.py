@@ -68,10 +68,18 @@ def read_file(path: str, start: int = 1, end: int = 0) -> str:
     return "\n".join(f"{i}: {l}" for i, l in enumerate(lines[start - 1:end], start))
 
 
-def grep(pattern: str) -> str:
-    r = subprocess.run(["git", "grep", "-nE", "-e", pattern, "--", "*.py"],
-                       cwd=REPO, capture_output=True, text=True)
-    return (r.stdout or "(no matches)")[:3000]
+def grep(pattern: str, files: str = "*.py") -> str:
+    """Search tracked files. `files` is a git pathspec; "*" searches everything.
+
+    It was hardwired to *.py, which is right for a code change and useless for
+    an investigation: logs, skill notes and configs are where the evidence of a
+    failing backend lives, and the worker could not reach any of them.
+    """
+    cmd = ["git", "grep", "-nE", "-e", pattern]
+    if files and files != "*":
+        cmd += ["--", files]
+    r = subprocess.run(cmd, cwd=REPO, capture_output=True, text=True)
+    return (r.stdout or "(no matches)")[:4000]
 
 
 def str_replace(path: str, old: str, new: str) -> str:
@@ -101,8 +109,9 @@ def run_tests(full: bool = False) -> str:
 _TOOLS = [
     ("read_file", "Read a repo file with line numbers.",
      {"path": {"type": "string"}, "start": {"type": "integer"}, "end": {"type": "integer"}}, ["path"]),
-    ("grep", "Search every tracked .py file. Extended regex: a|b works.",
-     {"pattern": {"type": "string"}}, ["pattern"]),
+    ("grep", "Search tracked files (extended regex: a|b works). `files` is a git "
+              "pathspec, default '*.py'; pass '*' to search logs and docs too.",
+     {"pattern": {"type": "string"}, "files": {"type": "string"}}, ["pattern"]),
     ("str_replace", "Replace one unique verbatim snippet in a file.",
      {"path": {"type": "string"}, "old": {"type": "string"}, "new": {"type": "string"}},
      ["path", "old", "new"]),
