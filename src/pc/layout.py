@@ -283,9 +283,22 @@ LOUPE_MAG = 2        # screen px per image px
 LOUPE_OFFSET = 24    # cursor-to-window distance, so the glass never covers the point
 
 
-def loupe():
-    """``(window_px, crop_px, offset_px)`` for the planar corner loupe."""
-    return LOUPE_CROP * LOUPE_MAG, LOUPE_CROP, LOUPE_OFFSET
+def loupe(field_short=0):
+    """``(window_px, crop_px, offset_px)`` for the magnifier.
+
+    The size follows the window rather than a constant: parked in the middle of
+    the cross it has room, and a fixed 162 px was small on a large screen and
+    intrusive on a small one. Half the short edge of one quadrant, clamped, so
+    it never eats a field it is supposed to help you read.
+
+    ``field_short`` is the short edge of one quadrant; 0 keeps the old size for
+    callers that have not measured one yet.
+    """
+    if field_short <= 0:
+        return LOUPE_CROP * LOUPE_MAG, LOUPE_CROP, LOUPE_OFFSET
+    size = int(max(180, min(360, field_short * 0.55)))
+    size -= size % 2                      # even, so the crosshair sits centred
+    return size, max(41, size // LOUPE_MAG) | 1, LOUPE_OFFSET
 
 
 # --------------------------------------------------------------------------
