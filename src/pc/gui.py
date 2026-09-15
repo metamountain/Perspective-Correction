@@ -2900,15 +2900,34 @@ class ReviewPanel(tk.Frame):
                 pass
         self._palette_btns = []
 
-        def tool(glyph, var, command, tip):
+        # A Checkbutton sizes `width`/`height` in TEXT units, so a glyph button
+        # comes out oblong however you count -- and a tool key has to be square.
+        # With an image attached they are PIXELS instead, which is what this
+        # 1x1 blank buys: a real 36x36 key with the glyph centred on it.  Kept
+        # on self because Tk drops an image nobody references and the button
+        # then silently loses its size.
+        if getattr(self, "_palette_blank", None) is None:
+            self._palette_blank = tk.PhotoImage(width=1, height=1)
+        side, gap = layout.tool_key()
+
+        def tool(glyph, var, command, tip, invert=False):
+            # Inverted is for the mask brush ALONE (2026-09-15, user): it is the
+            # one tool whose glyph stands for the thing it paints, so a dark
+            # circle on a light key reads as the brush tip itself.  Inverting
+            # the whole palette instead made every tool shout equally, which is
+            # no emphasis at all.
+            fg = INK["field"] if invert else INK["dim"]
             b = tk.Checkbutton(bar, text=glyph, variable=var, command=command,
-                               indicatoron=False, width=3, bd=0, relief="flat",
-                               font=("Segoe UI", 14), cursor="hand2",
-                               background=INK["field"], foreground=INK["dim"],
-                               activebackground=INK["line"],
-                               activeforeground=INK["text"],
-                               selectcolor=INK["line"])
-            b.pack(side="top", pady=(4, 0))
+                               image=self._palette_blank, compound="center",
+                               indicatoron=False, width=side, height=side,
+                               bd=0, relief="flat",
+                               font=("Segoe UI", 20), cursor="hand2",
+                               background=INK["text"] if invert else INK["field"],
+                               foreground=fg,
+                               activebackground=INK["dim"] if invert else INK["line"],
+                               activeforeground=fg if invert else INK["text"],
+                               selectcolor=INK["dim"] if invert else INK["line"])
+            b.pack(side="top", pady=(gap, 0))
             _attach_tooltip(b, tip)
             self._palette_btns.append(b)
             return b
@@ -2928,7 +2947,8 @@ class ReviewPanel(tk.Frame):
         # tool whose whole point is that it paints circles.
         self._brush_chk = tool("●", self.v_stroke, self._on_stroke_toggle,
                                "Paint a mask over regions to exclude from line "
-                               "detection. Right-click or Alt+click to erase.")
+                               "detection. Right-click or Alt+click to erase.",
+                               invert=True)
         self._sam_btn = tool("⬚", self.v_sam, self._on_sam_toggle,
                              "Box-select the subject with SAM; right-click "
                              "clears the prompt")
