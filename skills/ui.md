@@ -8,7 +8,7 @@ Stick to what is there: one window, black theme, existing rows and frames.
   bg #16181c, panel #1d2025, field #101216, line #2b2f36, text #e6e8ec,
   dim #8b929c, accent #4da3ff, ok #5ac37f, warn #e0b24c, err #ef6b6b. It also
   doubles as the "Minimal Black" entry of `THEMES`, a dict of named
-  alternative palettes (C64, Amiga 500, Graphic Designer, Light, Phosphor);
+  alternative palettes (C64, Amiga 500, Light, Phosphor);
   the header's theme combobox calls `App._switch_theme`, which does
   `INK.update(new)` in place, re-runs `apply_theme()` for the ttk styles, then
   walks the tree with `_retint_bg` to fix up plain `tk` widgets (Canvas,
