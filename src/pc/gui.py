@@ -404,7 +404,7 @@ def _hex_rgba(hexc, alpha=255):
 _ICON_FONTS = ("segoeicons.ttf", "SegMDL2.ttf")   # Fluent, then MDL2
 
 
-def _icon_pil(codepoint, size, colour):
+def _icon_pil(codepoint, size, colour, emoji=False):
     """One stock Windows icon, tinted, centred on its ink in a size x size box.
 
     Stock rather than hand-drawn: a shipped icon set is already consistent, and
@@ -422,8 +422,12 @@ def _icon_pil(codepoint, size, colour):
     from PIL import ImageDraw, ImageFont
     import os
     ch = chr(int(codepoint, 16))
+    # Colour emoji live in their own font and carry their own palette, so
+    # they are drawn with embedded_color and no tint.  The icon fonts have
+    # no dinosaur: they answer with tofu, which measures as a 12x17 box and
+    # would have shipped looking like a deliberate glyph.
     font = None
-    for name in _ICON_FONTS:
+    for name in (("seguiemj.ttf",) if emoji else _ICON_FONTS):
         path = os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "Fonts", name)
         if os.path.exists(path):
             try:
@@ -435,7 +439,10 @@ def _icon_pil(codepoint, size, colour):
         return None
     pad = size // 2
     scratch = Image.new("RGBA", (size + 2 * pad, size + 2 * pad), (0, 0, 0, 0))
-    ImageDraw.Draw(scratch).text((pad, pad), ch, font=font, fill=_hex_rgba(colour))
+    if emoji:
+        ImageDraw.Draw(scratch).text((pad, pad), ch, font=font, embedded_color=True)
+    else:
+        ImageDraw.Draw(scratch).text((pad, pad), ch, font=font, fill=_hex_rgba(colour))
     ink = scratch.getbbox()
     if ink is None:
         return None
@@ -2509,7 +2516,14 @@ class ReviewPanel(tk.Frame):
         # only read when the source combobox says gdino, so it stays inert in the
         # other three modes rather than needing to be hidden.
         self.v_gdino_prompt = tk.StringVar(value=self.settings.gdino_prompt or "building")
-        ttk.Label(msk, text="gdino prompt", width=18).grid(row=3, column=0, sticky="w", pady=(4, 0))
+        # The mask source named after a dinosaur gets one, small (user, 2026-09-15).
+        # Kept on self: Tk drops an unreferenced image and the label goes blank.
+        _trex = _icon_pil("1F996", 16, "", emoji=True)
+        _lbl_kw = {"text": "gdino prompt", "width": 18}
+        if _trex is not None:
+            self._trex_img = ImageTk.PhotoImage(_trex)
+            _lbl_kw.update(image=self._trex_img, compound="left")
+        ttk.Label(msk, **_lbl_kw).grid(row=3, column=0, sticky="w", pady=(4, 0))
         gentry = ttk.Entry(msk, textvariable=self.v_gdino_prompt, width=24)
         gentry.grid(row=3, column=1, columnspan=3, sticky="ew", padx=6, pady=(4, 0))
         gentry.bind("<Return>", lambda e: self._apply_mask())
