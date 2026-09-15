@@ -102,6 +102,19 @@ shelved and is history now, not instruction.
   **The check is one gesture:** switch the theme and look for anything still
   wearing the old colours. Sizes obey the same idea one rule up — they live in
   `layout.py`, colours live in `INK`, and neither is typed into a widget.
+- **Mechanical work goes to the worker; the architect measures and decides.**
+  (user, 2026-09-15, after watching it go the other way all day.) It is local and
+  free, and every hour it sat idle was an hour of hand-editing that bought
+  nothing. The split that works:
+  * **Worker**: deletions, renames, applying a written spec, a pattern in several
+    places, and *read-only hunts* — it is genuinely good at those and cites
+    `file:line` for every claim. Write the package with every name supplied; it
+    cannot grep for what you failed to tell it.
+  * **Architect**: deciding what should be true, and **running the thing to find
+    out what is**. That is the half a worker cannot do — it has no shell.
+  The reflex to fix it yourself "because writing the spec costs as much" is the
+  trap. Writing the spec is also what makes you state the change exactly, and a
+  spec that is hard to write is a change that was not thought through.
 - Anything fiddly belongs in Python, not in a `.bat`.
 
 ## Environment split (short version)
