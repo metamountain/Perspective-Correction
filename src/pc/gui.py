@@ -922,9 +922,11 @@ class ReviewPanel(tk.Frame):
         # after pane, plus how the opened band is filled.  Each column is about
         # half the old block, so opening the controls costs the picture ~140 px
         # instead of ~282.
-        # The panel is the EDIT side only now: the FIND controls (line detector +
-        # ROI x) moved to the lower-left tools field, beside the input image where
-        # what-the-estimator-sees belongs.  One column, so the sliders that need
+        # The panel is the EDIT side only now: the FIND controls (line detector)
+        # moved to the lower-left tools field, beside the input image where
+        # what-the-estimator-sees belongs.  The facade strip stayed here -- it
+        # restricts horizontal evidence and nothing else, so it sits under the
+        # yaw switch it shapes.  One column, so the sliders that need
         # horizontal room to drag take all of it -- an even split used to starve
         # the tracks on a laptop: label + spinbox leave ~14 px.
         rightcol = ttk.Frame(adj)
@@ -946,9 +948,63 @@ class ReviewPanel(tk.Frame):
         # squares the camera onto ONE horizontal direction, so on a corner view
         # with two facades it necessarily makes the second one worse.  See the
         # yaw entry in CLAUDE.md -- this is a special case, not a default.
-        ttk.Checkbutton(ctl, text="horizontal (yaw) - one facade only",
-                        variable=self.v_correct_horizontal,
-                        command=self._on_horizontal_toggle).grid(row=0, column=0, sticky="w")
+        _hchk = ttk.Checkbutton(ctl, text="horizontal (yaw) - one facade only",
+                                variable=self.v_correct_horizontal,
+                                command=self._on_horizontal_toggle)
+        _hchk.grid(row=0, column=0, sticky="w")
+        _attach_tooltip(
+            _hchk,
+            "Square the camera onto one horizontal direction.\n"
+            "On a corner view with two facades this necessarily makes the second "
+            "one worse - it is a special case, not a default. Pair it with the "
+            "facade strip below to say WHICH facade you mean.")
+        # The facade strip (the former ROI-x control) restricts horizontal
+        # evidence and nothing else, so it sits in the row under the yaw switch
+        # it shapes:
+        # for corner views where one facade's horizontals would otherwise vote
+        # against the other.  Off by default (roi_x stays None = no change);
+        # the two spinboxes are fractions of the width in percent.
+        # **Made once**, same trap as `v_stroke` above: `_build` re-runs on every
+        # load, so rebuilding these variables would hand the widgets a fresh one
+        # while any earlier state pointed at the old -- the strip would silently
+        # stop working from the second photograph onwards.
+        if getattr(self, "v_roi", None) is None:
+            self.v_roi = tk.BooleanVar(value=False)
+            # Default to a 20-80 % strip, not 0-100: the full frame restricts nothing,
+            # so the useless default is also the unhelpful one.  The two draggable
+            # rulers on the before pane (see `_draw_roi_rulers`) are the primary way to
+            # set this; these spinboxes stay as a numeric fine-tune beside them.
+            self.v_roi_x0 = tk.DoubleVar(value=20.0)
+            self.v_roi_x1 = tk.DoubleVar(value=80.0)
+        self._roi_chk = ttk.Checkbutton(ctl, text="facade strip", variable=self.v_roi,
+                                        command=self._apply_roi)
+        self._roi_chk.grid(row=1, column=0, sticky="w", pady=(6, 0))
+        _attach_tooltip(
+            self._roi_chk,
+            "Corner views only: when two facades meet, their horizontals pull the "
+            "correction in opposite directions and the fit splits the difference.\n"
+            "Tick this and two rulers appear on the left image; drag them so the "
+            "strip covers ONE facade. Horizontals outside the strip stop counting.\n"
+            "Verticals are never restricted - they are what the correction is built "
+            "on, and they agree across both facades.\n"
+            "It sits beside the horizontal (yaw) switch because it does nothing "
+            "else: it only ever changes which horizontals are used.")
+        _s0 = ttk.Spinbox(ctl, from_=0, to=100, increment=5, width=4,
+                          textvariable=self.v_roi_x0, command=self._apply_roi)
+        _s0.grid(row=1, column=1, sticky="w", pady=(6, 0), padx=(6, 6))
+        _s0.bind("<KeyRelease>", self._apply_roi)
+        _attach_tooltip(
+            _s0,
+            "Left and right edge of the strip, as a percentage of image width.\n"
+            "The rulers on the picture are the quicker way; these are the fine tune.")
+        _s1 = ttk.Spinbox(ctl, from_=0, to=100, increment=5, width=4,
+                          textvariable=self.v_roi_x1, command=self._apply_roi)
+        _s1.grid(row=1, column=2, sticky="w", pady=(6, 0), padx=(0, 0))
+        _s1.bind("<KeyRelease>", self._apply_roi)
+        _attach_tooltip(
+            _s1,
+            "Left and right edge of the strip, as a percentage of image width.\n"
+            "The rulers on the picture are the quicker way; these are the fine tune.")
         # ±30, not the automatic cap: a hand is allowed to ask for what the
         # estimator's 8 deg gate refuses -- the manual path carries no limit.
         self._yaw_scale = ttk.Scale(ctl, from_=-60, to=60, variable=self.v_yaw,
@@ -964,9 +1020,10 @@ class ReviewPanel(tk.Frame):
             self._yaw_scale.configure(state="disabled")
             self._yaw_spin.configure(state="disabled")
 
-        # The line detector and ROI x moved to the lower-left tools field with
-        # the rest of the FIND controls (see `_build_tools`) -- beside the input
-        # image, where what-the-estimator-sees belongs.  This panel is EDIT only.
+        # The line detector moved to the lower-left tools field with the rest of
+        # the FIND controls (see `_build_tools`) -- beside the input image, where
+        # what-the-estimator-sees belongs.  The facade strip stayed here, under
+        # the yaw switch it shapes.  This panel is EDIT only.
 
         # The masking controls (source + BiRefNet model picker) live in the
         # lower-left tools field now -- App._build calls `_build_tools`, which
@@ -2315,11 +2372,11 @@ class ReviewPanel(tk.Frame):
         line the stroke crosses is erased (deactivated) at once, like a pencil.
         The width doubles as the hit radius, so what you paint is what erases.
         Masking -- moved here from the lower-right cell: source + BiRefNet model
-        picker.  The line detector and ROI x also live here now, moved out of the
+        picker.  The line detector also lives here now, moved out of the
         lower-right adjustments panel: what-the-estimator-sees belongs beside the
         input image, not with the angles that edit the result."""
         # FIND controls, beside the input image: which detector feeds the
-        # estimator, and the ROI x strip that restricts its horizontal evidence.
+        # estimator.
         det = ttk.Frame(parent)
         det.pack(fill="x", pady=(0, 4))
         self.v_detector = tk.StringVar(value=self.settings.detector)
@@ -2336,34 +2393,11 @@ class ReviewPanel(tk.Frame):
             _attach_tooltip(app.btn_weights, "Download or check detector model weights")
         det.columnconfigure(3, weight=1)
 
-        # ROI x: restrict horizontal evidence to a vertical strip of the frame,
-        # for corner views where one facade's horizontals would otherwise vote
-        # against the other.  Off by default (roi_x stays None = no change);
-        # the two spinboxes are fractions of the width in percent.
-        self.v_roi = tk.BooleanVar(value=False)
-        self._roi_chk = ttk.Checkbutton(det, text="ROI x", variable=self.v_roi,
-                                        command=self._apply_roi)
-        self._roi_chk.grid(row=1, column=0, sticky="w", pady=(6, 0))
-        _attach_tooltip(
-            self._roi_chk,
-            "Restrict which horizontal lines count, for corner views: pick the "
-            "strip covering one facade so its horizontals don't fight the other's. "
-            "Tick it on to draw two draggable rulers on the left image; drag them "
-            "to set the strip -- the greyed-out sides are ignored.")
-        # Default to a 20-80 % strip, not 0-100: the full frame restricts nothing,
-        # so the useless default is also the unhelpful one.  The two draggable
-        # rulers on the before pane (see `_draw_roi_rulers`) are the primary way to
-        # set this; these spinboxes stay as a numeric fine-tune beside them.
-        self.v_roi_x0 = tk.DoubleVar(value=20.0)
-        self.v_roi_x1 = tk.DoubleVar(value=80.0)
-        _s0 = ttk.Spinbox(det, from_=0, to=100, increment=5, width=4,
-                          textvariable=self.v_roi_x0, command=self._apply_roi)
-        _s0.grid(row=1, column=1, sticky="w", pady=(6, 0))
-        _s0.bind("<KeyRelease>", self._apply_roi)
-        _s1 = ttk.Spinbox(det, from_=0, to=100, increment=5, width=4,
-                          textvariable=self.v_roi_x1, command=self._apply_roi)
-        _s1.grid(row=1, column=2, sticky="w", pady=(6, 0))
-        _s1.bind("<KeyRelease>", self._apply_roi)
+        # The facade strip (the former ROI-x control) moved up beside the
+        # horizontal (yaw) checkbox in `_build` -- it restricts horizontal
+        # evidence and nothing else, so it sits with the switch it shapes.  Its
+        # variables are made there, once, for the stale-variable reason written
+        # out there.
 
         # The three tools that used to sit here -- Mask brush, SAM, Mark --
         # are buttons in the picture-corner palette now (2026-09-15, user).
