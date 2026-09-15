@@ -189,7 +189,19 @@ everything else. The list below is not in that order; this is.
 
 4. **Re-decide the remaining batch-era caps as manual-first defaults.**
    `max_horizontal_deg` has now moved twice on exactly this argument (8 → 30 → 60).
-   Still unexamined: `max_pitch_deg`, the multiplicative confidence veto, and P9's
+   **`max_pitch_deg` and `max_roll_deg` are measured and the answer is "leave
+   them" (2026-09-15, `tools/cap_sweep.py`).** Run uncapped over the 33-asset
+   top-level pool, the steepest correction the estimator *wants* is **28.62°** of
+   pitch (`lochfassade.jpg`, conf 0.62) against a 30° cap, and **3.42°** of roll
+   against a 12° cap. **Neither cap refuses a single photograph in the pool**, so
+   there is no refused correction to argue from and nothing to re-decide — the
+   `max_horizontal_deg` argument does not transfer, because that cap *was*
+   binding. Note the pitch headroom is only 1.4°: the cap is idle, not generous,
+   and one steeper photograph would make it live. **If it is ever to move, first
+   get a photograph it refuses** — a cap cannot be judged by the corrections it
+   lets through. 39 % of the pool wants more than 10° of pitch, so the estimator
+   is using the range it has.
+   Still unexamined: the multiplicative confidence veto and P9's
    refuse-whole-correction recommendation. Each has a documented sweep behind it.
 
 **C. Decide, do not necessarily fix.**
