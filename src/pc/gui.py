@@ -1882,7 +1882,12 @@ class ReviewPanel(tk.Frame):
         instant a click lands, without waiting for a re-render."""
         ox, oy = self._before_off
         q = self.session.planar_quad
-        pts = [(ox + px / self._before_scale, oy + py / self._before_scale)
+        # Times the scale, not divided by it.  `planar_quad` is already in image
+        # coordinates -- the click divided to get there -- so dividing again drew
+        # the quad at the square of the reduction: a corner clicked at display
+        # x=40 was stored as 26 and drawn at 17.  Same fault as the SAM rubber
+        # band, in a second place, found by measuring both.
+        pts = [(ox + px * self._before_scale, oy + py * self._before_scale)
                for px, py in q]
         if len(pts) >= 3:
             self.c_before.create_polygon(
@@ -3453,10 +3458,17 @@ class ReviewPanel(tk.Frame):
         x1 = (event.x - ox) / self._before_scale
         y1 = (event.y - oy) / self._before_scale
         self.c_before.delete("sam_prompts")
-        # Draw in CANVAS coordinates (add offset)
+        # Canvas coordinates are origin PLUS image coordinates times the display
+        # scale.  The press divided by the scale to reach image space; adding the
+        # offset alone left the rubber band short of the cursor by that factor --
+        # measured 36 to 107 px adrift at scale 1.553, which is what "the box is
+        # somewhere else than the mouse" was.  `_draw_sam_prompts` had it right
+        # all along, which is why the box jumped into place on release.
+        sc = self._before_scale
         cx0, cy0 = min(x0, x1), min(y0, y1)
         cx1, cy1 = max(x0, x1), max(y0, y1)
-        self.c_before.create_rectangle(ox + cx0, oy + cy0, ox + cx1, oy + cy1,
+        self.c_before.create_rectangle(ox + cx0 * sc, oy + cy0 * sc,
+                                       ox + cx1 * sc, oy + cy1 * sc,
                                        outline="#5ac37f", width=2, tags="sam_prompts")
 
     def _on_sam_release(self, event):
