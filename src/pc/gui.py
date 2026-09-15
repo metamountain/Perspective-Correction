@@ -41,6 +41,7 @@ from PIL import Image, ImageTk
 
 from . import __version__
 from . import layout
+from . import masks as MK
 from . import prefs
 from .config import Settings
 from .imageio import READABLE
@@ -1313,13 +1314,25 @@ class ReviewPanel(tk.Frame):
             # in "file" mode; under a test root there is no App, so use prefs.
             app = self._app()
             remembered = getattr(app, "_remembered", {}) if app is not None else {}
+            # The weights vendored in the repo come BEFORE the file dialog.
+            # Without this the window asked the user to go and find a file that
+            # ships with the project, and cancelling that dialog rolled the
+            # combobox back with no message -- which is exactly what "the mask
+            # does nothing" looked like.  `masks.default_birefnet()` is the same
+            # fallback the CLI path uses, so both agree about what "unset" means.
             stored = (remembered.get("birefnet_model", "")
-                      or prefs.load().get("birefnet_model", ""))
+                      or prefs.load().get("birefnet_model", "")
+                      or MK.default_birefnet())
             if stored and os.path.isfile(stored):
                 self.session.settings = self.session.settings.replace(
                     birefnet_model=stored)
             elif not self._pick_birefnet_model(apply_now=False):
+                # Say so.  A control that silently undoes the user's choice is
+                # indistinguishable from one that is broken.
                 self.v_maskmode.set(self.session.settings.mask_mode)
+                self.lbl_mask.configure(
+                    text=f"no BiRefNet weights chosen -- mask source stays "
+                         f"'{self.session.settings.mask_mode}'")
                 return
         if mode == "gdino":
             # the prompt lives in the entry, not the settings, until it is applied
