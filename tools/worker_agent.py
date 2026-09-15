@@ -164,7 +164,7 @@ def _call(messages: list, tools: bool = True) -> dict:
         raise
 
 
-def _finish(msgs: list, why: str) -> str:
+def _finish(msgs: list, why: str, elide: bool = True) -> str:
     """One last turn with no tools on the table: say what you found.
 
     A run that dies of a full context has usually done the reading -- what it
@@ -173,9 +173,14 @@ def _finish(msgs: list, why: str) -> str:
     partial report beats a trace; if even this fails the caller returns nothing
     and the driver marks the module NOT cleared.
     """
-    idx = [i for i, m in enumerate(msgs) if m.get("role") == "tool"]
-    for i in idx[:max(0, len(idx) - 3)]:
-        msgs[i] = {**msgs[i], "content": "(elided to make room for your answer)"}
+    # Only when the window is actually full. Eliding on a spent turn budget
+    # would throw away evidence for no reason -- and evidence is what keeps the
+    # answer honest: the two reports that came back through this path are also
+    # the two that cited a function nobody wrote.
+    if elide:
+        idx = [i for i, m in enumerate(msgs) if m.get("role") == "tool"]
+        for i in idx[:max(0, len(idx) - 6)]:
+            msgs[i] = {**msgs[i], "content": "(elided to make room for your answer)"}
     msgs.append({"role": "user", "content":
                  "Stop searching -- " + why + ".  Report your findings NOW, from "
                  "what you have already read, in the format the package asked "
@@ -232,7 +237,8 @@ def run(package: str) -> str:
             head = (out.splitlines() or [""])[0][:120]
             print(f"[{turn}] {name}({json.dumps(args)[:100]}) -> {head}")
             msgs.append({"role": "tool", "tool_call_id": c["id"], "content": out[:6000]})
-    return _finish(msgs, f"the turn budget ({MAX_TURNS}) is spent")
+    # Turns ran out, not room: the evidence stays.
+    return _finish(msgs, f"the turn budget ({MAX_TURNS}) is spent", elide=False)
 
 
 if __name__ == "__main__":
