@@ -65,7 +65,11 @@ def _exif_focal_mm(exif_bytes: bytes | None):
 
 
 def _exif_aperture(exif_bytes: bytes | None):
-    """Extract the F-number (aperture).  Defaults to the lens's widest."""
+    """Extract the F-number (aperture), or None when the file does not say.
+
+    Not "the lens's widest", as this said: nothing here has seen a lens yet.
+    The caller substitutes a fixed mid-range 2.8, which is a different claim.
+    """
     if not exif_bytes:
         return None
     try:
@@ -156,10 +160,12 @@ def undistort_map(exif_bytes: bytes | None, width: int, height: int,
         lens_model = _exif_lens_model(exif_bytes)
         lenses = []
         if lens_model:
-            try:
-                lenses = list(db.find_lenses(cam, None, lens_model))
-            except Exception:
-                lenses = []
+            # A lookup that RAISED is not a lookup that found nothing.  Swallowing
+            # it here made the two identical, and the code below would then accept
+            # a single generic lens on the strength of a query that never ran.  The
+            # outer handler returns None, which is this file's own rule: doing
+            # nothing beats acting on a bad hypothesis.
+            lenses = list(db.find_lenses(cam, None, lens_model))
         if not lenses:
             # No lens name, or nothing matched it. A generic query is only
             # trustworthy when it is *unambiguous* -- exactly one lens known
