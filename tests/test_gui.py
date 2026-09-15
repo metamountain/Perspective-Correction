@@ -1243,3 +1243,61 @@ def test_each_tool_mode_has_a_key_and_the_keys_do_not_replace_each_other():
         assert r.v_sam.get() == before, "pressing s twice must return to the start"
     finally:
         app.destroy()
+
+
+def test_the_mark_tool_reads_the_plane_off_the_drawing_and_removes_the_right_one():
+    """One Mark tool: which way the segment leans decides vertical or horizontal.
+
+    Replaces the orientation combobox (2026-09-15, user). The risk the change
+    invites is not the classification -- it is removal: both planes are on
+    screen at once now, and an index into `control_lines` means nothing against
+    `control_hlines`, so deleting the wrong array is one forgotten `kind=` away.
+    The last block is that regression.
+    """
+    app = _app()
+    try:
+        _loaded(app, 1280, 800)
+        r = app.review
+        s = r.session
+        r.v_mark.set(True)
+        ox, oy = r._before_off
+        K = type(r)._kind_for
+
+        # The decision itself, including the stated 45 deg tiebreak.
+        assert K(0, 0, 2, 100) == "v", "falls more than it runs -> vertical"
+        assert K(0, 0, 100, 2) == "h", "runs more than it falls -> horizontal"
+        assert K(0, 0, 50, 50) == "v", "exactly 45 deg is documented as vertical"
+        assert K(0, 0, -2, -100) == "v", "direction of travel must not matter"
+
+        def ev(dx, dy):
+            return types.SimpleNamespace(x=dx + ox, y=dy + oy)
+
+        inv = s.scale / max(r._before_scale, 1e-9)
+        need = s.MIN_CONTROL_LENGTH_FRAC * min(s.gray.shape[:2]) / inv
+        span = int(need * 1.5)
+        top = 40
+
+        # A steep drag lands among the verticals, a shallow one among the
+        # horizontals -- no selector touched in between.
+        r._on_click_before(ev(60, top))
+        r._on_before_b1motion(ev(63, top + span))
+        r._on_before_b1release(ev(63, top + span))
+        assert len(s.control_lines) == 1 and len(s.control_hlines) == 0, (
+            "a steep drag must be a vertical")
+
+        hy = top + span + 30
+        r._on_click_before(ev(60, hy))
+        r._on_before_b1motion(ev(60 + span, hy + 3))
+        r._on_before_b1release(ev(60 + span, hy + 3))
+        assert len(s.control_hlines) == 1 and len(s.control_lines) == 1, (
+            "a shallow drag must be a horizontal, and must not touch the verticals")
+
+        # The regression: a still click on the horizontal removes *it*.
+        r._on_click_before(ev(60 + span // 2, hy + 1))
+        r._on_before_b1release(ev(60 + span // 2, hy + 1))
+        assert len(s.control_hlines) == 0, "the horizontal under the cursor must go"
+        assert len(s.control_lines) == 1, (
+            "and the vertical must survive -- an index is meaningless without "
+            "the array it came from")
+    finally:
+        app.destroy()
