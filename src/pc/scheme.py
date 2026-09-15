@@ -125,7 +125,11 @@ class ArchitectureScheme:
         """Split ``ls`` into ``(relevant, ignored)`` by deviation from the frame.
 
         A line is relevant when its direction points at an active vanishing point
-        within ``settings.scheme_tol_deg`` (default 12).  In horizontal-only mode
+        within 12 degrees.  **Not a setting**: `Settings` has no
+        ``scheme_tol_deg`` field, and the ``getattr`` below is a hook for a
+        caller that constructs its own settings object, not a knob a user can
+        reach.  This said "settings.scheme_tol_deg (default 12)", which sent
+        a reader looking for a control that does not exist.  In horizontal-only mode
         the secondary plane {V_v, V_h2} drops out of the active set, so its lines
         are ignored.  If the frame was never established the whole set is kept as
         relevant and nothing is filtered -- a weak scheme must not discard
