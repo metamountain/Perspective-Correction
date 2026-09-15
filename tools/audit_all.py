@@ -130,13 +130,23 @@ def _run_one(pkg_path, header):
     # utf-8 with replacement: Windows hands this process cp1252 and the worker
     # writes arrows like any model will.  The third time today that this exact
     # class of bug ate a run -- decoding its answer must never be able to fail.
+    # 70, not the worker default of 40: asking for an exact patch costs turns,
+    # and a run that stops mid-file produces no report at all.
     r = subprocess.run([sys.executable, os.path.join(HERE, "worker_agent.py"),
                         pkg_path], cwd=REPO, capture_output=True, text=True,
-                       encoding="utf-8", errors="replace")
+                       encoding="utf-8", errors="replace",
+                       env={**os.environ, "WORKER_MAX_TURNS": "70"})
     body = (r.stdout or "") + (r.stderr or "")
     mark = "=== worker finished"
-    said = body.split(mark, 1)[1] if mark in body else body[-4000:]
-    return header + said.strip()
+    if mark not in body:
+        # No final answer: the run hit the turn limit or died. Writing the tool
+        # TRACE here, as this used to, produces a file that looks like a report
+        # and contains none -- the exact shape this audit hunts. Say so instead.
+        tail = [t for t in body.strip().splitlines() if t.strip()][-3:]
+        return (header + "**RUN DID NOT FINISH** (turn limit or error). No "
+                "findings were produced; this module is NOT cleared." + chr(10) * 2
+                + chr(10).join("    " + t[:160] for t in tail))
+    return header + body.split(mark, 1)[1].strip()
 
 
 def main() -> None:
