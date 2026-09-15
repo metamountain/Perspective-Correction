@@ -405,7 +405,7 @@ def _hex_rgba(hexc, alpha=255):
 _ICON_FONTS = ("segoeicons.ttf", "SegMDL2.ttf")   # Fluent, then MDL2
 
 
-def _icon_pil(codepoint, size, colour, emoji=False):
+def _icon_pil(codepoint, size, colour, emoji=False, mono=False):
     """One stock Windows icon, tinted, centred on its ink in a size x size box.
 
     Stock rather than hand-drawn: a shipped icon set is already consistent, and
@@ -440,9 +440,13 @@ def _icon_pil(codepoint, size, colour, emoji=False):
         return None
     pad = size // 2
     scratch = Image.new("RGBA", (size + 2 * pad, size + 2 * pad), (0, 0, 0, 0))
-    if emoji:
+    if emoji and not mono:
         ImageDraw.Draw(scratch).text((pad, pad), ch, font=font, embedded_color=True)
     else:
+        # `mono` takes the emoji font's outline and fills it flat, which is what
+        # puts a dinosaur in a palette of monochrome keys without it arriving as
+        # the one coloured sticker on the bar.  Measured readable: 27x25 of ink
+        # at 39 % coverage, a silhouette rather than a blob.
         ImageDraw.Draw(scratch).text((pad, pad), ch, font=font, fill=_hex_rgba(colour))
     ink = scratch.getbbox()
     if ink is None:
@@ -2541,16 +2545,15 @@ class ReviewPanel(tk.Frame):
         # only read when the source combobox says gdino, so it stays inert in the
         # other three modes rather than needing to be hidden.
         self.v_gdino_prompt = tk.StringVar(value=self.settings.gdino_prompt or "building")
-        # The mask source named after a dinosaur gets one, small (user, 2026-09-15).
-        # Kept on self: Tk drops an unreferenced image and the label goes blank.
-        _trex = _icon_pil("1F996", 16, "", emoji=True)
-        _lbl_kw = {"text": "gdino prompt", "width": 18}
-        if _trex is not None:
-            self._trex_img = ImageTk.PhotoImage(_trex)
-            _lbl_kw.update(image=self._trex_img, compound="left")
-        ttk.Label(msk, **_lbl_kw).grid(row=3, column=0, sticky="w", pady=(4, 0))
+        ttk.Label(msk, text="gdino prompt", width=18).grid(
+            row=3, column=0, sticky="w", pady=(4, 0))
         gentry = ttk.Entry(msk, textvariable=self.v_gdino_prompt, width=24)
-        gentry.grid(row=3, column=1, columnspan=3, sticky="ew", padx=6, pady=(4, 0))
+        gentry.grid(row=3, column=1, columnspan=2, sticky="ew", padx=6, pady=(4, 0))
+        # Return already applied it, which is a gesture nobody discovers. The
+        # button says the field is not just a note to self.
+        _b = ttk.Button(msk, text="apply", width=7, command=self._apply_gdino)
+        _b.grid(row=3, column=3, sticky="w", pady=(4, 0))
+        _attach_tooltip(_b, "Find that, and mask everything around it")
         gentry.bind("<Return>", lambda e: self._apply_mask())
         _attach_tooltip(gentry,
                         "Grounding DINO: name what to look for in plain words - "
@@ -3081,6 +3084,34 @@ class ReviewPanel(tk.Frame):
             self._palette_btns.append(b)
             return b
 
+        def action(codepoint, command, tip, emoji=False):
+            """A palette key that DOES something rather than holding a mode.
+
+            gdino is not a tool you pick up -- it is a mask source you ask for
+            once -- so it must not join `_TOOL_MODES` and must not put the brush
+            down when pressed.  Same size, same colours, so the bar still reads
+            as one set; a Button rather than a Checkbutton so it never looks
+            held in.
+            """
+            img = _icon_pil(codepoint, layout.tool_glyph(), INK["dim"],
+                            emoji=emoji, mono=emoji)
+            if img is not None:
+                self._palette_imgs.append(ImageTk.PhotoImage(img))
+            b = tk.Button(bar, command=command,
+                          image=(self._palette_imgs[-1] if img is not None
+                                 else self._palette_blank),
+                          compound="center",
+                          width=side, height=side, bd=0, relief="flat",
+                          font=("Segoe UI", 20), cursor="hand2",
+                          padx=0, pady=0, highlightthickness=0,
+                          background=INK["field"], foreground=INK["dim"],
+                          activebackground=INK["line"],
+                          activeforeground=INK["text"])
+            b.pack(side="top", pady=(gap, 0))
+            _attach_tooltip(b, tip)
+            self._palette_btns.append(b)
+            return b
+
         tool("E7A8", self.v_mark, self._on_mark_toggle,
              "Mark a straight edge by hand -- which way it leans decides "
              "whether it counts as a vertical or a horizontal", lead=True)
@@ -3105,6 +3136,14 @@ class ReviewPanel(tk.Frame):
                                "Paint a mask over regions to exclude from line "
                                "detection. Right-click or Alt+click to erase.",
                                invert=True)
+        # The dinosaur moved up here from the prompt label (user, 2026-09-15),
+        # and lost its colours on the way: one coloured glyph among five
+        # monochrome ones reads as a mistake, however charming.
+        self._gdino_btn = action(
+            "1F996", self._apply_gdino,
+            "Grounding DINO: find the building by name and mask everything "
+            "else. Type what to look for in the gdino prompt field below.",
+            emoji=True)
         self._sam_btn = tool("EF3C", self.v_sam, self._on_sam_toggle,
                              "Box-select the subject with SAM; right-click "
                              "clears the prompt")
@@ -3364,6 +3403,18 @@ class ReviewPanel(tk.Frame):
         self.c_before.create_line(cx, cy - d, cx, cy + d, fill=col, **kw)
 
     # -- SAM2 box-prompt segmentation --------------------------------------
+    def _apply_gdino(self):
+        """Ask Grounding DINO for the building and mask the rest.
+
+        An action, not a mode: there is nothing to hold down afterwards. It
+        drives the same combobox a user would, so there is one path into
+        `_apply_mask` and the control keeps saying what is in force.
+        """
+        if not self.session or getattr(self, "v_maskmode", None) is None:
+            return
+        self.v_maskmode.set("gdino")
+        self._apply_mask()
+
     def _on_sam_toggle(self):
         """Entering or leaving box-select; the caller owns the flip.
 
