@@ -861,7 +861,6 @@ class ReviewPanel(tk.Frame):
         self._pending_mark = None
         self._after_off = (0, 0)
         self._crop_drag_start = None
-        self._planar_drag = None      # corner index being dragged, or None
         self._roi_drag = None         # which ROI ruler is grabbed: 0=left, 1=right
         self._guide_drag = None       # ("v"|"h", index) while a guide is dragged
         if getattr(self, "_loupe", None) is not None:   # _build re-runs on load
@@ -870,8 +869,6 @@ class ReviewPanel(tk.Frame):
         # A rebuild (new image loaded) kills the glass; bring it back if the
         # mode that owns it is still on.
         if getattr(self, "v_mark", None) is not None and self.v_mark.get():
-            self._loupe_show()
-        elif getattr(self, "v_planar", None) is not None and self.v_planar.get():
             self._loupe_show()
         self.c_before.bind("<Button-1>", self._on_click_before)
         self.c_before.bind("<Motion>", self._on_before_motion)
@@ -1143,19 +1140,6 @@ class ReviewPanel(tk.Frame):
         # moved to the lower-left tools field (2026-09-13).
         btns2 = ttk.Frame(top, padding=(0, 8))
         self._btns2 = btns2
-        # Planar left Q4 (2026-09-14): it is a drawing tool, not a correction
-        # setting -- the quad states which plane the horizontals and verticals
-        # belong to, so it belongs beside the other drawing tools in the
-        # lower-left palette and nowhere else.
-        #
-        # **Made once**, for the reason spelled out directly below about
-        # `v_stroke`: `_build` re-runs on every load while the tools field is
-        # built a single time, so recreating this variable would hand the
-        # palette's planar button a stale one -- ticking it would set a
-        # variable nobody reads and the tool would silently stop working from
-        # the second photograph onwards.
-        if getattr(self, "v_planar", None) is None:
-            self.v_planar = tk.BooleanVar(value=False)
         # Mask brush state lives here; its widgets live in the lower-left tools
         # field -- App._build calls `_build_tools` to place them.  **Made once.**
         # `_build` re-runs on every load while that tools field is built a single
@@ -1635,8 +1619,7 @@ class ReviewPanel(tk.Frame):
     # is tested first, so leaving SAM on made the brush unreachable.
     _TOOL_MODES = (("v_mark", "_on_mark_toggle"),
                    ("v_stroke", "_on_stroke_toggle"),
-                   ("v_sam", "_on_sam_toggle"),
-                   ("v_planar", "_on_planar_toggle"))
+                   ("v_sam", "_on_sam_toggle"))
 
     def _exclusive(self, keep):
         """Put down every tool except ``keep``.
@@ -1644,7 +1627,8 @@ class ReviewPanel(tk.Frame):
         Each one is switched off through its own handler rather than by setting
         the variable, because leaving a mode is not free: the brush has a half
         painted stroke and a pointer grab, marking has a dangling first point,
-        planar has the loupe.  Silently clearing the flag would strand all of it.
+        and marking has a dangling first point.  Clearing the flag silently
+        would strand all of it.
 
         Re-entrant by way of `_switching`: those handlers may themselves ask for
         exclusivity, and without the guard the first pair would bounce forever.
@@ -1692,66 +1676,6 @@ class ReviewPanel(tk.Frame):
         """
         return "v" if abs(y1 - y0) >= abs(x1 - x0) else "h"
 
-    # -- planar (four-corner) correction ---------------------------------
-    _PLANAR_NAMES = ("top-left", "top-right", "bottom-right", "bottom-left")
-
-    def _on_planar_toggle(self):
-        on = self.v_planar.get()
-        if on:
-            self._exclusive("v_planar")
-            self._pending_mark = None
-            n = len(self.session.planar_quad)
-            nxt = (self._PLANAR_NAMES[n] + " corner"
-                   if n < 4 else "all four corners are set -- drag one to move it")
-            self._set_status("planar: " + nxt)
-            self._loupe_show()
-        else:
-            self._planar_drag = None
-            self._loupe_hide()
-            self._set_status(self.session.status_text())
-        self._redraw()
-
-    def _on_planar_click(self, x, y):
-        """Click on a placed corner grabs it; anywhere else places the next
-        corner.  The quad is ordered TL, TR, BR, BL -- the order the user
-        clicks is the order the corners are named, so the status says which
-        one to click next rather than trusting the guess."""
-        # Screen -> full-resolution pixels first: the quad is stored in those
-        # and so is the pick's other half.  Comparing display coordinates
-        # against them made a corner grabbable only on previews scaled to ~1 --
-        # at scale 0.08 a click beside a placed corner passed straight through,
-        # and a phantom radius reached into the canvas where the corner's
-        # full-resolution position numerically fell, swallowing clicks that
-        # were meant to place.
-        fx = x / self._before_scale
-        fy = y / self._before_scale
-        hit = self.session.pick_planar_corner(fx, fy, display_scale=self._before_scale)
-        if hit is not None:
-            self._planar_drag = hit
-            return
-        i = len(self.session.planar_quad)
-        if i >= 4:
-            self._set_status("all four corners are set -- drag one to move it, "
-                             "or click 'Planar' off to leave the mode")
-            return
-        self.session.set_planar_point(i, fx, fy)
-        nxt = (self._PLANAR_NAMES[i + 1] + " corner next"
-               if i + 1 < 4 else "four corners set -- the right pane is the rectified view")
-        self._set_status(f"planar: {i + 1}/4, click the {nxt}")
-        self._redraw()
-
-    def _on_planar_drag(self, event):
-        if self._planar_drag is None:
-            return
-        x = event.x - self._before_off[0]
-        y = event.y - self._before_off[1]
-        self.session.set_planar_point(
-            self._planar_drag, x / self._before_scale, y / self._before_scale)
-        self._schedule_redraw()
-
-    def _on_planar_release(self, event):
-        self._planar_drag = None
-
     def _on_before_motion(self, event):
         if getattr(self, "_loupe", None) is not None:
             self._loupe_move(event)
@@ -1798,7 +1722,7 @@ class ReviewPanel(tk.Frame):
         self.c_before.create_oval(cx - r, cy - r, cx + r, cy + r,
                                   outline="black", width=1, tags="brush_cursor")
 
-    # -- the loupe: full-resolution magnifier for placing planar corners ----
+    # -- the loupe: full-resolution magnifier for placing marks precisely ---
     def _loupe_show(self):
         """Create the glass.  A canvas placed over the panel, not a Toplevel:
         it only has to live while the cursor is over the before field, which
@@ -1815,7 +1739,7 @@ class ReviewPanel(tk.Frame):
         w.tk.call("raise", w._w)
         # The loupe floats over c_before; without forwarding, clicks land on
         # the loupe and are swallowed.  Relay button events to c_before at the
-        # equivalent coordinate so planar/mark/stroke gestures work through it.
+        # equivalent coordinate so the mark and stroke gestures work through it.
         def _forward(event):
             lx = event.x_root - self.c_before.winfo_rootx()
             ly = event.y_root - self.c_before.winfo_rooty()
@@ -1874,36 +1798,6 @@ class ReviewPanel(tk.Frame):
         if y + size > self.winfo_height() - 2:
             y = cy - off - size
         c.place(x=max(2, int(x)), y=max(2, int(y)))
-
-    def _draw_planar_quad(self):
-        """The quad and its numbered corners, over the before preview.
-
-        Canvas-drawn like the control lines: interaction state, visible the
-        instant a click lands, without waiting for a re-render."""
-        ox, oy = self._before_off
-        q = self.session.planar_quad
-        # Times the scale, not divided by it.  `planar_quad` is already in image
-        # coordinates -- the click divided to get there -- so dividing again drew
-        # the quad at the square of the reduction: a corner clicked at display
-        # x=40 was stored as 26 and drawn at 17.  Same fault as the SAM rubber
-        # band, in a second place, found by measuring both.
-        pts = [(ox + px * self._before_scale, oy + py * self._before_scale)
-               for px, py in q]
-        if len(pts) >= 3:
-            self.c_before.create_polygon(
-                *[c for pt in pts for c in pt], fill="",
-                outline="#ff5fa2", width=2, tags="planar_fill")
-        elif len(pts) == 2:
-            self.c_before.create_line(
-                *[c for pt in pts for c in pt], fill="#ff5fa2", width=2)
-        for i, (sx, sy) in enumerate(pts):
-            col = "#ff5fa2" if i < len(q) else "#7fd4ff"
-            self.c_before.create_oval(sx - 8, sy - 8, sx + 8, sy + 8,
-                                      fill=INK["field"], outline=col, width=2,
-                                      tags="planar_handle")
-            self.c_before.create_line(sx - 4, sy, sx + 4, sy, fill=col)
-            self.c_before.create_line(sx, sy - 4, sx, sy + 4, fill=col)
-            self.c_before.create_text(sx, sy - 18, text=str(i + 1), fill=col)
 
     def _clear_marks(self):
         if self.session.clear_control_lines() or \
@@ -2141,7 +2035,7 @@ class ReviewPanel(tk.Frame):
         self._refresh_crop()
         self._set_status_extra("crop set" if ok else "crop too small, ignored")
 
-    def _show_after(self, frac_rect, planar_on=False):
+    def _show_after(self, frac_rect):
         """Draw the whole after pane: the corrected frame with the outside-crop veil
         baked in (``darken_outside_crop``), its grid and rulers, and the kept
         rectangle's outline.
@@ -2156,7 +2050,7 @@ class ReviewPanel(tk.Frame):
             return
         box = self._after_box
         arr = (darken_outside_crop(base, frac_rect)
-               if (frac_rect is not None and not planar_on) else base)
+               if frac_rect is not None else base)
         # Fit the FULL canvas, exactly as the before pane does. This used to
         # inset by RULER_MARGIN on all four sides to guarantee a border strip
         # for the guides, which cost the corrected image 11.5 % of its area
@@ -2177,11 +2071,15 @@ class ReviewPanel(tk.Frame):
         self._draw_rulers(self.c_after, *self._after_off, ph.width(), ph.height())
         self._draw_after_guides()
         self._draw_after_lines(arr, ph.width(), ph.height())
-        if not planar_on:
-            iw, ih = ph.width(), ph.height()
-            x0, y0, x1, y1 = (frac_rect or (0.0, 0.0, 1.0, 1.0))
-            self._draw_crop_outline(aox + x0 * iw, aoy + y0 * ih,
-                                    aox + x1 * iw, aoy + y1 * ih)
+        # The crop outline used to be suppressed while the planar quad was up,
+        # because the two drew over each other.  With planar gone there is
+        # nothing to yield to, and the flag it tested went with the tool -- this
+        # read `planar_on` after the parameter was removed, which the compiler
+        # cannot see and only a loaded photograph would hit.
+        iw, ih = ph.width(), ph.height()
+        x0, y0, x1, y1 = (frac_rect or (0.0, 0.0, 1.0, 1.0))
+        self._draw_crop_outline(aox + x0 * iw, aoy + y0 * ih,
+                                aox + x1 * iw, aoy + y1 * ih)
 
     def _draw_crop_outline(self, rx0, ry0, rx1, ry1):
         """The kept rectangle's border and handles on the after canvas.
@@ -2328,9 +2226,6 @@ class ReviewPanel(tk.Frame):
             return
         if getattr(self, "v_stroke", None) is not None and self.v_stroke.get():
             self._stroke_start(x, y)
-            return
-        if getattr(self, "v_planar", None) is not None and self.v_planar.get():
-            self._on_planar_click(x, y)
             return
         if getattr(self, "v_mark", None) is not None and self.v_mark.get():
             self._click_mark(x, y)
@@ -2596,8 +2491,6 @@ class ReviewPanel(tk.Frame):
             return
         if getattr(self, "v_stroke", None) is not None and self.v_stroke.get():
             self._on_stroke_drag(event)
-        else:
-            self._on_planar_drag(event)
 
     def _on_before_b1release(self, event):
         if getattr(self, "v_sam", None) is not None and self.v_sam.get():
@@ -2620,8 +2513,6 @@ class ReviewPanel(tk.Frame):
             return
         if getattr(self, "v_stroke", None) is not None and self.v_stroke.get():
             self._on_stroke_release(event)
-        else:
-            self._on_planar_release(event)
 
     # -- roi x rulers ----------------------------------------------------
     def _roi_strip(self):
@@ -2962,21 +2853,12 @@ class ReviewPanel(tk.Frame):
                     self.after(120, self._redraw)
                 return
             self._redraw_tries = 0
-            planar_on = (getattr(self, "v_planar", None) is not None
-                         and self.v_planar.get())
             before = self.session.render_before(max_edge=max(box_b),
                                                 show_lines=self.v_show_lines.get())
             # Un-cropped on purpose: `_show_after` bakes a veil over what the crop
             # discards, so the picture keeps one size and one scale for the whole
             # session instead of leaping every time a corner moves.
-            after = None
-            if planar_on and len(self.session.planar_quad) >= 4:
-                try:
-                    after = self.session.planar_rectified(max_edge=max(box_a))
-                except ValueError as exc:   # degenerate quad: keep the rotation view
-                    self._set_status(str(exc))
-            if after is None:
-                after = self.session.render_after(max_edge=max(box_a), apply_crop=False)
+            after = self.session.render_after(max_edge=max(box_a), apply_crop=False)
             self._after_base = after      # un-veiled, preview-sized; _show_after bakes it
             self._after_box = box_a
             ph_b, s_b = _to_photo(before, box_b)
@@ -2994,15 +2876,12 @@ class ReviewPanel(tk.Frame):
             # run along a grid line -- so it belongs on the after pane only.  On
             # the original it measures nothing and only competes with the lines
             # the detector drew, which is what this pane is for.
-            if planar_on:
-                self._draw_planar_quad()
-            else:
-                self._draw_marks()
+            self._draw_marks()
             self._draw_rulers(self.c_before, *self._before_off,
                               ph_b.width(), ph_b.height())
             self._draw_roi_rulers()
             self._draw_sam_prompts()
-            self._show_after(self.session.crop_rect, planar_on)
+            self._show_after(self.session.crop_rect)
             self._set_status(self.session.status_text())
         except Exception:
             tb = traceback.format_exc()
@@ -3579,15 +3458,11 @@ class ReviewPanel(tk.Frame):
         # now, not as they were when this window opened.
         self._sync_comfy()
         try:
-            # Planar mode with four placed corners writes the rectified view, not
-            # the roll/pitch correction -- otherwise Save would silently discard
-            # the quad.  Branch on the live toggle + corner count; `session.planar_active`
-            # is dead (never set) and must not be trusted.
-            if (getattr(self, "v_planar", None) is not None and self.v_planar.get()
-                    and len(self.session.planar_quad) == 4):
-                self.session.save_planar(dst)
-            else:
-                self.session.save(dst)
+            # The planar branch went with the tool (user, 2026-09-15). It tested
+            # `v_planar`, which no longer exists, so `getattr` returned None and
+            # the branch was already unreachable -- dead weight reading as a
+            # decision. `session.save_planar` stays in review.py with its tests.
+            self.session.save(dst)
         except Exception as exc:
             messagebox.showerror("Save", str(exc), parent=self)
             return
@@ -3608,11 +3483,7 @@ class ReviewPanel(tk.Frame):
             return
         self._sync_comfy()
         try:
-            if (getattr(self, "v_planar", None) is not None and self.v_planar.get()
-                    and len(self.session.planar_quad) == 4):
-                self.session.save_planar(dst)
-            else:
-                self.session.save(dst)
+            self.session.save(dst)
         except Exception as exc:
             messagebox.showerror("Save As", str(exc), parent=self)
             return
@@ -3686,7 +3557,6 @@ class App(_ROOT_CLASS):
         self.bind("<F11>", lambda _e: self._toggle_fullscreen())
         self.bind("<m>", lambda _e: self._tool_key("v_mark", "_on_mark_toggle"))
         self.bind("<b>", lambda _e: self._tool_key("v_stroke", "_on_stroke_toggle"))
-        self.bind("<p>", lambda _e: self._tool_key("v_planar", "_on_planar_toggle"))
         self.bind("<s>", lambda _e: self._tool_key("v_sam", "_on_sam_toggle"))
         self.after(120, self._pump)
         if start_maximized:
