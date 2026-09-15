@@ -27,6 +27,17 @@ import sys
 import time
 import urllib.request
 
+# Windows hands this process a cp1252 stdout, and the worker writes arrows and
+# dashes like any model will.  Printing its own answer then killed the run after
+# the work was already done and committed to disk -- the harness losing the
+# report, not the worker failing.  Re-open stdout as UTF-8 and never crash on
+# an unencodable character again.
+for _s in (sys.stdout, sys.stderr):
+    try:
+        _s.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 REPO = pathlib.Path(__file__).resolve().parent.parent
 BASE = os.environ.get("UNSLOTH_STUDIO_URL", "http://127.0.0.1:8888").rstrip("/") + "/v1"
 MODEL = os.environ.get("UNSLOTH_MODEL", "unsloth/Qwen3.8-27B-GGUF")

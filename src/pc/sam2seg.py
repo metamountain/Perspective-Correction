@@ -1,8 +1,10 @@
 """SAM2 box+point prompt segmentation for click-to-select masking.
 
-The user drags a box over the building in the review window (primary prompt);
-Shift+click adds positive points, Alt+click adds negative ones, and each gesture
-asks SAM2 to segment what they mean.  The mask comes back as an ignore region
+The user drags a box over the building in the review window; that box is the
+only prompt the window can produce.  The code below still accepts positive and
+negative point prompts, but nothing in the window produces them -- there are no
+Shift or Alt point bindings.  A comment must not describe a gesture that does
+not exist.  The mask comes back as an ignore region
 (True = outside the selection) that ``review.apply_sam_mask`` merges with the
 paint brush.
 
