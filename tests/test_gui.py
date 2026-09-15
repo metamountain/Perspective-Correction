@@ -1216,9 +1216,10 @@ def test_each_tool_mode_has_a_key_and_the_keys_do_not_replace_each_other():
     one key would silently leave three dead -- this asserts four distinct
     sequences are actually registered, not just that the dispatcher works.
 
-    The SAM case is the one worth pinning: `_on_sam_toggle` flips `v_sam`
-    itself, while the other three read a variable Tk already flipped. Flipping
-    it in the dispatcher too would cancel out and the key would do nothing.
+    All four handlers read their variable and none flips it, so the flip is the
+    caller's -- the contract the palette buttons rely on too. `_on_sam_toggle`
+    used to flip its own; a second flip anywhere cancels the first and the tool
+    looks dead, which is what this asserts against.
     """
     app = _app()
     try:
@@ -1229,18 +1230,15 @@ def test_each_tool_mode_has_a_key_and_the_keys_do_not_replace_each_other():
 
         for seq, var, handler in (("<m>", "v_mark", "_on_mark_toggle"),
                                   ("<b>", "v_stroke", "_on_stroke_toggle"),
-                                  ("<p>", "v_planar", "_on_planar_toggle")):
+                                  ("<p>", "v_planar", "_on_planar_toggle"),
+                                  ("<s>", "v_sam", "_on_sam_toggle")):
             before = getattr(r, var).get()
             app._tool_key(var, handler)
-            assert getattr(r, var).get() != before, f"{seq} did not flip {var}"
+            assert getattr(r, var).get() != before, (
+                f"{seq} must flip {var} exactly once -- a handler that flips it "
+                f"again cancels the caller out and the tool looks dead")
             app._tool_key(var, handler)          # and back, so modes do not stack
-
-        before = r.v_sam.get()
-        app._tool_key(None, "_on_sam_toggle")
-        assert r.v_sam.get() != before, (
-            "s must flip v_sam exactly once -- the handler owns that flip")
-        app._tool_key(None, "_on_sam_toggle")
-        assert r.v_sam.get() == before, "pressing s twice must return to the start"
+            assert getattr(r, var).get() == before, f"{seq} twice must return"
     finally:
         app.destroy()
 

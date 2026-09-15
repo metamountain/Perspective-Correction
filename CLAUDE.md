@@ -190,6 +190,14 @@ everything else. The list below is not in that order; this is.
    `test_each_tool_mode_has_a_key_and_the_keys_do_not_replace_each_other`, which
    asserts four *distinct* sequences are registered — `bind()` replaces, so four
    modes on one key would leave three silently dead.
+   **The tools now live in one place (2026-09-15, user: "either the toolbar or the
+   marker, I would prefer only the tool").** Mark, Mask brush and box-select are
+   glyph toggles in the picture-corner palette; the text controls that duplicated
+   them left the lower-left field, which keeps only brush *width* (a setting, not
+   a tool) and Strike slanted (a one-shot action on the evidence, not a tool you
+   hold). `_on_sam_toggle` no longer flips `v_sam` itself — **all four handlers
+   read, the caller flips**, because a palette toggle button carries the variable
+   and a second flip cancels the first, leaving a tool that looks dead.
    **Still open: more tools**, and only where a gesture is already being done the
    long way. Not a wish for its own sake.
 

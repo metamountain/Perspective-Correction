@@ -2345,41 +2345,25 @@ class ReviewPanel(tk.Frame):
         _s1.grid(row=1, column=2, sticky="w", pady=(6, 0))
         _s1.bind("<KeyRelease>", self._apply_roi)
 
+        # The three tools that used to sit here -- Mask brush, SAM, Mark --
+        # are buttons in the picture-corner palette now (2026-09-15, user).
+        # What stays is the one thing that is a *setting* rather than a tool:
+        # how wide the brush paints.  Its variables are still made in `_build`,
+        # once, for the stale-variable reason written out there.
         row = ttk.Frame(parent)
         row.pack(fill="x", pady=(0, 4))
-        # Kept as an attribute so a test can press the real widget: the brush
-        # broke once because the checkbutton and the click handler were reading
-        # two different variables, and only pressing the box itself catches that.
-        self._brush_chk = ttk.Checkbutton(row, text="Mask brush",
-                                          variable=self.v_stroke,
-                                          command=self._on_stroke_toggle)
-        self._brush_chk.pack(side="left")
-        _attach_tooltip(self._brush_chk, "Paint a mask over regions to exclude from line detection. Right-click or Alt+click to erase.")
+        ttk.Label(row, text="brush width", width=18).pack(side="left")
         ttk.Spinbox(row, from_=8, to=160, increment=4, width=3,
                     textvariable=self.v_stroke_w).pack(side="left", padx=(4, 0))
-        if getattr(self, "v_sam", None) is None:
-            self.v_sam = tk.BooleanVar(value=False)
-            self._sam_box = None
-            self._sam_points = []
-            self._sam_selection = None
-        _b = ttk.Button(row, text="SAM", command=self._on_sam_toggle)
-        _b.pack(side="left", padx=(10, 0))
-        _attach_tooltip(_b, "SAM: drag a box over the subject to segment it; right-click clears the prompt")
 
-        # Mark-vertical gesture and strike-slanted: moved from the lower-right
-        # control strip (2026-09-13) because they operate on the before image's
-        # line evidence, same as the detector/ROI above.
+        # Strike-slanted operates on the before image's line evidence, same as
+        # the detector/ROI above, so it stays in this field: it is a one-shot
+        # action on the evidence, not a tool you hold.
         mrow = ttk.Frame(parent)
         mrow.pack(fill="x", pady=(0, 4))
-        if getattr(self, "v_mark", None) is None:
-            self.v_mark = tk.BooleanVar(value=False)
-        _cb = ttk.Checkbutton(mrow, text="Mark",
-                              variable=self.v_mark, command=self._on_mark_toggle)
-        _cb.pack(side="left")
-        _attach_tooltip(_cb, "Drag along a known-straight edge to anchor it. Which way it leans decides whether it counts as a vertical or a horizontal. Drag endpoints to refine.")
         _b = ttk.Button(mrow, text="Strike slanted",
                         command=self._strike_slanted)
-        _b.pack(side="left", padx=(6, 0))
+        _b.pack(side="left")
         _attach_tooltip(_b, "Remove all lines that are neither vertical nor horizontal")
 
         msk = ttk.Frame(parent)
@@ -2913,7 +2897,21 @@ class ReviewPanel(tk.Frame):
             return b
 
         tool("│", self.v_mark, self._on_mark_toggle,
-             "Mark a line that is truly vertical (or horizontal) by hand")
+             "Mark a straight edge by hand -- which way it leans decides "
+             "whether it counts as a vertical or a horizontal")
+        # Brush and box-select joined Mark here (2026-09-15, user: "either the
+        # toolbar or the marker, I would prefer only the tool").  They were
+        # text controls in the lower-left field while Mark was in both places,
+        # so a tool was either duplicated or somewhere else than its siblings.
+        # Kept under the old attribute name because a test presses the real
+        # widget -- the brush once broke by having the box and the click
+        # handler read two different variables, which only pressing catches.
+        self._brush_chk = tool("▨", self.v_stroke, self._on_stroke_toggle,
+                               "Paint a mask over regions to exclude from line "
+                               "detection. Right-click or Alt+click to erase.")
+        self._sam_btn = tool("⬚", self.v_sam, self._on_sam_toggle,
+                             "Box-select the subject with SAM; right-click "
+                             "clears the prompt")
         # Planar left the palette (2026-09-14, "less is more"). The quad was
         # being asked to do two unrelated jobs -- rectify a flat face, and state
         # which plane the lines belong to -- and the second is answered better,
@@ -3171,7 +3169,13 @@ class ReviewPanel(tk.Frame):
 
     # -- SAM2 box-prompt segmentation --------------------------------------
     def _on_sam_toggle(self):
-        self.v_sam.set(not self.v_sam.get())
+        """Entering or leaving box-select; the caller owns the flip.
+
+        It used to flip `v_sam` itself, which was fine while a plain Button
+        was the only way in.  A palette toggle *button* carries the variable,
+        so Tk flips it first and a second flip here would cancel it out and
+        the tool would look dead.  Read-only, like the other three.
+        """
         if not self.v_sam.get():
             self._sam_box = None
             self._sam_points = []
@@ -3418,7 +3422,7 @@ class App(_ROOT_CLASS):
         self.bind("<m>", lambda _e: self._tool_key("v_mark", "_on_mark_toggle"))
         self.bind("<b>", lambda _e: self._tool_key("v_stroke", "_on_stroke_toggle"))
         self.bind("<p>", lambda _e: self._tool_key("v_planar", "_on_planar_toggle"))
-        self.bind("<s>", lambda _e: self._tool_key(None, "_on_sam_toggle"))
+        self.bind("<s>", lambda _e: self._tool_key("v_sam", "_on_sam_toggle"))
         self.after(120, self._pump)
         if start_maximized:
             self.after(50, self._maximize)
@@ -3443,10 +3447,9 @@ class App(_ROOT_CLASS):
     def _tool_key(self, var_name, handler_name):
         """Flip one tool mode from the keyboard.
 
-        Every one of these was already a trip to a button. The variable is
-        flipped here and the handler read it, except SAM whose handler flips
-        its own -- passing var_name=None says so rather than making the caller
-        remember which is which.
+        Every one of these was already a trip to a button.  All four handlers
+        read their variable and none flips it, so the flip belongs here --
+        the same contract the palette buttons rely on.
 
         Typing is not a shortcut: a key that lands while an entry, spinbox or
         combobox has focus belongs to that widget, so it is ignored here.
@@ -3462,11 +3465,10 @@ class App(_ROOT_CLASS):
         r = getattr(self, "review", None)
         if r is None or getattr(r, "session", None) is None:
             return
-        if var_name is not None:
-            v = getattr(r, var_name, None)
-            if v is None:
-                return
-            v.set(not v.get())
+        v = getattr(r, var_name, None)
+        if v is None:
+            return
+        v.set(not v.get())
         getattr(r, handler_name)()
 
     def _switch_theme(self, theme_name):
