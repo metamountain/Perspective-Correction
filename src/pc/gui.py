@@ -1623,20 +1623,22 @@ class ReviewPanel(tk.Frame):
             self.c_before.delete("brush_cursor")
             return
         r = max(8, int(self.v_stroke_w.get()))
-        cx = event.x
-        cy = event.y
+        self._draw_brush_ring(event.x, event.y, r)
+
+    def _draw_brush_ring(self, cx, cy, r):
+        """The round brush outline, at canvas coords, radius r.
+
+        One definition, because it is drawn from two places now -- following the
+        cursor, and standing still while a sizing drag changes r. A double ring,
+        white outside and black inside: a single black one is invisible against
+        a dark facade and against the field colour itself, and one of the two
+        always contrasts whatever is underneath.
+        """
         self.c_before.delete("brush_cursor")
-        # A double ring, white outside and black inside, because a single black
-        # one is invisible against a dark facade and against the field colour
-        # itself -- which is what "show the round tool outline" was asking for.
-        # Every image editor draws it this way for the same reason: one of the
-        # two rings always contrasts, whatever is underneath.
         self.c_before.create_oval(cx - r - 1, cy - r - 1, cx + r + 1, cy + r + 1,
-                                  outline="white", width=1,
-                                  tags="brush_cursor")
+                                  outline="white", width=1, tags="brush_cursor")
         self.c_before.create_oval(cx - r, cy - r, cx + r, cy + r,
-                                  outline="black", width=1,
-                                  tags="brush_cursor")
+                                  outline="black", width=1, tags="brush_cursor")
 
     # -- the loupe: full-resolution magnifier for placing planar corners ----
     def _loupe_show(self):
@@ -2609,18 +2611,22 @@ class ReviewPanel(tk.Frame):
         """
         if not self._brush_live():
             return
-        self._pen_anchor = (event.x, int(self.v_stroke_w.get()))
+        self._pen_anchor = (event.x, event.y, int(self.v_stroke_w.get()))
         return "break"
 
     def _on_pen_size_drag(self, event):
         anchor = getattr(self, "_pen_anchor", None)
         if anchor is None or not self._brush_live():
             return
-        x0, w0 = anchor
+        x0, y0, w0 = anchor
         # Half a pixel of width per pixel of travel: the full 8..160 range then
         # fits a comfortable drag rather than needing the whole screen.
         self.v_stroke_w.set(max(8, min(160, w0 + (event.x - x0) // 2)))
         self._set_status_extra(f"pen width {int(self.v_stroke_w.get())} px")
+        # Redrawn at the point the drag STARTED, not at the pointer: sizing
+        # travels sideways, so following the cursor would slide the preview away
+        # from the spot whose brush size you are actually judging.
+        self._draw_brush_ring(x0, y0, max(8, int(self.v_stroke_w.get())))
         return "break"
 
     def _on_alt_erase_press(self, event):
