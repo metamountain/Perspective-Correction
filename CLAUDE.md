@@ -115,6 +115,27 @@ shelved and is history now, not instruction.
   The reflex to fix it yourself "because writing the spec costs as much" is the
   trap. Writing the spec is also what makes you state the change exactly, and a
   spec that is hard to write is a change that was not thought through.
+- **A worker finding is a pointer, not a verdict. Every HIGH gets RUN before it
+  gets applied.** (2026-09-15, measured.) Six findings came back across cli,
+  config and geometry with citations, severities and copy-paste patches. Five
+  were wrong, and the two HIGHs would each have broken working code:
+  * `geometry.py:209` — "`lines @ K` is not `K^T l`". It is: for a row vector,
+    `l @ K = K^T l`, and `np.allclose(lines @ K, (K.T @ lines.T).T)` is True.
+    The orthogonality it claimed was broken measures `max|n.u| = 4.4e-17` with a
+    deliberately off-centre principal point. **The proposed fix measures 0.19**
+    and returns `(3, N)` where every caller expects `(N, 3)`.
+  * `cli.py:372` — "a six-tuple unpacked as seven". The line unpacks six names,
+    and it was printed in the worker's own package. The patch invented a `log`
+    variable that exists nowhere.
+  * `config.py:53` — cited `deps.default_gdino_dir()` returning
+    `models/gdino-tiny`. No such function; `masks.default_gdino_dir()` returns
+    `models/GroundingDINO`, which is what the comment already said.
+  The one that held (`sam_model` and `sam_device` read by nobody) took a
+  ten-second grep to confirm. **So: grep the names, run the arithmetic, and only
+  then read the patch.** A fluent proposal is not evidence, and severity in a
+  report is the worker's confidence, not the defect's. This is what the approval
+  gate is for — never apply an audit patch unread because the suite is green,
+  because the wrong ones here pass the suite too.
 - Anything fiddly belongs in Python, not in a `.bat`.
 
 ## Environment split (short version)
