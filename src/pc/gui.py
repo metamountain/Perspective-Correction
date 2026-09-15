@@ -866,6 +866,18 @@ class ReviewPanel(tk.Frame):
         self.c_before.bind("<Alt-ButtonPress-1>", self._on_alt_erase_press)
         self.c_before.bind("<Alt-ButtonPress-3>", self._on_pen_size_start)
         self.c_before.bind("<Alt-B3-Motion>", self._on_pen_size_drag)
+        # The sizing drag had a press and a motion and no END. Alt+right
+        # release arrives as <Alt-ButtonRelease-3>, which nothing was bound
+        # to, so `_pen_anchor` stayed set forever -- and `_on_erase_motion`
+        # bails out while it is set. After sizing the pen once, right-drag
+        # erase silently degraded to erasing the press and release points
+        # only, with the whole dragged stroke dropped. Measured, not read.
+        self.c_before.bind("<Alt-ButtonRelease-3>", self._on_pen_size_end)
+        # Alt+left had a press binding and no motion or release of its own,
+        # working only through Tk falling back to the modifier-less pattern.
+        # Bound explicitly rather than left to that rule.
+        self.c_before.bind("<Alt-B1-Motion>", self._on_before_b1motion)
+        self.c_before.bind("<Alt-ButtonRelease-1>", self._on_before_b1release)
         # ONE bind per sequence. Tk's bind() *replaces* a handler for the same
         # sequence rather than adding to it, so binding both here left
         # `_on_sam_right_click` silently dead -- SAM's right-click (clear the
@@ -2728,6 +2740,16 @@ class ReviewPanel(tk.Frame):
         if not self._brush_live():
             return
         self._pen_anchor = (event.x, event.y, int(self.v_stroke_w.get()))
+        return "break"
+
+    def _on_pen_size_end(self, _event=None):
+        """End a pen-size drag.
+
+        Its only job is to forget the anchor, and that is exactly why it was
+        missing: nothing visibly breaks at the end of the sizing gesture. The
+        damage lands later, on the next erase.
+        """
+        self._pen_anchor = None
         return "break"
 
     def _on_pen_size_drag(self, event):

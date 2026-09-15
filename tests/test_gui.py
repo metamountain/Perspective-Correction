@@ -1372,3 +1372,59 @@ def test_only_one_tool_can_be_in_your_hand_at_a_time():
             "switching the last tool off must leave no tool active")
     finally:
         app.destroy()
+
+
+def test_sizing_the_pen_does_not_cripple_the_next_erase():
+    """Alt+right sizes the brush; afterwards right-drag must still erase fully.
+
+    Found by running the gestures and measuring the painted fraction, not by
+    reading: every handler was individually correct. The gap was a binding.
+    Alt+right release arrives as <Alt-ButtonRelease-3>, nothing was bound to it,
+    so `_pen_anchor` stayed set -- and `_on_erase_motion` returns early while it
+    is. The erase then dropped its whole dragged stroke and removed only the
+    press and release points, which reads as "erasing does not work".
+
+    Nothing breaks at the end of the sizing gesture itself. That is why it
+    survived: the damage lands on the next gesture but one.
+    """
+    app = _app()
+    try:
+        _loaded(app, 1280, 800)
+        r = app.review
+        s = r.session
+        r.v_stroke.set(True)
+        r._on_stroke_toggle()
+        _settle(app, 6)
+        ox, oy = r._before_off
+
+        def ev(dx, dy):
+            return types.SimpleNamespace(x=dx + ox, y=dy + oy, state=0)
+
+        def drag(press, motion, release):
+            press(ev(120, 120))
+            for i in range(1, 7):
+                motion(ev(120 + i * 18, 120 + i * 6))
+                app.update()
+            release(ev(228, 156))
+            _settle(app, 6)
+
+        # Size the pen and let go, exactly as the bindings deliver it.
+        r._on_pen_size_start(ev(200, 200))
+        r._on_pen_size_drag(ev(260, 200))
+        r._on_pen_size_end()
+        assert r._pen_anchor is None, (
+            "the sizing drag must forget its anchor on release -- while it is "
+            "set, `_on_erase_motion` bails out and erasing loses its stroke")
+
+        s.paint = None
+        drag(r._on_click_before, r._on_before_b1motion, r._on_before_b1release)
+        painted = float(s.paint.mean())
+        assert painted > 0, "the brush must paint something to erase"
+
+        drag(r._on_erase_press, r._on_erase_motion, r._on_erase_release)
+        left = 0.0 if s.paint is None else float(s.paint.mean())
+        assert left < painted * 0.2, (
+            f"right-drag must erase the whole stroke, not just its ends: "
+            f"{painted:.4%} -> {left:.4%}")
+    finally:
+        app.destroy()
