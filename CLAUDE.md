@@ -56,7 +56,7 @@ shelved and is history now, not instruction.
   windows and real photograph sweeps, together most of the old wall time). It
   says so on exit — `!! FAST RUN -- did NOT run: test_assets, test_gui` — and
   **green there does not mean green**. Full suite: `python tests/run_tests.py
-  --full` (or `PC_FULL=1`) — 304 tests, ~52 s, modules in worker processes; `-s`
+  --full` (or `PC_FULL=1`) — 306 tests, ~55 s, modules in worker processes; `-s`
   for the old sequential run. The line this replaces claimed "282 tests, ~135 s"
   for the bare command, which now measures neither that count nor that set:
   any suite number quoted anywhere must say which mode produced it.
@@ -113,13 +113,13 @@ declared `mlsd` extra) is installed in the **system** interpreter, so
 
 ## Ledger — the only place status lives
 
-**Suite 2026-09-15, `--full` at `83c3030`+: 304 tests, 2 failed, 2 skipped,
+**Suite 2026-09-15, `--full` at `04f58df`: 306 tests, 2 failed, 2 skipped,
 52.2 s** (the fast run is 264 in ~24 s, and is not the suite). Both failures are the single receding-row photograph in the bug entry
 below (3.71° round-trip on one asset) — the long-standing limitation, nothing
 else, and the only red the suite has. The earlier ruler regression is gone for
 good: that test was superseded when rulers became guides pulled from the cross
 (see Done). Wall time fell 160 s → ~55 s when the runner was split in parallel;
-that is the split, not tests disappearing, and only `--full` produces 304.
+that is the split, not tests disappearing, and only `--full` produces 306.
 Re-run before trusting this — it is a measurement, not a
 promise, and no entry below may restate it. An item stays under **Open** until
 nothing is left to do; **Done** is only for finished work. `Pn` labels are short

@@ -1332,3 +1332,43 @@ def test_the_facade_strip_still_works_after_a_second_photograph_loads():
         assert r.session.roi_x is None, "turning it off must lift the restriction"
     finally:
         app.destroy()
+
+
+def test_only_one_tool_can_be_in_your_hand_at_a_time():
+    """Turning a tool on puts every other one down.
+
+    Not cosmetic. `_on_click_before` tests the modes in a fixed order, so two on
+    at once is not "both available" -- the earlier one wins every click and the
+    later one looks broken with nothing in the log. That is how the mask brush
+    went dead: SAM is tested first, and nothing ever switched SAM off, so a user
+    who had used SAM could never paint again.
+
+    Pressing through `_tool_key` rather than setting the variables, because the
+    flip and the handler together are the contract; setting a variable by hand
+    would test a path no user can take.
+    """
+    app = _app()
+    try:
+        _loaded(app, 1280, 800)
+        r = app.review
+        modes = [(v, h) for v, h in type(r)._TOOL_MODES
+                 if getattr(r, v, None) is not None]
+        assert len(modes) >= 3, "expected at least mark, brush and SAM"
+
+        for var, handler in modes:
+            app._tool_key(var, handler)
+            _settle(app, 4)
+            assert getattr(r, var).get(), f"{var} should now be on"
+            others = [o for o, _ in modes if o != var and getattr(r, o).get()]
+            assert not others, (
+                f"turning {var} on left {others} on as well -- whichever "
+                f"`_on_click_before` tests first will eat every click")
+
+        # And putting the last one down leaves nothing held.
+        last, last_handler = modes[-1]
+        app._tool_key(last, last_handler)
+        _settle(app, 4)
+        assert not any(getattr(r, v).get() for v, _ in modes), (
+            "switching the last tool off must leave no tool active")
+    finally:
+        app.destroy()
