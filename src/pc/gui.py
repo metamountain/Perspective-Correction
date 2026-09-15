@@ -121,16 +121,6 @@ THEMES = {
         "accent": "#0000cc", "ok": "#00aa44", "warn": "#cc8800", "err": "#cc2222",
         "ui_font": "Verdana", "mono_font": "Consolas",
     },
-    # --- Graphic Designer: Swiss/International Typographic Style.  Near-white
-    #     bg, one bold vermilion accent (not pink — that's iOS), strong black
-    #     text.  Segoe UI for clean sans, SF Mono / Cascadia for data. ---
-    "Graphic Designer": {
-        "bg": "#f7f7f5", "panel": "#ffffff", "field": "#efefec",
-        "cross": "#e6e6e2", "line": "#d0d0ca",
-        "text": "#111111", "dim": "#6b6b64",
-        "accent": "#e84530", "ok": "#2a9d5c", "warn": "#d4880f", "err": "#cc2222",
-        "ui_font": "Google Sans Flex", "mono_font": "Cascadia Mono",
-    },
     # --- Light: all-light, no dark contrast.  Soft off-white bg so the white
     #     panels read as raised; cross/border in light gray (not black). ---
     "Light": {
