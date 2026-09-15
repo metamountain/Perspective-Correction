@@ -316,6 +316,24 @@ def ruler_ticks(span, step):
 MARK_LINE_MIN, MARK_LINE_MAX = 1, 3
 
 
+GRID = 4        # the spacing unit the tool column is built from
+
+
+def tool_key(unit=GRID):
+    """``(side, gap)`` in px for one palette tool key and the space below it.
+
+    Square by construction: a key wider than it is tall reads as a label rather
+    than something you press, and every key is the same size because they are
+    the same kind of thing -- nothing in the palette earns being bigger.
+
+    Both numbers are whole multiples of one grid unit, which is the point: the
+    column then lines up with anything else built on ``GRID`` instead of each
+    gap being chosen by eye.  It lives here and not in ``gui.py`` for the reason
+    the hard rules give -- a size tuned in the window is a size no test can see.
+    """
+    return 9 * unit, 2 * unit       # 36 px key, 8 px below it
+
+
 def mark_line_width(short_edge):
     """Screen-pixel width of a hand-drawn control line for an image shown with
     ``short_edge`` px on its short side.
