@@ -38,7 +38,31 @@ import numpy as np
 # "it masked everything".
 MIN_BOX_PX = 8
 
-DEFAULT_COMFY_PYTHON = r"D:\ComfyUI_windows_portable\ComfyUI\python_embeded\python.exe"
+_COMFY_CANDIDATES = (
+    r"D:\ComfyUI_windows_portable\python_embeded\python.exe",
+    r"D:\ComfyUI_windows_portable\ComfyUI\python_embeded\python.exe",
+    r"C:\ComfyUI_windows_portable\python_embeded\python.exe",
+)
+
+
+def default_comfy_python() -> str:
+    """The ComfyUI interpreter, or the first candidate so an error can name it.
+
+    A single hardcoded path is a single point of being wrong, and it WAS wrong:
+    it carried an extra `ComfyUI` segment, so `available()` said no and every
+    SAM gesture was dead with nothing to read anywhere. `PC_COMFY_PYTHON` wins
+    when set, so a machine that keeps it elsewhere needs no edit here.
+    """
+    env = os.environ.get("PC_COMFY_PYTHON", "")
+    if env and os.path.isfile(env):
+        return env
+    for p in _COMFY_CANDIDATES:
+        if os.path.isfile(p):
+            return p
+    return _COMFY_CANDIDATES[0]
+
+
+DEFAULT_COMFY_PYTHON = default_comfy_python()
 DEFAULT_CKPT = os.path.join("models", "sam2", "sam2.1_hiera_base_plus.pt")
 DEFAULT_CFGDIR = os.path.join("models", "sam2", "configs")
 
@@ -54,6 +78,11 @@ _CHILD_SCRIPT = '''
 import os
 os.environ["HF_HUB_OFFLINE"] = "1"
 os.environ["TRANSFORMERS_OFFLINE"] = "1"
+# sam2 builds through torch.jit, which walks type hints with inspect.getsource
+# and dies on Enum._generate_next_value_ in this interpreter -- OSError, inside
+# the child, where nobody sees it. The scripting buys nothing here: one image,
+# one forward pass. Set before torch is imported or it has no effect.
+os.environ["PYTORCH_JIT"] = "0"
 
 import sys
 import traceback
@@ -70,6 +99,7 @@ IMAGE = {_image}
 OUT = {_out}
 CKPT = {_ckpt}
 CFGDIR = {_cfgdir}
+CFGNAME = {_cfgname}
 BOX = {_box}
 POINTS = {_points}
 DEVICE = {_device}
@@ -77,6 +107,7 @@ DEVICE = {_device}
 try:
     import torch
     from hydra import initialize_config_dir
+    from hydra.core.global_hydra import GlobalHydra
     from sam2.build_sam import build_sam2
     from sam2.sam2_image_predictor import SAM2ImagePredictor
 
@@ -86,8 +117,13 @@ try:
         raise RuntimeError("cannot read " + IMAGE)
     rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
+    # Clear first.  Something in this interpreter's site-packages has already
+    # initialised Hydra by the time sam2 is imported, and a second
+    # initialize_config_dir then raises -- which killed every SAM run with a
+    # traceback nobody saw, because it happens inside the child process.
+    GlobalHydra.instance().clear()
     initialize_config_dir(config_dir=CFGDIR, version_base=None)
-    model = build_sam2("sam2/sam2_hiera_b+", CKPT, device=dev)
+    model = build_sam2(CFGNAME, CKPT, device=dev)
     pred = SAM2ImagePredictor(model)
     pred.set_image(rgb)
 
@@ -103,7 +139,10 @@ try:
         raise RuntimeError("no prompt")
 
     masks, scores, _ = pred.predict(**kw)
-    mask = bool(masks[0])
+    # `bool(array)` on anything bigger than one element raises -- this line
+    # had never run, because the model never got far enough to reach it.
+    # Squeeze first: SAM hands back (1, H, W) with multimask_output off.
+    mask = np.asarray(masks[0]).squeeze().astype(bool)
     h, w = rgb.shape[:2]
     if mask.shape[:2] != (h, w):
         mask = cv2.resize(mask.astype(np.uint8), (w, h),
@@ -135,6 +174,29 @@ def _default_ckpt() -> str:
     return os.path.join(root, DEFAULT_CKPT)
 
 
+_SIZE_NAMES = (("base_plus", "b+"), ("large", "l"), ("small", "s"), ("tiny", "t"))
+
+
+def config_for(ckpt: str) -> str:
+    """The hydra config name that matches ``ckpt``, e.g. ``sam2.1/sam2.1_hiera_b+``.
+
+    Derived rather than hardcoded, because the two must agree and nothing said
+    so.  The child asked for ``sam2/sam2_hiera_b+`` -- a SAM 2.0 config -- while
+    the shipped checkpoint is ``sam2.1_hiera_base_plus.pt``, and torch rejected
+    the mismatch with three unexpected state_dict keys, inside the subprocess,
+    where the traceback went nowhere.  The checkpoint's own filename carries
+    both the version and the size; this reads them off it.
+    """
+    stem = os.path.basename(ckpt).rsplit(".", 1)[0]
+    ver = "sam2.1" if stem.startswith("sam2.1") else "sam2"
+    size = "b+"
+    for long, short in _SIZE_NAMES:
+        if long in stem:
+            size = short
+            break
+    return f"{ver}/{ver}_hiera_{size}"
+
+
 def _default_cfgdir() -> str:
     """The config YAMLs the official ``sam2`` package needs at load time."""
     root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -149,7 +211,7 @@ def available(python_exe: str = "", ckpt: str = "") -> bool:
     it would load.  Neither import is attempted -- importing torch in the GUI's
     Python is precisely what this module exists to avoid.
     """
-    py = python_exe or DEFAULT_COMFY_PYTHON
+    py = python_exe or default_comfy_python()
     c = ckpt or _default_ckpt()
     if not os.path.isfile(py):
         return False
@@ -231,7 +293,7 @@ def run_subprocess(image_path: str, box: Optional[Tuple[int, int, int, int]],
     Raises ``RuntimeError`` naming what failed when the child exits non-zero or
     times out; the GUI shows that string rather than a traceback.
     """
-    py = python_exe or DEFAULT_COMFY_PYTHON
+    py = python_exe or default_comfy_python()
     if not os.path.isfile(py):
         raise RuntimeError("ComfyUI python not found: " + py)
     c = ckpt or _default_ckpt()
@@ -254,6 +316,7 @@ def run_subprocess(image_path: str, box: Optional[Tuple[int, int, int, int]],
               .replace("{_out}", "'" + _q(mask_path) + "'")
               .replace("{_ckpt}", "'" + _q(c) + "'")
               .replace("{_cfgdir}", "'" + _q(cfg) + "'")
+              .replace("{_cfgname}", "'" + _q(config_for(c)) + "'")
               .replace("{_box}", box_lit)
               .replace("{_points}", pts_lit)
               .replace("{_device}", "'" + _q(device) + "'"))
