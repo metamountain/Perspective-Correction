@@ -55,10 +55,31 @@ E. A VALUE COMPUTED AND NOT USED, or state written and never read.
 
 F. A BRANCH THAT CANNOT BE TAKEN given what the lines above it guarantee.
 
-FOR EACH FINDING
-  `{name}:LINE` -- one sentence saying what goes wrong, and one saying what a
-  user or caller would see. Then HIGH, MEDIUM or LOW: HIGH means it produces a
-  wrong result or a dead feature silently.
+FOR EACH FINDING, THREE PARTS
+
+1. `{name}:LINE` -- one sentence on what goes wrong, one on what a user or
+   caller would see. Then HIGH, MEDIUM or LOW: HIGH means it silently produces
+   a wrong result or a dead feature.
+
+2. PROPOSAL. The exact change you would make, as two fenced blocks:
+
+   ```old
+   <the text exactly as it appears in the file, enough lines to be unique>
+   ```
+   ```new
+   <what it should become>
+   ```
+
+   The `old` block must be copy-paste exact -- it will be matched verbatim, and
+   a near-miss is worthless. Include a comment in `new` saying WHY, in the voice
+   of the file around it. Keep the change minimal: fix the defect, do not tidy.
+
+3. RISK. One sentence: what this could break, and which test would catch it.
+   If you are not sure the change is safe, say so and propose nothing -- a
+   finding with no patch is more useful than a patch that guesses.
+
+DO NOT APPLY ANYTHING. You have no str_replace in this run. The architect reads
+every proposal, checks it against the file, and applies the ones that hold.
 
 RULES
 - Read the whole file first with read_file. It is {lines} lines.
@@ -99,8 +120,13 @@ def main() -> None:
         with open(pkg_path, "w", encoding="utf-8") as fh:
             fh.write(pkg)
         t0 = time.time()
+        # utf-8 with replacement, because Windows hands this process cp1252 and
+        # the worker writes arrows and dashes like any model will.  The third
+        # time this exact class of bug has eaten a run today: decoding its
+        # answer must never be able to fail.
         r = subprocess.run([sys.executable, os.path.join(HERE, "worker_agent.py"),
-                            pkg_path], cwd=REPO, capture_output=True, text=True)
+                            pkg_path], cwd=REPO, capture_output=True, text=True,
+                           encoding="utf-8", errors="replace")
         body = (r.stdout or "") + (r.stderr or "")
         # keep only what the worker said at the end, not its tool trace
         mark = "=== worker finished"
