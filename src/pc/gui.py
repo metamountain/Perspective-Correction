@@ -3081,11 +3081,14 @@ class ReviewPanel(tk.Frame):
         # A round brush gets a round button.  The first attempt used a
         # shaded SQUARE glyph, which is exactly the wrong promise for a
         # tool whose whole point is that it paints circles.
-        # A plain ring, not a brush: the tool paints circles, so the key is one.
+        # A solid disc, not a ring and not a brush: the tool paints a filled
+        # circle, so the key shows one, dark inside the way a masking tool
+        # reads in an image editor.  Measured: 24x24, mirror 100% on both
+        # axes, centre fully covered.
         # Picked by measurement, not by name -- "CircleRingBadge" sounds wrong
         # and renders as a perfectly symmetric hollow circle, while the one
         # actually called StatusCircleOuter is lopsided with a filled centre.
-        self._brush_chk = tool("EA3A", self.v_stroke, self._on_stroke_toggle,
+        self._brush_chk = tool("E91F", self.v_stroke, self._on_stroke_toggle,
                                "Paint a mask over regions to exclude from line "
                                "detection. Right-click or Alt+click to erase.",
                                invert=True)
