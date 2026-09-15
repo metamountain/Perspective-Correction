@@ -84,6 +84,24 @@ shelved and is history now, not instruction.
   only that one asks for something no photographer plausibly wanted.
 - `D:\Batch-Perspective-Correction` (a second, older copy) is **off-limits** per user
   directive — do not write, sync or run tools there.
+- **Every colour comes from `INK`, and anything RENDERED must be re-rendered.**
+  The palette is the single source; a hex literal in a widget option cannot be
+  retinted and will sit there in the old theme's colour forever. Two traps, both
+  paid for on 2026-09-15:
+  1. `_retint_bg` matches widgets **by class**. It walked Frame, Canvas, Label
+     and Button, so the entire tool palette — `tk.Checkbutton` — was never
+     visited. Add a widget class, add it to that list.
+  2. **A walk cannot recolour an image.** Icons and the brand mark are
+     `PhotoImage`s: the tint is in their *pixels*, baked at build time.
+     Re-optioning does nothing; they have to be drawn again. `_switch_theme`
+     therefore rebuilds the palette and re-renders the mark.
+  The pattern to copy is `_logo_image`: `Logo_BPC.png` is a black silhouette and
+  only its **alpha channel** is used — the colour comes from the palette, so the
+  mark follows the theme instead of fighting it. Any new icon does the same via
+  `_icon_pil`, which takes the tint as an argument for exactly this reason.
+  **The check is one gesture:** switch the theme and look for anything still
+  wearing the old colours. Sizes obey the same idea one rule up — they live in
+  `layout.py`, colours live in `INK`, and neither is typed into a widget.
 - Anything fiddly belongs in Python, not in a `.bat`.
 
 ## Environment split (short version)
