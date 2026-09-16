@@ -131,14 +131,12 @@ class Settings:
 
     # ---- output ----
     crop: str = "auto"                  # auto | aspect | inside | none
-    max_crop_loss: float = 0.05         # auto pads rather than crop past this
-    # What the *review window* may trim without being asked, measured against
-    # the padded canvas.  It has to be a second, larger number than
-    # `max_crop_loss` and cannot reuse it: the band only exists because that
-    # gate was exceeded, so reusing it would mean never.  Larger is defensible
-    # here and nowhere else, because the result is on screen and only becomes a
-    # file when the user presses Save.
-    auto_crop_max_loss: float = 0.12
+    # One gate for "how much frame may a crop cost before we pad instead."
+    # Batch default is tight (5 %): an unattended run must not silently throw
+    # away a third of every picture.  The review window raises this to 30 % at
+    # session start because the user sees the result on screen and "Reset crop"
+    # undoes it; the number here is what `--max-crop-loss` maps to.
+    crop_max_loss: float = 0.05
     pad: str = "edge"                   # edge | black | white | #rrggbb | r,g,b
     # What to do with the band the rotation opens up, once padding has put
     # something there.  "none" keeps the pad; the rest put pixels there that

@@ -495,14 +495,14 @@ def test_auto_crop_says_so_rather_than_doing_nothing_quietly():
 
 
 def test_auto_crop_does_by_hand_what_the_batch_gate_refuses_to_do_alone():
-    """``max_crop_loss`` stops a batch quietly throwing a third of every picture
+    """``crop_max_loss`` stops a batch quietly throwing a third of every picture
     away, so a correction this strong comes back padded instead of cropped.  The
     gate is about doing it unasked; asked, the trim is exactly what is wanted."""
     s, _ = _session(seed=45)
     assert s.settings.crop == "auto"
     assert s.crop_rect is None, "the plan padded rather than cropped"
     assert s.auto_crop()
-    assert s.crop_loss() > s.settings.max_crop_loss
+    assert s.crop_loss() > s.settings.crop_max_loss
 
 
 def test_a_crop_drawn_backwards_or_by_accident_is_handled():
@@ -990,3 +990,18 @@ def test_every_mask_source_is_one_kind_of_layer_and_they_add():
     s.sam_mask = None
     s.roi_x = None
     assert s.ignore_mask("vh") is None, "clearing every layer must clear the mask"
+
+
+def test_manual_yaw_never_clamped():
+    """MANUAL mode returns the slider value verbatim regardless of max_horizontal_deg.
+
+    The cap in warp.limit() is a batch-era guard against an unattended run
+    shearing a frame nobody looks at.  In the review window the user sees the
+    result and decides; the slider's own range (-90..+90 deg) is the only
+    guard, which is the mathematical limit for a folded angle."""
+    s, _ = _session()
+    s.mode = MANUAL
+    for deg in (-90, -60, -30, 0, 30, 60, 90):
+        s.manual_yaw = math.radians(deg)
+        assert abs(s.current_yaw() - math.radians(deg)) < 1e-9, \
+            f"yaw {deg} deg was clamped in MANUAL mode"
