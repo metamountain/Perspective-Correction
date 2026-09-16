@@ -272,6 +272,44 @@ def test_a_correction_past_the_limit_is_refused_not_trimmed():
         shutil.rmtree(d, ignore_errors=True)
 
 
+def test_a_pure_yaw_breach_warns_and_applies_not_refuses():
+    """A yaw that runs past the horizontal cap is not refused when roll and
+    pitch are both within their limits.
+
+    Yaw is a special case the user opted into by ticking "correct horizontal":
+    unlike roll/pitch it does not level the frame, it squares one facade onto
+    fronto-parallel, and a legitimate corner shot routinely asks for more than
+    the cap allows (P9 measured real single-VP yaws at 16-70 deg).  Refusing it
+    would be the batch-era asymmetry that raised max_horizontal_deg to end.  So
+    the capped value is applied with a diagnostic note, not a skip -- while a
+    roll or pitch breach on the same frame still refuses.
+    """
+    d = _tmp()
+    try:
+        src = os.path.join(d, "a.jpg")
+        # 30 deg is a corner that renders cleanly (75+ pushes the facade behind
+        # the camera); the estimator recovers ~9 deg pitch and ~30 deg yaw on it
+        cv2.imwrite(src, synth.Scene(pitch_deg=9, yaw_deg=30, seed=31).img)
+        # a horizontal cap far below what the scene asks for stands in for the
+        # 60 deg default meeting a real corner; roll/pitch stay at their caps
+        s = Settings(correct_horizontal=True, max_horizontal_deg=15.0,
+                     refuse_beyond_limit=True)
+        r = process(src, os.path.join(d, "out.jpg"), s, dry_run=True)
+        assert r.status == OK, f"expected the capped yaw to be applied: {r.line()}"
+        assert r.clamped, "the yaw ran past the cap, so clamped must be set"
+        assert abs(r.yaw_deg) <= 15.001, "clamping must still clamp the yaw"
+        note = (r.diagnostics or {}).get("yaw_clamped", "")
+        assert "yaw clamped from" in note, f"expected a yaw_clamped note, got {note!r}"
+        # and the refuse path is untouched: a roll/pitch breach on the same frame
+        # still skips, never warns-and-applies
+        tight = s.replace(max_pitch_deg=1.0)
+        r2 = process(src, os.path.join(d, "out2.jpg"), tight, dry_run=True)
+        assert r2.status == SKIPPED, f"roll/pitch breach must still refuse: {r2.line()}"
+        assert "beyond the limit" in r2.reason
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+
+
 # --------------------------------------------------------------------------
 # roi_x -- the vertical strip that restricts the *horizontal* evidence
 #

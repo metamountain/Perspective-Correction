@@ -130,12 +130,8 @@ def detect_segments(gray: np.ndarray, min_len: float, detector: str = "lsd",
             return base[0], "lsd"
         if detector in ("union", "deep-union"):
             return np.vstack([base[0], guide[0]]), detector
-        gated = gate_by(base[0], guide[0],
-                        dist_tol=getattr(settings, "hybrid_dist_tol", 8.0))
-        # never gate the evidence away entirely
-        if len(gated) < max(8, getattr(settings, "min_vertical_lines", 4) * 2):
-            return base[0], f"lsd({detector} fallback)"
-        return gated, detector
+        # hybrid / deep-hybrid: plain LSD (gate removed — see debug.md)
+        return base[0], "lsd"
     if detector == "deeplsd":
         got = _deeplsd(gray, settings)
         if got is not None:
