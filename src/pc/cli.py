@@ -225,7 +225,7 @@ def build_parser():
                    help="'auto' crops while the loss stays under --max-crop-loss and "
                         "keeps the whole frame otherwise; 'aspect'/'inside' always crop; "
                         "'none' never does")
-    g.add_argument("--max-crop-loss", type=float, default=Settings.max_crop_loss,
+    g.add_argument("--max-crop-loss", type=float, default=Settings.crop_max_loss,
                    help="with --crop auto, the share of the frame a crop may cost "
                         "before the whole frame is kept and padded instead")
     g.add_argument("--pad", default=Settings.pad, metavar="EDGE|COLOUR",
@@ -333,7 +333,7 @@ def settings_from(args) -> Settings:
     s.min_confidence = args.min_confidence
     s.max_area_ratio = args.max_area
     s.crop = args.crop
-    s.max_crop_loss = args.max_crop_loss
+    s.crop_max_loss = args.max_crop_loss
     s.pad = args.pad
     s.fill = args.fill
     s.fill_max_edge = args.fill_max_edge
@@ -407,7 +407,7 @@ def diagnostics_text(args, settings) -> str:
                    "max_roll_deg", "max_horizontal_deg",
                    "pitch_strength", "roll_strength", "horizontal_strength",
                    "correct_horizontal", "crop",
-                   "max_crop_loss", "pad",
+                   "crop_max_loss", "pad",
                    "detect_max_edge", "inlier_threshold_deg", "angular_softness",
                    "uncertain_pitch_damping", "seed")
     out.append("# settings: " + ", ".join(
