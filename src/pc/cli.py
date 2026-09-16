@@ -14,8 +14,10 @@ import os
 import sys
 import time
 
+import cv2
+
 from .config import Settings
-from .pipeline import ERROR, OK, SKIPPED, process
+from .pipeline import ERROR, OK, SKIPPED, measure_horizontals, process
 
 
 def collect(inputs, recursive):
@@ -373,6 +375,52 @@ def _job(item):
     return process(src, dst, settings, debug_dir=debug_dir, dry_run=dry, roi_x=roi_x)
 
 
+def _hpc_save(results, settings, log):
+    """Write hpc_save/ records for every OK result when --horizontal is active."""
+    from . import __version__
+    from . import hpc_log as HPC
+    from . import imageio as io
+
+    folder = "hpc_save"
+    ok_count = 0
+    for r in results:
+        if r.status != OK:
+            continue
+        stem = os.path.splitext(os.path.basename(r.src))[0]
+        # before: re-measure on the source
+        try:
+            src_loaded = io.load(r.src)
+            before = measure_horizontals(src_loaded.bgr, settings, _focal_px(r))
+        except Exception:
+            before = {"n_lines": 0, "yaw_deg": None, "support": 0.0}
+        # after: re-measure on the output
+        try:
+            out_bgr = cv2.imread(r.dst)
+            if out_bgr is None:
+                raise ValueError("unreadable")
+            after = measure_horizontals(out_bgr, settings, _focal_px(r))
+        except Exception:
+            after = {"n_lines": 0, "yaw_deg": None, "support": 0.0}
+        rec = HPC.build_record(r, before, after, __version__)
+        HPC.write_record(folder, stem, rec)
+        HPC.append_csv(folder, HPC.record_to_row(rec))
+        ok_count += 1
+    if ok_count:
+        log(f"# hpc_save: {ok_count} record(s) written to {folder}/")
+
+
+def _focal_px(r):
+    """Recover the focal length in pixels from a Result (full-res)."""
+    import math as _m
+    w, h = r.out_size or (0, 0)
+    if not w or not h:
+        return None
+    f35 = r.focal_35mm
+    if not f35:
+        return None
+    return float(f35) * _m.hypot(w, h) / _m.hypot(36.0, 24.0)
+
+
 def diagnostics_text(args, settings) -> str:
     """Everything needed to interpret a log without asking follow-up questions.
 
@@ -663,6 +711,9 @@ def main(argv=None) -> int:
         counts[r.status] += 1
     log(f"# done in {time.time() - t0:.1f}s: {counts[OK]} OK, {counts[SKIPPED]} SKIPPED, "
         f"{counts[ERROR]} ERROR" + (f", {skipped_existing} already present" if skipped_existing else ""))
+
+    if settings.correct_horizontal:
+        _hpc_save(results, settings, log)
 
     if args.verbose:
         for r in results:
