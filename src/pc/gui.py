@@ -101,24 +101,22 @@ THEMES = {
         "text": "#e6e8ec", "dim": "#8b929c",
         "accent": "#4da3ff", "ok": "#5ac37f", "warn": "#e0b24c", "err": "#ef6b6b",
     },
-    # --- C64: the "blue screen" but darkened for a UI.  Border blue (#40318D)
-    #     as bg, lighter periwinkle panels, cyan accent (C64's "white-on-blue"
-    #     terminal feel).  Courier New evokes the VIC-20/C64 bitmap font. ---
+    # --- C64: VIC-II PAL palette.  Blue (#0000AA) bg, Light Blue (#0088FF)
+    #     border/panels -- the classic blue-screen look. ---
     "C64": {
-        "bg": "#2a1f5e", "panel": "#3b2d78", "field": "#1e1548",
-        "cross": "#16103a", "line": "#5c4cb3",
-        "text": "#e8e4ff", "dim": "#9b8fd4",
-        "accent": "#00e5d0", "ok": "#66ff66", "warn": "#ffe066", "err": "#ff5555",
+        "bg": "#0000AA", "panel": "#0088FF", "field": "#000055",
+        "cross": "#000033", "line": "#0088FF",
+        "text": "#FFFFFF", "dim": "#8888FF",
+        "accent": "#00E5D0", "ok": "#66CC66", "warn": "#FFE554", "err": "#E3241B",
         "ui_font": "Courier New", "mono_font": "Courier New",
     },
-    # --- Amiga 500: Workbench 2.0 light gray desktop with the iconic dark-blue
-    #     title bar as accent.  Verdana approximates the Workbench pixel sans.
-    #     Magenta/pink is the Amiga's "selected" highlight in Workbench. ---
+    # --- Amiga 500: Workbench 2.0-3.1 (3D Grey & Blue).  Bevel gray bg,
+    #     dark-blue title bar accent, black text, white light edges. ---
     "Amiga 500": {
-        "bg": "#c8c8d0", "panel": "#d8d8e0", "field": "#b8b8c4",
-        "cross": "#a0a0ac", "line": "#888898",
-        "text": "#1a1a2e", "dim": "#505068",
-        "accent": "#0000cc", "ok": "#00aa44", "warn": "#cc8800", "err": "#cc2222",
+        "bg": "#AAAAAA", "panel": "#B4B4B4", "field": "#9A9A9A",
+        "cross": "#808080", "line": "#FFFFFF",
+        "text": "#000000", "dim": "#555555",
+        "accent": "#0055BB", "ok": "#008800", "warn": "#886600", "err": "#CC0000",
         "ui_font": "Verdana", "mono_font": "Consolas",
     },
     # --- Light: all-light, no dark contrast.  Soft off-white bg so the white
@@ -1718,18 +1716,7 @@ class ReviewPanel(tk.Frame):
     def _on_before_motion(self, event):
         if getattr(self, "_loupe", None) is not None:
             self._loupe_move(event)
-        # Hover cursor in the top black border (Q2 ruler zone).  NOT
-        # `sb_h_arrow`: that is an X11 name this Tk build rejects, and
-        # `config(cursor=...)` raising inside an event handler means the
-        # whole gesture dies -- under pythonw, with no console, silently.
-        # Every cursor name in this file is checked against the live Tk.
-        # indicates the invisible ruler area.  Click activates + drags.
-        cw = self.c_before.winfo_width()
-        ch = self.c_before.winfo_height()
-        in_top_border = event.y < RULER_MARGIN and RULER_MARGIN <= event.x <= cw - RULER_MARGIN
-        if in_top_border:
-            self.c_before.config(cursor="sb_v_double_arrow")
-        elif getattr(self, "v_roi", None) is not None and self.v_roi.get() \
+        if getattr(self, "v_roi", None) is not None and self.v_roi.get() \
                 and getattr(self, "_ph_b", None) is not None:
             oy = self._before_off[1]
             ih = self._ph_b.height()
@@ -1861,10 +1848,9 @@ class ReviewPanel(tk.Frame):
         c.create_image(0, 0, anchor="nw", image=ph)
         self._loupe_ph = ph          # the canvas does not keep a reference
         m = size // 2
-        for x1, y1, x2, y2 in ((m - 4, m, m + 4, m), (m, m - 4, m, m + 4)):
-            c.create_line(x1, y1, x2, y2, fill=INK["cross"], width=3)
-        for x1, y1, x2, y2 in ((m - 4, m, m + 4, m), (m, m - 4, m, m + 4)):
-            c.create_line(x1, y1, x2, y2, fill=INK["accent"])
+        arm = max(20, size // 6)
+        for x1, y1, x2, y2 in ((m - arm, m, m + arm, m), (m, m - arm, m, m + arm)):
+            c.create_line(x1, y1, x2, y2, fill="#000000", width=2)
         # Round, and it says "glass" rather than "a second window". Tk cannot
         # clip a canvas, so the corners are covered rather than cut: four arcs
         # of the cross colour outside the circle, then a ring on top.
@@ -2305,14 +2291,6 @@ class ReviewPanel(tk.Frame):
             if hit is not None:
                 self._on_roi_drag_start(hit)
                 return
-        cw = self.c_before.winfo_width()
-        if event.y < RULER_MARGIN and RULER_MARGIN <= event.x <= cw - RULER_MARGIN:
-            self._ruler_y = max(2, min(RULER_MARGIN - 2, event.y))
-            self._ruler_visible = True
-            self._ruler_dragging = True
-            self.c_before.config(cursor="sb_v_double_arrow")
-            self._schedule_redraw()
-            return
         if getattr(self, "v_sam", None) is not None and self.v_sam.get():
             self._on_sam_press(event)
             return
@@ -2587,10 +2565,6 @@ class ReviewPanel(tk.Frame):
         if getattr(self, "v_sam", None) is not None and self.v_sam.get():
             self._on_sam_drag(event)
             return
-        if getattr(self, "_ruler_dragging", False):
-            self._ruler_y = max(2, min(RULER_MARGIN - 2, event.y))
-            self._schedule_redraw()
-            return
         if getattr(self, "_roi_drag", None) is not None:
             self._on_roi_drag_move(event)
             return
@@ -2606,11 +2580,6 @@ class ReviewPanel(tk.Frame):
     def _on_before_b1release(self, event):
         if getattr(self, "v_sam", None) is not None and self.v_sam.get():
             self._on_sam_release(event)
-            return
-        if getattr(self, "_ruler_dragging", False):
-            self._ruler_dragging = False
-            self.c_before.config(cursor="sb_v_double_arrow")
-            self._schedule_redraw()
             return
         if getattr(self, "_roi_drag", None) is not None:
             self._on_roi_drag_release()
@@ -3265,24 +3234,44 @@ class ReviewPanel(tk.Frame):
         return "h" if dy <= dx else "v"
 
     def _on_cross_press(self, event):
-        """Start pulling a guide out of the cross."""
+        """Click in the black cross/border: start ruler drag (top border of Q2)
+        or pull a guide (elsewhere)."""
         if getattr(self, "_ph_a", None) is None:
+            return
+        # Top border above Q2 = ruler generation zone.
+        cw = self.winfo_width()
+        q2_left = self.cell_after.winfo_x()
+        in_ruler_zone = (event.y < layout.CROSS_BORDER
+                         and event.x >= q2_left)
+        if in_ruler_zone:
+            self._ruler_visible = True
+            self._ruler_dragging = True
+            self.config(cursor="sb_v_double_arrow")
+            self._schedule_redraw()
             return
         self._cross_pull = self._cross_orientation(event)
 
     def _on_cross_pull(self, event):
-        """Preview the guide while the pointer is still over the cross."""
+        """Drag in the cross: move ruler or preview guide."""
+        if getattr(self, "_ruler_dragging", False):
+            self._ruler_y = max(2, min(RULER_MARGIN - 2, event.y))
+            self._schedule_redraw()
+            return
         if getattr(self, "_cross_pull", None) is None:
             return
         self._cross_preview(event)
 
-    def _on_cross_drop(self, event):
-        """Drop the guide if it landed on the corrected pane, else discard it.
+    def _on_cross_ruler_release(self):
+        """End ruler drag from the cross."""
+        self._ruler_dragging = False
+        self.config(cursor="")
+        self._schedule_redraw()
 
-        Released back over the cross it simply does not appear -- the same way
-        a guide dragged back to the ruler is put away rather than left at the
-        frame edge.
-        """
+    def _on_cross_drop(self, event):
+        """Drop: end ruler drag or drop a guide on the corrected pane."""
+        if getattr(self, "_ruler_dragging", False):
+            self._on_cross_ruler_release()
+            return
         kind = getattr(self, "_cross_pull", None)
         self._cross_pull = None
         self.c_after.delete("guide_preview")
