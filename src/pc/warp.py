@@ -210,7 +210,7 @@ def plan(img_w: int, img_h: int, H: np.ndarray, settings):
     convergence and then cropping to the largest inscribed rectangle can cost a
     quarter of the picture, and a quarter of the picture is a real loss to trade
     for straight verticals -- often a worse one than the convergence was.  So
-    auto crops only while the loss stays small (``max_crop_loss``, 5 % by
+    auto crops only while the loss stays small (``crop_max_loss``, 5 % by
     default) and otherwise keeps the whole frame and pads the corners the
     rotation opened up.  The choice is per photograph, because whether the loss
     is small is a property of the photograph and not of the folder.
@@ -231,7 +231,7 @@ def plan(img_w: int, img_h: int, H: np.ndarray, settings):
         return None
 
     coverage = (rw * rh) / quad_area(quad) if quad_area(quad) > 0 else 0.0
-    if settings.crop == "auto" and (1.0 - coverage) > settings.max_crop_loss:
+    if settings.crop == "auto" and (1.0 - coverage) > settings.crop_max_loss:
         return _whole_frame(H, quad, img_w, img_h, settings, area_ratio)
 
     if settings.keep_size:

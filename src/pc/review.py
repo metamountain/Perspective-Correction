@@ -66,6 +66,12 @@ class ReviewSession:
     def __init__(self, path: str, settings, image=None):
         self.path = path
         self.settings = settings
+        # Interactive auto-crop threshold: the user sees the result on screen
+        # and "Reset crop" undoes it, so the trim may cost more frame than the
+        # batch gate allows.  This is NOT ``settings.crop_max_loss`` (which
+        # governs the warp plan's pad-vs-crop decision) — it is the ceiling for
+        # how much the *auto-crop button* may remove without asking.
+        self.auto_crop_threshold = max(settings.crop_max_loss, 0.30)
         if image is None:
             self.src = IO.load(path)
             self.bgr = self.src.bgr
@@ -444,7 +450,7 @@ class ReviewSession:
         """Trim to the largest rectangle that contains no invented pixel.
 
         The same frame ``warp.plan`` computes for ``crop="auto"``, minus the
-        ``max_crop_loss`` gate: the gate exists to stop a batch quietly throwing
+        ``crop_max_loss`` gate: the gate exists to stop a batch quietly throwing
         a quarter of every picture away, and a button pressed by hand is not
         quiet.  It keeps the original aspect ratio.
 
@@ -522,11 +528,12 @@ class ReviewSession:
         a generative model, a checkpoint and three seconds of inference to
         replace 2 % of sky that cropping removes for free.
 
-        The threshold is ``auto_crop_max_loss`` and **cannot** be
-        ``max_crop_loss``, however much a second number offends. The padded band
-        exists precisely *because* the plan's gate was exceeded, so reusing that
-        gate here would mean never firing. Measured on rendered scenes, with the
-        fitted angle rather than the requested one:
+        The threshold is ``auto_crop_threshold`` (30 % in interactive mode;
+        see ``__init__``).  It cannot be ``settings.crop_max_loss``, however much
+        a second number offends: the padded band exists precisely *because* the
+        plan's gate was exceeded, so reusing that gate here would mean never
+        firing.  Measured on rendered scenes, with the fitted angle rather than
+        the requested one:
 
         ==========  ==========  ==========  ==========
         pitch       band        crop costs  batch does
@@ -539,11 +546,11 @@ class ReviewSession:
         ==========  ==========  ==========  ==========
 
         Cropping costs about **2.5x the band**, because the rectangle keeps the
-        original aspect ratio and stays anchored on the mapped centre. The
-        default of 0.12 therefore covers corrections up to roughly 3 degrees,
-        which is where most of them are.
+        original aspect ratio and stays anchored on the mapped centre.  The 30 %
+        gate therefore covers corrections up to roughly 9 degrees, which is
+        where most of them are.
 
-        Twelve per cent taken without being asked would be indefensible in the
+        Thirty per cent taken without being asked would be indefensible in the
         batch. It is defensible here for one reason: this runs in the review
         window, the result is on screen with the discarded part shaded, and it
         becomes a file only when the user presses Save. "Reset crop" undoes it.
@@ -554,7 +561,7 @@ class ReviewSession:
             return False
         if not self.auto_crop():
             return False
-        if self.crop_loss() <= float(getattr(self.settings, "auto_crop_max_loss", 0.12)):
+        if self.crop_loss() <= self.auto_crop_threshold:
             return True
         self.clear_crop_rect()
         return False
@@ -850,9 +857,15 @@ class ReviewSession:
     def current_yaw(self):
         """Yaw in radians actually in force, 0 when horizontal correction is off.
 
-        In manual mode this is the slider value as-is, exactly like roll and
-        pitch; in auto mode it is the model's yaw through the same limits,
-        which is where ``correct_horizontal`` gates it to zero."""
+        In manual mode this is the slider value **verbatim** — no cap is applied.
+        The ``max_horizontal_deg`` limit in ``warp.limit()`` is a batch-era guard
+        against an unattended run shearing a frame nobody looks at; in the review
+        window the user sees the result and decides whether 75 deg looks right.
+        The slider's own range (-90..+90) is the only guard, which is the
+        mathematical limit for a folded angle.
+
+        In auto mode it is the model's yaw through the same limits, which is
+        where ``correct_horizontal`` gates it to zero."""
         if self.mode == MANUAL:
             return self.manual_yaw
         if self.model is None or not self.model.f:

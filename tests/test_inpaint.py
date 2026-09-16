@@ -74,12 +74,9 @@ def test_inventing_most_of_the_frame_is_refused():
     img = _photo()
     hole = np.zeros(img.shape[:2], bool)
     hole[:, :80] = True                                   # two thirds of it
-    try:
-        F.fill(img, hole, Settings().replace(fill="lama"))
-    except F.FillUnavailable as exc:
-        assert "fill-max-share" in str(exc)
-    else:
-        raise AssertionError("a 67 % hole should have been refused")
+    out, note = F.fill(img, hole, Settings().replace(fill="lama"))
+    assert note is not None, "a 67 % hole should have produced a skip note"
+    assert "fill-max-share" in note
 
 
 def test_an_unknown_backend_is_an_error_not_a_pass_through():

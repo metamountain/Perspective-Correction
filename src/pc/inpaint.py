@@ -671,11 +671,10 @@ def fill(bgr: np.ndarray, hole: np.ndarray, settings) -> tuple:
         return bgr, "nothing to fill"
     share = float(np.mean(hole))
     cap = float(getattr(settings, "fill_max_share", 0.35))
-    if share > cap:
-        raise FillUnavailable(
-            f"the hole is {share:.0%} of the frame, over --fill-max-share "
-            f"({cap:.0%}). That much invented content is a picture, not a "
-            f"correction; crop instead")
+    if cap > 0 and share > cap:
+        note = (f"fill skipped — hole is {share:.0%} of the frame "
+                f"(over --fill-max-share {cap:.0%}); consider cropping first")
+        return bgr, note
     t0 = time.time()
     if mode == "telea":
         out = _fill_telea(bgr, hole, settings)
