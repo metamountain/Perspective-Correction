@@ -3267,7 +3267,7 @@ class ReviewPanel(tk.Frame):
     def _on_cross_pull(self, event):
         """Drag in the cross: move ruler or preview guide."""
         if getattr(self, "_ruler_dragging", False):
-            delta = event.y - self._ruler_drag_start_y
+            delta = (event.y - self._ruler_drag_start_y) * 3
             self._ruler_y = max(2, min(50, self._ruler_drag_start_val + delta))
             aox, aoy = self._after_off
             iw = self._ph_a.width() if self._ph_a else 0
