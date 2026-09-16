@@ -863,27 +863,12 @@ class ReviewPanel(tk.Frame):
         # `_build` re-runs on every load and a bar parented to the previous
         # canvas dies with it; the variables are made once so the switch does not
         # flip itself off each time a photograph opens.
-        if getattr(self, "v_grid", None) is None:
-            self.v_grid = tk.BooleanVar(value=False)
-            self.v_grid_step = tk.StringVar(value="50 px")
+        if getattr(self, "v_after_lines", None) is None:
             self.v_after_lines = tk.BooleanVar(value=False)
         gridbar = tk.Frame(self.c_after, bg=INK["field"])
         self._gridbar = gridbar
-        ttk.Checkbutton(gridbar, text="Grid", command=self._schedule_redraw,
-                        variable=self.v_grid).pack(side="left", padx=(4, 0))
-        # Detection re-run on the corrected frame: the direct check on whether a
-        # correction actually worked, rather than inferring it from the original.
         ttk.Checkbutton(gridbar, text="Check lines", command=self._schedule_redraw,
-                        variable=self.v_after_lines).pack(side="left", padx=(6, 0))
-        # Editable, not readonly: the presets are a convenience, but any "NN px"
-        # step must work.  `_grid_step` parses the field defensively, so a value
-        # that is neither a preset nor a number simply falls back to 50 px.
-        grid_cb = ttk.Combobox(gridbar, textvariable=self.v_grid_step, width=8,
-                               values=["25 px", "50 px", "100 px",
-                                       "thirds", "quarters", "sixths"])
-        grid_cb.pack(side="left", padx=4, pady=2)
-        for ev in ("<<ComboboxSelected>>", "<Return>", "<FocusOut>"):
-            grid_cb.bind(ev, lambda e: self._schedule_redraw())
+                        variable=self.v_after_lines).pack(side="left", padx=(4, 0))
         gridbar.place(relx=1.0, x=-8, y=8, anchor="ne")
         self._pending_mark = None
         self._after_off = (0, 0)
@@ -2136,7 +2121,6 @@ class ReviewPanel(tk.Frame):
         self._paint_ground(self.c_after)
         self.c_after.create_image(aox, aoy, anchor="nw", image=ph)
         self._ph_a = ph
-        self._draw_grid(self.c_after, *self._after_off, ph.width(), ph.height())
         self._draw_rulers(self.c_after, *self._after_off, ph.width(), ph.height())
         self._draw_after_guides()
         self._draw_after_lines(arr, ph.width(), ph.height())
@@ -3003,20 +2987,6 @@ class ReviewPanel(tk.Frame):
                 pass
             self._set_status("preview failed (full log: pc_errors.log):\n" + tb)
 
-    def _grid_step(self):
-        """Grid spacing from the field: pixels per cell, or a division count.
-
-        The field is editable so any pixel step works; a value that parses to
-        nothing falls back to quarters rather than crashing the redraw."""
-        v = self.v_grid_step.get().strip().lower()
-        if v.endswith("px"):
-            try:
-                return max(10, int(v[:-2].strip())), 0
-            except ValueError:
-                return 50, 0
-        n = {"thirds": 3, "quarters": 4, "sixths": 6}.get(v, 4)
-        return 0, n
-
     def _build_tool_palette(self):
         """Fill the picture-corner palette with the drawing tools.
 
@@ -3169,35 +3139,6 @@ class ReviewPanel(tk.Frame):
                 colour = "#39ff7a" if abs(dy) <= 1.5 else "#ffb03a"
             self.c_after.create_line(ox + x0, oy + y0, ox + x1, oy + y1,
                                      fill=colour, width=1, tags="after_lines")
-
-    def _draw_grid(self, canvas, ox, oy, iw, ih):
-        """Soft reference grid over the preview, for checking corrections.
-
-        Canvas-drawn rather than burnt into the render: it is a measuring
-        instrument, not part of the photograph, and `stipple` gives the
-        transparency Tk has no alpha for.  Aligned to the image's top-left
-        corner so the cells track the picture, not the window; in the
-        corrected frame a true vertical should run along a grid line.
-        """
-        if not self.v_grid.get():
-            return
-        step, n = self._grid_step()
-        kw = dict(fill="#9fd8ff", width=2, stipple="gray50")
-        if step:
-            x = ox
-            while x <= ox + iw:
-                canvas.create_line(x, oy, x, oy + ih, **kw)
-                x += step
-            y = oy
-            while y <= oy + ih:
-                canvas.create_line(ox, y, ox + iw, y, **kw)
-                y += step
-        else:
-            for i in range(1, n):
-                x = ox + i * iw / n
-                canvas.create_line(x, oy, x, oy + ih, **kw)
-                y = oy + i * ih / n
-                canvas.create_line(ox, y, ox + iw, y, **kw)
 
     def _on_cross_motion(self, event=None):
         """Pointer over the black cross or border: reveal Q2's ruler.
