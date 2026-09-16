@@ -91,6 +91,7 @@ class ReviewSession:
         self.mode = AUTO
         self.show_mask = True
         self.mask_alpha = 0.28
+        self.mask_color = (60, 60, 200)  # BGR; the GUI swatch overrides this
         # Hand-painted ignore region, analysis-image resolution, or None until
         # the brush is first used.  `_paint_struck` remembers which lines this
         # paint struck out, so erasing part of it can hand exactly those back
@@ -911,7 +912,8 @@ class ReviewSession:
         # detected lines are on screen.  Coupling it to show_lines made the whole
         # opacity control dead the moment "Lines" was switched off.
         if self.show_mask and self.mask_alpha > 0.001:
-            PV.tint_mask(canvas, info.get("mask"), alpha=self.mask_alpha)
+            mc = getattr(self, "mask_color", None) or (60, 60, 200)
+            PV.tint_mask(canvas, info.get("mask"), colour=mc, alpha=self.mask_alpha)
         if show_lines:
             # A struck line is gone from view, not recoloured: the user excluded
             # it on purpose (stroke, strike-slanted or a click), so drawing it in

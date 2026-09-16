@@ -252,6 +252,9 @@ def apply_theme(root, palette=None):
     st.configure("TLabelframe", background=p["bg"], bordercolor=p["line"])
     st.configure("TLabelframe.Label", background=p["bg"], foreground=p["dim"])
     st.configure("TSeparator", background=p["line"])
+    # Menus (right-click, dropdown) use the theme palette, not the OS default.
+    st.configure("TMenu", background=p["panel"], foreground=p["text"])
+    st.map("TMenu", background=[("active", p["line"])])
     return ui, mono
 
 
@@ -760,6 +763,7 @@ class ReviewPanel(tk.Frame):
         dst = os.path.basename(self._target_path())
         self._before_lbl.configure(text=f"before   {_shorten_middle(src)}")
         self._after_lbl.configure(text=f"after   {_shorten_middle(dst)}")
+        self._update_after_dims()
 
     # -- layout ----------------------------------------------------------
     def _build(self):
@@ -842,15 +846,33 @@ class ReviewPanel(tk.Frame):
         if getattr(self, "v_show_lines", None) is None:
             self.v_show_lines = tk.BooleanVar(value=True)
             self.v_show_mask = tk.BooleanVar(value=True)
+            self.v_mask_color = tk.StringVar(value="#dc4c3e")
+            self.v_mask_alpha = tk.DoubleVar(value=0.60)
         ovbar = tk.Frame(self.c_before, bg=INK["field"])
         self._ovbar = ovbar
         ttk.Checkbutton(ovbar, text="Lines", command=self._schedule_redraw,
                         variable=self.v_show_lines).pack(side="left", padx=(4, 0))
         ttk.Checkbutton(ovbar, text="Mask", command=self._toggle_mask,
                         variable=self.v_show_mask).pack(side="left", padx=4, pady=2)
+        # Mask colour + opacity: the wash is a fixed red by default, but a user
+        # judging a red facade needs another colour.  The swatch opens the system
+        # colour picker; the slider reuses the same variable as the mask panel's
+        # "mask opacity" so both stay in sync.
+        self._mask_swatch = tk.Button(ovbar, width=3, relief="flat", bd=0,
+                                      bg=self.v_mask_color.get(),
+                                      command=self._pick_mask_color)
+        self._mask_swatch.pack(side="left", padx=(6, 2))
+        _attach_tooltip(self._mask_swatch, "Mask overlay colour")
+        ttk.Scale(ovbar, from_=0.05, to=1.0, variable=self.v_mask_alpha,
+                  orient="horizontal", length=80,
+                  command=lambda _v: self._on_mask_alpha()).pack(side="left", padx=2)
         ovbar.place(relx=1.0, x=-8, y=8, anchor="ne")
         self._after_lbl = ttk.Label(self.cell_after, text="after")
         self._after_lbl.pack(anchor="w")
+        # Live pixel dimensions: updated on every crop change so the user sees
+        # exactly what Q2 shows without guessing from the image.
+        self._after_dims = ttk.Label(self.cell_after, style="Dim.TLabel", text="")
+        self._after_dims.pack(anchor="e", side="right")
         self.c_after = tk.Canvas(self.cell_after, bg=INK["field"],
                                  highlightthickness=0, width=1, height=1)
         self.c_after.pack(fill="both", expand=True)
@@ -1162,12 +1184,13 @@ class ReviewPanel(tk.Frame):
         # photograph onwards.  Same trap as the overlay switches above.
         if getattr(self, "v_stroke", None) is None:
             self.v_stroke = tk.BooleanVar(value=False)
-            self.v_stroke_w = tk.IntVar(value=10)
+            self.v_stroke_w = tk.IntVar(value=60)
         if getattr(self, "v_mark", None) is None:
             self.v_mark = tk.BooleanVar(value=False)
         if getattr(self, "v_sam", None) is None:
             self.v_sam = tk.BooleanVar(value=False)
             self._sam_box = None
+            self._sam_box_px = None
             self._sam_points = []
             self._sam_selection = None
         # The palette in the picture's top-left corner can only be finished here:
@@ -1368,6 +1391,7 @@ class ReviewPanel(tk.Frame):
         self.session._paint_struck = np.zeros(len(self.session.vert), dtype=bool)
         self.session.sam_mask = None
         self._sam_box = None
+        self._sam_box_px = None
         self._sam_points = []
         self._sam_selection = None
         self.v_maskmode.set("off")
@@ -1427,6 +1451,76 @@ class ReviewPanel(tk.Frame):
         if not self.session:
             return
         self.session.mask_alpha = float(self.v_alpha.get())
+        self._schedule_redraw()
+
+    def _pick_mask_color(self):
+        win = tk.Toplevel(self)
+        win.title("Mask overlay colour")
+        win.resizable(False, False)
+        win.transient(self)
+        win.configure(bg=INK["panel"])
+        # Open directly below the swatch button so the eye never has to travel.
+        sw = getattr(self, "_mask_swatch", None)
+        if sw is not None:
+            try:
+                x = sw.winfo_rootx()
+                y = sw.winfo_rooty() + sw.winfo_height() + 4
+                win.geometry(f"+{x}+{y}")
+            except tk.TclError:
+                pass
+        # 4×4 grid of vivid, saturated colours — easy to distinguish on any theme.
+        presets = [
+            "#ff3030", "#ff7030", "#ffb030", "#ffff30",
+            "#30ff50", "#30ffd0", "#3090ff", "#3030ff",
+            "#8030ff", "#d030ff", "#ff30c0", "#ff3060",
+            "#ffffff", "#b0b0b0", "#606060", "#202020",
+        ]
+        cur = self.v_mask_color.get()
+
+        def pick(col):
+            self.v_mask_color.set(col)
+            sw = getattr(self, "_mask_swatch", None)
+            if sw is not None:
+                sw.configure(bg=col)
+            self._sync_mask_color()
+            win.destroy()
+
+        for i, col in enumerate(presets):
+            r_, c_ = divmod(i, 4)
+            b = tk.Canvas(win, width=36, height=36, bg=col,
+                          highlightthickness=0, bd=0)
+            b.grid(row=r_, column=c_, padx=2, pady=2)
+            b.bind("<Button-1>", lambda _e, cc=col: pick(cc))
+        # Highlight the current colour with a ring.
+        for i, col in enumerate(presets):
+            if col.lower() == cur.lower():
+                r_, c_ = divmod(i, 4)
+                slaves = win.grid_slaves(r_, c_)
+                if slaves:
+                    slaves[0].configure(highlightthickness=2,
+                                        highlightbackground="white")
+        tk.Button(win, text="Cancel", command=win.destroy,
+                  bg=INK["panel"], fg=INK["text"]).grid(
+            row=4, column=0, columnspan=4, pady=(6, 0))
+
+    def _on_mask_alpha(self):
+        # Keep the mask panel's slider in sync (same variable would be cleaner,
+        # but v_alpha is created later in _build_tools and may not exist yet).
+        va = getattr(self, "v_alpha", None)
+        if va is not None:
+            va.set(self.v_mask_alpha.get())
+        self.session.mask_alpha = float(self.v_mask_alpha.get())
+        # Throttled: a full re-warp per slider tick is the lag.  The existing
+        # _schedule_redraw already coalesces to one redraw per event-loop turn.
+        self._schedule_redraw()
+
+    def _sync_mask_color(self):
+        """Convert the hex colour from the swatch into a BGR tuple for review."""
+        h = self.v_mask_color.get().lstrip("#")
+        if len(h) == 6:
+            r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+            if self.session is not None:
+                self.session.mask_color = (b, g, r)  # BGR for OpenCV
         self._schedule_redraw()
 
     def _on_mask_active_toggle(self):
@@ -1920,7 +2014,23 @@ class ReviewPanel(tk.Frame):
             self._schedule_redraw()      # nothing on screen to draw over yet
             return
         self._show_after(self.session.crop_rect)
+        self._update_after_dims()
         self._set_status(self.session.status_text())
+
+    def _update_after_dims(self):
+        """Show the crop's pixel dimensions next to the 'after' label."""
+        lbl = getattr(self, "_after_dims", None)
+        if lbl is None or self.session is None:
+            return
+        rect = self.session.crop_rect
+        W, H = self.session.w, self.session.h
+        if rect is None:
+            lbl.configure(text=f"{W}×{H}")
+        else:
+            x0, y0, x1, y1 = rect
+            cw = int(round((x1 - x0) * W))
+            ch = int(round((y1 - y0) * H))
+            lbl.configure(text=f"{cw}×{ch}")
 
     def _on_crop_press(self, event):
         if getattr(self, "_ph_a", None) is None:
@@ -3365,6 +3475,7 @@ class ReviewPanel(tk.Frame):
             self._exclusive("v_sam")
         else:
             self._sam_box = None
+            self._sam_box_px = None
             self._sam_points = []
             self._sam_selection = None
             self.c_before.delete("sam_prompts")
@@ -3412,32 +3523,31 @@ class ReviewPanel(tk.Frame):
         cx1, cy1 = max(x0, x1), max(y0, y1)
         if (cx1 - cx0) < 5 or (cy1 - cy0) < 5:
             return  # too small, ignore
-        self._sam_box = (cx0 / self.session.w, cy0 / self.session.h,
-                         cx1 / self.session.w, cy1 / self.session.h)
+        # SAM2 expects pixel coordinates [x0, y0, x1, y1], not normalised.
+        # The child script feeds the array straight to pred.predict(box=...),
+        # which treats values as pixels -- 0.15 means 0.15 px, i.e. the corner,
+        # and the model selects the whole frame.
+        W, H = self.session.w, self.session.h
+        self._sam_box = (cx0 / W, cy0 / H, cx1 / W, cy1 / H)  # keep normalised for drawing
+        self._sam_box_px = (int(cx0), int(cy0), int(cx1), int(cy1))  # pixels for SAM2
         self._draw_sam_prompts()
         self._on_sam_apply()
 
     def _on_sam_apply(self):
         if self._sam_box is None:
             return
-        box = self._sam_box
+        box_px = getattr(self, '_sam_box_px', None) or self._sam_box
         pts = getattr(self, '_sam_points', None) or None
         self._busy_sam = True
         self._set_busy(True)
 
         def _run():
             try:
-                # settings.sam_model and settings.sam_device were declared,
-                # shipped in every asdict(), and read by nobody: the call went
-                # out bare and run_subprocess fell back to its own defaults, so
-                # pointing sam_model at a smaller hiera checkpoint changed
-                # nothing and said nothing. Both still fall back on "" -- the
-                # empty case is the same code path it was taking anyway.
-                log.info("SAM apply: box=%s pts=%d image=%s",
-                         [round(v, 4) for v in box], len(pts or ()),
+                log.info("SAM apply: box_px=%s pts=%d image=%s",
+                         list(box_px), len(pts or ()),
                          os.path.basename(self.session.path))
                 png = sam2seg.run_subprocess(
-                    self.session.path, box, pts,
+                    self.session.path, box_px, pts,
                     ckpt=getattr(self.session.settings, "sam_model", ""),
                     device=getattr(self.session.settings, "sam_device", ""))
                 log.info("SAM apply done: %s", os.path.basename(png))
@@ -3502,6 +3612,7 @@ class ReviewPanel(tk.Frame):
         if not self.v_sam.get():
             return
         self._sam_box = None
+        self._sam_box_px = None
         self._sam_points = []
         self._sam_selection = None
         self.c_before.delete("sam_prompts")

@@ -118,7 +118,7 @@ class Settings:
     # and real -- a weak horizontal VP still shears -- it is simply visible to
     # the person reviewing the photograph before anything is written.
     max_horizontal_deg: float = 60.0
-    min_horizontal_support: float = 0.3
+    min_horizontal_support: float = 0.15
 
     # ---- gating ----
     min_confidence: float = 0.40

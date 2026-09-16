@@ -320,7 +320,7 @@ def estimate(vert, horiz, w: int, h: int, settings, exif_focal_px=None) -> Model
                      horiz_vps=[], horizon_support=0.0,
                      diagnostics=dict(diag, reason="no vertical vanishing point"))
 
-    horiz_hyps = V.search(horiz, w, h, settings, "horizontal", n_hypotheses=3) if len(horiz) >= 2 else []
+    horiz_hyps = V.search(horiz, w, h, settings, "horizontal", n_hypotheses=6) if len(horiz) >= 2 else []
     horiz_seq = V.search_sequential(horiz, w, h, settings, "horizontal", k=6) \
         if len(horiz) >= 3 and settings.focal_estimate in ("horizon", "both") else []
 
