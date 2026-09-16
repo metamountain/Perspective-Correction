@@ -14,6 +14,7 @@ import time
 import types
 
 import numpy as np
+from pc import layout
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ASSET = os.path.join(HERE, "assets", "79cb33878fd0ed76d368e7cfa8827e15.jpg")
@@ -621,76 +622,131 @@ def test_the_preview_gives_up_retrying_instead_of_spinning_forever():
         app.destroy()
 
 
-def test_a_guide_is_pulled_out_of_the_border_as_a_plain_grey_line():
-    """Guides are hairlines laid against an edge, not a ruler scale.
+def test_guides_are_pulled_off_the_black_cross():
+    """Guides are pulled off the black cross by dragging.
 
-    This replaces `test_the_ruler_reads_the_same_height_on_left_and_right`,
-    which asserted tick marks near the left and right edges appearing and
-    vanishing **with the grid toggle**. That was a ruler *scale*, and the
-    design it pinned was superseded (user, 2026-09-14: "rulers should be simple
-    grey lines"). Bending the code back to satisfy it would have shipped a
-    feature nobody asked for, so the test moved instead -- the thing this file
-    warns about is a test written to match old behaviour outliving the decision.
-
-    What is pinned now is the behaviour that was actually asked for: a press in
-    the border zone outside the picture adds a guide, it draws as a single grey
-    line spanning the frame, it carries no ticks or labels, and the grid toggle
-    has nothing to do with it.
+    Cross press starts a pull (no guide yet); dragging shows a dashed preview;
+    dropping over the corrected pane commits the guide.  Guides can also be
+    created from the 15 px border zone of Q2 and grabbed on the canvas.
+    Guides live in ``_after_guides`` as ``(kind, pos)`` tuples and are drawn
+    as plain grey lines with tag "after_guide" on ``c_after``.
     """
     app = _app()
     try:
         _loaded(app, 1920, 1200)
         r = app.review
-        assert r._after_guides == [], "a fresh photograph starts with no guides"
+        assert r._after_guides == [], "a fresh photograph should have no guides"
 
-        aox, aoy = r._after_off
-        iw, ih = r._ph_a.width(), r._ph_a.height()
-
-        # press above the picture -- the border strip, not the photograph
-        from pc.gui import GUIDE_GREY
-
-        aox, aoy = r._after_off
-        iw, ih = r._ph_a.width(), r._ph_a.height()
+        from pc.layout import CROSS_BORDER
 
         class _E:
-            """Panel-space x/y plus the root coords the drop handler reads."""
-            def __init__(self, x, y, xr, yr):
+            def __init__(self, x, y, xr=None, yr=None):
                 self.x, self.y = x, y
-                self.x_root, self.y_root = xr, yr
+                self.x_root = xr if xr is not None else x
+                self.y_root = yr if yr is not None else y
 
-        # press on the cross's horizontal centre bar, release over the picture
         pw, ph_ = r.winfo_width(), r.winfo_height()
-        press = _E(pw // 2, ph_ // 2, r.winfo_rootx() + pw // 2,
-                   r.winfo_rooty() + ph_ // 2)
-        r._on_cross_press(press)
-        assert r._cross_pull == "h", (
-            f"a pull from the horizontal bar should make a horizontal guide, "
-            f"got {r._cross_pull!r}")
+        aox, aoy = r._after_off
+        iw_, ih_ = r._ph_a.width(), r._ph_a.height()
+        # Root offsets so _after_pos can convert panel coords → canvas coords.
+        rx0 = r.c_after.winfo_rootx()
+        ry0 = r.c_after.winfo_rooty()
 
-        drop = _E(0, 0,
-                  r.c_after.winfo_rootx() + aox + iw // 2,
-                  r.c_after.winfo_rooty() + aoy + ih // 2)
-        r._on_cross_drop(drop)
-        _settle(app, 6)
-        assert len(r._after_guides) == 1, "the pull did not leave a guide"
-        assert r._after_guides[0][0] == "h"
+        def cross_drop(x, y, kind):
+            """Simulate the full cross press→pull→drop cycle committing a guide."""
+            e_press = _E(x, y)
+            r._on_cross_press(e_press)
+            assert r._cross_pull == kind, (
+                f"press should set _cross_pull to {kind}, got {r._cross_pull}")
+            # Drag over the image so the preview is visible.
+            e_drag = _E(x, y, rx0 + aox + 50, ry0 + aoy + 40)
+            r._on_cross_pull(e_drag)
+            # Drop over the image → commits the guide.
+            e_drop = _E(x, y, rx0 + aox + 50, ry0 + aoy + 40)
+            r._on_cross_drop(e_drop)
 
-        items = r.c_after.find_withtag("after_guide")
-        assert items, "the guide drew nothing"
-        kinds = {r.c_after.type(i) for i in items}
-        assert kinds == {"line"}, f"a guide should be one plain line, found {kinds}"
-        assert len(items) == 1, f"a guide should be a single line, found {len(items)}"
-        assert r.c_after.itemcget(items[0], "fill").lower() == GUIDE_GREY.lower(), (
-            "the guide is not the documented grey")
-        assert int(float(r.c_after.itemcget(items[0], "width"))) == 1, (
-            "the guide is not a hairline")
-
-        # dropped back on the cross instead, it is put away, not left behind
-        r._on_cross_press(press)
-        r._on_cross_drop(press)
+        # --- Cross pull: top border → horizontal guide ---
+        top_x = pw // 4  # avoid panel center where dx=0
+        cross_drop(top_x, CROSS_BORDER // 2, "h")
+        assert len(r._after_guides) == 1, "cross drop over image should create one guide"
+        assert r._after_guides[0][0] == "h", "top press should make a horizontal guide"
         _settle(app, 4)
-        assert len(r._after_guides) == 1, (
-            "a guide released over the cross should be discarded, not added")
+
+        # --- Cross pull: left gutter → vertical guide ---
+        left_y = ph_ // 3  # avoid panel center where dy=0
+        cross_drop(CROSS_BORDER // 2, left_y, "v")
+        assert len(r._after_guides) == 2, "second cross drop should add a second guide"
+        assert r._after_guides[1][0] == "v", "left press should make a vertical guide"
+        _settle(app, 4)
+
+        # --- Cross pull: bottom border → horizontal guide ---
+        cross_drop(pw // 3, ph_ - CROSS_BORDER // 2, "h")
+        assert len(r._after_guides) == 3, "third cross drop should add a third guide"
+        assert r._after_guides[2][0] == "h", "bottom press should make a horizontal guide"
+        _settle(app, 4)
+
+        # --- Cross pull: right gutter → vertical guide ---
+        cross_drop(pw - CROSS_BORDER // 2, left_y, "v")
+        assert len(r._after_guides) == 4, "fourth cross drop should add a fourth guide"
+        assert r._after_guides[3][0] == "v", "right press should make a vertical guide"
+        _settle(app, 4)
+
+        # Four guides: two horizontal (top + bottom), two vertical (left + right).
+        kinds = sorted(g[0] for g in r._after_guides)
+        assert kinds == ["h", "h", "v", "v"], f"expected two h and two v, got {kinds}"
+
+        # --- Cross drop NOT over image → guide discarded ---
+        before = len(r._after_guides)
+        e_press = _E(top_x, CROSS_BORDER // 2)
+        r._on_cross_press(e_press)
+        assert r._cross_pull == "h"
+        # Drop back on the cross: root coords land in the cross gutter,
+        # so _after_pos returns None and the guide is discarded.
+        e_drop_cross = _E(top_x, CROSS_BORDER // 2, rx0 - 50, ry0 - 50)
+        r._on_cross_drop(e_drop_cross)
+        assert len(r._after_guides) == before, (
+            "dropping back on the cross should discard the guide")
+
+        # --- Canvas border-zone creation: click in left 15px of Q2 → v-guide ---
+        before = len(r._after_guides)
+        r._on_crop_press(_E(aox + 5, aoy + ih_ // 3))
+        assert len(r._after_guides) == before + 1, "border-zone click should add a guide"
+        assert r._after_guides[-1][0] == "v", "left border zone should make a v-guide"
+        _settle(app, 4)
+
+        # --- Canvas grab: press on an existing guide grabs it (no new guide) ---
+        h_pos = r._after_guides[0][1]
+        before = len(r._after_guides)
+        hit = r._after_guide_at(50, h_pos, iw_, ih_)
+        assert hit is not None, "pointer on the guide should be detected"
+        assert hit[0] == "h", "should detect a horizontal guide"
+        r._on_crop_press(_E(aox + 50, aoy + h_pos))
+        assert len(r._after_guides) == before, (
+            "pressing over an existing guide must not create a new one")
+        assert r._guide_drag is not None, "canvas press on guide should set _guide_drag"
+        # Drag the grabbed guide: it moves 1:1 from the image edge.
+        r._on_crop_drag(_E(aox + 50, aoy + h_pos + 30))
+        assert abs(r._after_guides[hit[1]][1] - (h_pos + 30)) < 1, (
+            "the picked-up guide should track the cursor")
+        r._on_crop_release(_E(aox + 50, aoy + h_pos + 30))
+        assert r._guide_drag is None, "release should clear _guide_drag"
+        _settle(app, 4)
+
+        # --- Guide items are drawn on c_after with tag "after_guide" ---
+        items = r.c_after.find_withtag("after_guide")
+        assert len(items) >= 2, f"expected at least 2 guide lines, found {len(items)}"
+        for item in items:
+            assert r.c_after.type(item) == "line", "a guide should be a line"
+            assert int(float(r.c_after.itemcget(item, "width"))) == 1
+
+        # --- Hover cursor shows drag direction on the cross ---
+        r._on_cross_motion(_E(top_x, CROSS_BORDER // 2))
+        assert r.cget("cursor") == "sb_v_double_arrow", (
+            "hovering top border should show sb_v_double_arrow")
+        r._on_cross_motion(_E(CROSS_BORDER // 2, left_y))
+        assert r.cget("cursor") == "sb_h_double_arrow", (
+            "hovering left gutter should show sb_h_double_arrow")
+        r.config(cursor="")
 
     finally:
         app.destroy()
@@ -1331,5 +1387,61 @@ def test_sizing_the_pen_does_not_cripple_the_next_erase():
         assert left < painted * 0.2, (
             f"right-drag must erase the whole stroke, not just its ends: "
             f"{painted:.4%} -> {left:.4%}")
+    finally:
+        app.destroy()
+
+
+def test_loupe_alt_damping_tracks_cursor_at_half_rate():
+    """Holding Alt makes the loupe crop centre follow the cursor at 1/LOUPE_MAG.
+
+    Without Alt the centre jumps to the cursor in one step; with Alt it moves
+    only a fraction of the remaining distance, so repeated small motions creep
+    toward the target instead of racing it.
+    """
+    app = _app()
+    try:
+        _loaded(app, 1280, 800)
+        r = app.review
+        s = r.session
+        ox, oy = r._before_off
+
+        def ev(dx, dy, state=0):
+            return types.SimpleNamespace(x=dx + ox, y=dy + oy, state=state)
+
+        # Bring the loupe up as a mark press would.
+        r.v_mark.set(True)
+        r._on_click_before(ev(100, 100))
+        assert r._loupe is not None, "pressing in mark mode must raise the glass"
+        assert r._loupe_center is not None, (
+            "the press must render the crop immediately -- an empty glass "
+            "until the first motion was the bug this test guards")
+
+        # First motion without Alt: centre snaps to the cursor (1:1).
+        r._loupe_move(ev(200, 150))
+        c0 = r._loupe_center
+        assert c0 is not None, "centre must be recorded after a move"
+        exp_x = int(round((ev(200, 150).x - ox) / r._before_scale))
+        exp_y = int(round((ev(200, 150).y - oy) / r._before_scale))
+        assert abs(c0[0] - exp_x) <= 1 and abs(c0[1] - exp_y) <= 1, (
+            f"without Alt the centre should be at the cursor: {c0} vs ({exp_x},{exp_y})")
+
+        # Now hold Alt and move further: the centre must lag.
+        ALT = 0x0008
+        r._loupe_move(ev(300, 250, state=ALT))
+        c1 = r._loupe_center
+        f = 1.0 / layout.LOUPE_MAG
+        # Recompute expected: new cursor in image px
+        nx = int(round((ev(300, 250).x - ox) / r._before_scale))
+        ny = int(round((ev(300, 250).y - oy) / r._before_scale))
+        exp_cx = c0[0] + (nx - c0[0]) * f
+        exp_cy = c0[1] + (ny - c0[1]) * f
+        assert abs(c1[0] - exp_cx) <= 1 and abs(c1[1] - exp_cy) <= 1, (
+            f"with Alt the centre should be damped: {c1} vs ({exp_cx:.1f},{exp_cy:.1f})")
+
+        # The damped centre must NOT have jumped all the way to the new cursor.
+        assert abs(c1[0] - nx) > 2 or abs(c1[1] - ny) > 2, (
+            "Alt damping must leave a gap between centre and cursor")
+
+        r._loupe_hide()
     finally:
         app.destroy()
