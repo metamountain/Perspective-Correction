@@ -63,14 +63,13 @@ def test_mlsd_returns_long_structural_segments():
     assert len(vert) + len(horiz) > 0
 
 
-def test_hybrid_never_gates_the_evidence_away_entirely():
-    """The gate falls back to plain LSD rather than starving the fit, which is
-    what makes it safe to switch on."""
+def test_hybrid_returns_plain_lsd():
+    """Gate removed (see debug.md): hybrid now returns plain LSD segments."""
     _mlsd_or_skip()
     sc = synth.Scene(w=1200, h=800, pitch_deg=8, seed=42)
     st = Settings().replace(detector="hybrid")
     _, vert, horiz, name, _ = L.prepare(*_grids(sc, st))
-    assert name in ("hybrid", "lsd(hybrid fallback)")
+    assert name == "lsd"
     assert len(vert) >= st.min_vertical_lines
 
 
@@ -83,14 +82,13 @@ def test_deeplsd_returns_segments():
     assert len(vert) + len(horiz) > 0
 
 
-def test_the_deep_hybrid_never_gates_the_evidence_away_entirely():
-    """Same guarantee as the M-LSD hybrid, and for the same reason: a gate that
-    can starve the fit is a gate nobody can switch on safely."""
+def test_deep_hybrid_returns_plain_lsd():
+    """Gate removed (see debug.md): deep-hybrid now returns plain LSD segments."""
     _deeplsd_or_skip()
     sc = synth.Scene(w=1200, h=800, pitch_deg=8, seed=42)
     st = Settings().replace(detector="deep-hybrid")
     _, vert, horiz, name, _ = L.prepare(*_grids(sc, st))
-    assert name in ("deep-hybrid", "lsd(deep-hybrid fallback)")
+    assert name == "lsd"
     assert len(vert) >= st.min_vertical_lines
 
 

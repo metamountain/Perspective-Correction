@@ -2,7 +2,10 @@
 
 Defaults are chosen for hand-held architectural photography: buildings, wide-ish
 lenses, a mixture of images that need correcting and images that do not.  The
-guiding rule is the one from the brief -- when in doubt, leave the photo alone.
+guiding rule is the one from the brief -- when in doubt, leave the photo alone:
+a correction the estimator is unsure about is skipped rather than applied, and
+the batch defaults stay conservative so an unattended run never invents or
+throws away frame it was not asked to touch.
 """
 from __future__ import annotations
 
@@ -16,7 +19,6 @@ class Settings:
     # | deep-union.  The deep-* pair is the mlsd hybrid/union with DeepLSD as
     # the guide instead of M-LSD; see lines.detect_segments.
     detector: str = "lsd"
-    hybrid_dist_tol: float = 8.0
     mlsd_model: str = ""                # path, or a name in models/
     mlsd_score_thr: float = 0.10
     mlsd_dist_thr: float = 20.0

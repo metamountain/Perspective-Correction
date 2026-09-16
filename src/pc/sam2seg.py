@@ -325,8 +325,11 @@ def run_subprocess(image_path: str, box: Optional[Tuple[int, int, int, int]],
 
     t0 = time.time()
     try:
+        kwargs = {}
+        if os.name == "nt":
+            kwargs["creationflags"] = 0x08000000  # CREATE_NO_WINDOW
         proc = subprocess.run([py, script_path], capture_output=True, text=True,
-                              timeout=timeout)
+                              timeout=timeout, **kwargs)
     except subprocess.TimeoutExpired:
         raise RuntimeError("SAM2 timed out after {:.0f}s".format(timeout))
     finally:
