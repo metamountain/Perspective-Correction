@@ -3,13 +3,41 @@
 ### Context window
 
 - **262k tokens** configured (user raised from default on 2026-07-15).
-- Session baseline after resume: ~67k used before first new turn.
 
-## Current task: loupe Alt-damping plan (awaiting user go-ahead)
+## Session changes (2026-09-17, uncommitted)
 
-Plan agreed: hold **Alt** while dragging → loupe crop centre follows cursor at
-`1/LOUPE_MAG` rate (½×). Mark position stays 1:1. ~15 lines in gui.py + 1 test.
-See conversation for full plan; implement on user confirmation.
+### Loupe precision
+- **Alt-damping:** Hold Alt while dragging → loupe crop centre follows cursor at `1/LOUPE_MAG` rate. Crosshair turns cyan while active. `_loupe_center` tracks the damped point; reset on show/hide/rebuild.
+- **Instant press render:** `_loupe_move(event)` called immediately after `_loupe_show()` in both press paths (new mark + endpoint drag). No more empty glass until first motion.
+- **Alt state forwarding:** `event_generate` in `_forward` now passes `state=getattr(event, "state", 0)` so Alt survives when the pointer is over the glass (which overlaps c_before).
+
+### Mark delete handle
+- X-cross instead of plus in `_draw_delete_handle` (plus reads as "add"; this removes).
+
+### Status label (F3)
+- `_set_status` / `_set_status_extra` now write to a real `lbl_status` ttk.Label (Dim style, below the static hint, above the action row). All ~20 interaction hint texts are visible.
+
+### SAM2 box fix
+- `_on_sam_release` stores both `_sam_box` (normalised, for drawing) and `_sam_box_px` (pixel ints, for SAM2). `_on_sam_apply` sends `box_px` to `run_subprocess`. SAM2 expects pixel coords `[x0,y0,x1,y1]`; normalised 0-1 values were interpreted as sub-pixel → whole-frame selection.
+
+### Horizontal auto (yaw)
+- `min_horizontal_support`: 0.3 → **0.15** (config.py)
+- `n_hypotheses` for horizontal VP search: 3 → **6** (model.py)
+- `_plausible_horizontal_rows` angle filter: 45° → **70°** (vanishing.py)
+- Yaw activates when `correct_horizontal=True` AND `len(horiz) >= 2` AND dominant VP support ≥ 0.15.
+
+### Mask overlay controls (Q1 top-right)
+- Colour swatch button + opacity slider in the before-pane overlay bar (`_ovbar`).
+- Custom 4×4 colour picker (16 vivid presets, square Canvas swatches, opens directly below the swatch). Tkinter `colorchooser` is broken on Windows.
+- `session.mask_color` (BGR tuple) read by `render_before` → `tint_mask`.
+- Default mask alpha: 0.28 → **0.60**.
+- Mask brush default width: 10 → **60px**.
+
+### Q2 crop dimensions
+- `_after_dims` label (Dim style, top-right of after pane) shows live pixel dimensions of the crop rect. Updated on every `_refresh_crop` and initial load.
+
+### Menu theming
+- `TMenu` ttk.Style configured with theme palette (`panel`/`text`/`line`) instead of OS default black.
 
 ## Prior task: read-only debug pass (complete)
 

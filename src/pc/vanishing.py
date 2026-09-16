@@ -100,7 +100,7 @@ def _plausible_vertical_rows(vps, cx, cy, min_dist, max_lean_deg):
 def _plausible_horizontal_rows(vps, cx, cy, min_dist):
     dx, dy, at_inf = _offsets(vps, cx, cy)
     far = at_inf | (np.hypot(dx, dy) >= min_dist)
-    return far & (np.abs(np.arctan2(np.abs(dy), np.abs(dx))) <= math.radians(45.0))
+    return far & (np.abs(np.arctan2(np.abs(dy), np.abs(dx))) <= math.radians(70.0))
 
 
 def _score(ls, vp, thr_rad):
