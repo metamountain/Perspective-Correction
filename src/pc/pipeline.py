@@ -7,10 +7,12 @@ import time
 
 import numpy as np
 
+from . import geometry as G
 from . import imageio as io
 from . import lines as L
 from . import model as M
 from . import preview as PV
+from . import vanishing as V
 from . import warp as W
 
 OK, SKIPPED, ERROR = "OK", "SKIPPED", "ERROR"
@@ -97,6 +99,32 @@ def analyse(bgr, settings, exif_focal_px=None, image_path="", roi_x=None):
         m.f = m.f / scale                       # back to full resolution pixels
     m.detect_info = info
     return m, vert, horiz, scale, detector
+
+
+def measure_horizontals(bgr, settings, focal_px):
+    """Re-run detection on a (warped) image and report the residual yaw.
+
+    Returns a dict with ``n_lines``, ``yaw_deg`` (or None), and ``support``.
+    Used by the hpc_save logging to verify that horizontals are actually level
+    after correction."""
+    gray, scale = io.analysis_gray(bgr, settings.detect_max_edge)
+    gh, gw = gray.shape[:2]
+    _, _, horiz, _, _ = L.prepare(gray, settings)
+    n = len(horiz)
+    if n < 2 or not focal_px:
+        return {"n_lines": n, "yaw_deg": None, "support": 0.0}
+    f_small = focal_px * scale
+    cx, cy = gw / 2.0, gh / 2.0
+    hyps = V.search(horiz, gw, gh, settings, "horizontal", n_hypotheses=1)
+    if not hyps:
+        return {"n_lines": n, "yaw_deg": None, "support": 0.0}
+    dom = hyps[0]
+    support = float(dom.support)
+    b = G.bearings(np.array([dom.vp]), G.intrinsics(f_small, cx, cy))[0]
+    yaw = math.atan2(-b[2], b[0])
+    yaw = (yaw + math.pi / 2.0) % math.pi - math.pi / 2.0
+    return {"n_lines": n, "yaw_deg": round(math.degrees(yaw), 3),
+            "support": round(support, 3)}
 
 
 def process(src_path, dst_path, settings, debug_dir=None, dry_run=False,
