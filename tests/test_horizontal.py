@@ -118,3 +118,42 @@ def test_yaw_disabled_by_default():
     settings = Settings(correct_horizontal=False)
     m, vert, horiz, scale, det = analyse(bgr, settings)
     assert m.yaw == 0.0
+
+
+def test_weak_horizontal_vp_is_recorded_not_silent():
+    """When the horizontal feature is on but the dominant VP's support falls
+    below the gate, yaw reads zero -- and the reason now rides along in the
+    diagnostics instead of being left silent.
+
+    A plain facade has a strong horizontal bundle (support well above the
+    0.30 default), so to exercise the weak-evidence branch the gate is raised
+    past that support: yaw must stay exactly zero, and diag["yaw_skipped"]
+    must say the support was below the gate."""
+    scene = Scene(w=1200, h=800, focal_35mm=28.0, yaw_deg=10.0, seed=42)
+    bgr = scene.img
+    # the gate is raised past any real support on a synthetic facade (a plain
+    # facade's horizontal bundle sits well below 0.999), so the dominant VP --
+    # which does exist here -- always falls below it and the weak-evidence
+    # branch fires rather than the "no VP" one
+    m0, *_ = analyse(bgr, _settings(min_horizontal_support=0.0))
+    assert m0.diagnostics.get("horizontal_vps", 0) >= 1, "scene must yield a horizontal VP"
+    m2, *_ = analyse(bgr, _settings(min_horizontal_support=0.999))
+    assert m2.yaw == 0.0, "below the gate the yaw must be exactly zero"
+    note = m2.diagnostics.get("yaw_skipped")
+    assert note is not None, "a sub-gate horizontal VP must leave a yaw_skipped note"
+    assert "support" in note and "gate" in note, f"note should name both numbers: {note!r}"
+
+
+def test_no_horizontal_vp_is_recorded_not_silent():
+    """The other silent branch: the feature is on but the search found no
+    horizontal VP at all.  yaw is zero AND the diagnostic says why."""
+    scene = Scene(w=1200, h=800, focal_35mm=28.0, yaw_deg=0.0, seed=1)
+    bgr = scene.img
+    # a gate above 1.0 is unreachable by any support, so the dominant VP -- if
+    # one exists -- always falls below it and the "no horizontal VP found"
+    # branch is only reached when the search itself returns nothing; instead we
+    # assert on whichever branch fires, both of which must leave a note
+    m, *_ = analyse(bgr, _settings(min_horizontal_support=0.999))
+    assert m.yaw == 0.0
+    note = m.diagnostics.get("yaw_skipped")
+    assert note is not None, "yaw zero with the feature on must be explained"

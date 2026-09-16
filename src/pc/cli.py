@@ -634,6 +634,10 @@ def main(argv=None) -> int:
         # as a defect; it is reached by --gui and by every non-tty start.
         if args.gui or sys.stdin is None or not sys.stdin.isatty():
             try:
+                import logging
+                logging.basicConfig(level=logging.INFO,
+                                    format="%(asctime)s %(name)s %(levelname)s %(message)s",
+                                    datefmt="%H:%M:%S")
                 from .gui import run as run_gui
             except Exception as exc:
                 print(f"GUI unavailable ({exc}); pass image files or folders instead.")

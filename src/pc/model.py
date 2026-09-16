@@ -151,7 +151,6 @@ def focal_from_horizon(vp_vert, horiz, cx, cy, w, h, settings, horiz_hyps=None):
         return None, float("inf"), 0.0
 
     f_lo, f_hi = 0.25 * max(w, h), 6.0 * max(w, h)
-    perp = np.array([-ahat[1], ahat[0]])
     est = []                                   # (f, sigma_log, weight)
     for hy in horiz_hyps:
         if abs(hy.vp[2]) < 1e-12:
@@ -182,9 +181,6 @@ def focal_from_horizon(vp_vert, horiz, cx, cy, w, h, settings, horiz_hyps=None):
         R = float(np.linalg.norm(p))
         sigma_d = R * sigma_theta
         sigma_log_f = 0.5 * sigma_d / max(abs(d), 1e-6)
-        # a vanishing point far off to the side of the horizon normal is also
-        # more leveraged than its distance alone suggests
-        sigma_log_f *= 1.0 + abs(float(p @ perp)) / max(R, 1e-6) * 0.0
         est.append((f, sigma_log_f, hy.score))
 
     if not est:
@@ -423,13 +419,20 @@ def estimate(vert, horiz, w: int, h: int, settings, exif_focal_px=None) -> Model
     # row, not about the camera; and folded to [-90, 90], because a line has
     # no direction and the two antipodal readings differ by a half-turn.
     yaw = 0.0
-    if settings.correct_horizontal and horiz_hyps:
-        dom = horiz_hyps[0]
-        if dom.support >= settings.min_horizontal_support:
+    if settings.correct_horizontal:
+        dom = horiz_hyps[0] if horiz_hyps else None
+        if dom is not None and dom.support >= settings.min_horizontal_support:
             b = G.bearings(np.array([dom.vp]), G.intrinsics(f_use, cx, cy))[0]
             wv = G.rot_x(pitch) @ G.rot_z(-roll) @ b
             yaw = math.atan2(-wv[2], wv[0])
             yaw = (yaw + math.pi / 2.0) % math.pi - math.pi / 2.0
+        elif dom is not None:
+            # the feature is on but the evidence is too weak to trust: record
+            # why yaw reads zero instead of leaving it silent
+            diag["yaw_skipped"] = (f"horizontal VP support {dom.support:.2f} "
+                                   f"< gate {settings.min_horizontal_support:.2f}")
+        else:
+            diag["yaw_skipped"] = "no horizontal VP found"
 
     conf, cdiag = _confidence(vert, hy, support, f_src, f_quality, roll, pitch,
                               f_use, cx, cy, w, h, settings, hv, hw)

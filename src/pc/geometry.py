@@ -52,7 +52,9 @@ def normalize_vp(v: np.ndarray) -> np.ndarray:
     v = np.asarray(v, dtype=float)
     n = np.linalg.norm(v)
     if n < 1e-12:
-        return np.array([0.0, 1.0, 0.0])
+        # no direction to preserve; fall back to "up" (negative y in the
+        # image's y-down convention), not down
+        return np.array([0.0, -1.0, 0.0])
     v = v / n
     # fix the sign so that equal vanishing points compare equal
     k = int(np.argmax(np.abs(v)))

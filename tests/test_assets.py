@@ -15,6 +15,8 @@ import glob
 import math
 import os
 
+import pytest
+
 from pc.config import Settings
 from pc.imageio import READABLE
 from pc.pipeline import ERROR, OK, SKIPPED, analyse, process
@@ -84,7 +86,7 @@ def _sample(files):
 def _require():
     files = _sample(_files())
     if not files:
-        raise SkipTest("no images in tests/assets")   # noqa: F821
+        raise pytest.skip("no images in tests/assets")
     return files
 
 
@@ -120,7 +122,7 @@ def test_files_marked_upright_are_left_alone():
     import tempfile
     hits = [f for f in _files() if "_upright" in os.path.basename(f).lower()]
     if not hits:
-        raise SkipTest("no *_upright.* assets")       # noqa: F821
+        raise pytest.skip("no *_upright.* assets")
     for f in hits:
         with tempfile.TemporaryDirectory() as d:
             r = process(f, os.path.join(d, os.path.basename(f)), Settings())
@@ -131,7 +133,7 @@ def test_files_marked_skip_are_refused():
     import tempfile
     hits = [f for f in _files() if "_skip" in os.path.basename(f).lower()]
     if not hits:
-        raise SkipTest("no *_skip.* assets")          # noqa: F821
+        raise pytest.skip("no *_skip.* assets")
     for f in hits:
         with tempfile.TemporaryDirectory() as d:
             r = process(f, os.path.join(d, os.path.basename(f)), Settings())
@@ -340,7 +342,7 @@ def test_the_border_guard_is_what_makes_the_measurement_honest():
     """
     hits = [f for f in _files() if "hospital" in os.path.basename(f)]
     if not hits:
-        raise SkipTest("the frame-filling asset is not present")    # noqa: F821
+        raise pytest.skip("the frame-filling asset is not present")
     guarded = _round_trip_error(hits[0], focal_35mm=27.0)
     raw = _round_trip_error(hits[0], focal_35mm=27.0, inner=0.0)
     assert guarded is not None and raw is not None

@@ -191,7 +191,31 @@ def process(src_path, dst_path, settings, debug_dir=None, dry_run=False,
     roll, pitch, yaw, clamped = W.limit(m.roll, m.pitch, settings,
                                         yaw=m.yaw, focal_is_a_guess=guessed)
     base["clamped"] = clamped
-    if clamped and settings.refuse_beyond_limit:
+    # A *pure* yaw breach is not refused.  Yaw is a special case the user opted
+    # into by ticking "correct horizontal": unlike roll/pitch it does not level
+    # the frame, it squares one facade fronto-parallel, and a large legitimate
+    # corner shot (P9 measured real single-VP yaws at 16-70 deg) routinely runs
+    # past the cap.  Refusing it would be the batch-era asymmetry that raised
+    # max_horizontal_deg to 60 was meant to end.  The review window already lets
+    # a slider go past the cap, so the batch path warns and applies the capped
+    # value instead of skipping.  A roll or pitch breach still refuses below.
+    # A "pure yaw" breach is one where only the horizontal angle ran past its
+    # cap.  roll and pitch here are already clamped, so comparing them against
+    # their caps would read True even when they were pinned to the cap -- a
+    # genuine pitch breach would be misread as pure-yaw and applied capped.
+    # Compare the raw (uncapped) estimates instead: only when both raw roll and
+    # raw pitch sit within their caps is the yaw the sole thing that breached.
+    if clamped and settings.refuse_beyond_limit and settings.correct_horizontal:
+        raw_r, raw_p, _ = W.limit(m.roll, m.pitch, settings.replace(
+            max_roll_deg=1e6, max_pitch_deg=1e6, max_horizontal_deg=1e6),
+            yaw=m.yaw, focal_is_a_guess=guessed)[:3]
+    if (clamped and settings.refuse_beyond_limit and settings.correct_horizontal
+            and abs(raw_r) <= math.radians(settings.max_roll_deg) + 1e-9
+            and abs(raw_p) <= math.radians(settings.max_pitch_deg) + 1e-9):
+        base["diagnostics"]["yaw_clamped"] = (
+            f"yaw clamped from {math.degrees(m.yaw * settings.horizontal_strength):.1f}deg "
+            f"to {math.degrees(yaw):.1f}deg")
+    elif clamped and settings.refuse_beyond_limit:
         # A correction that runs past the configured limit is not a correction
         # to be trimmed to fit -- it is a sign the estimate is about something
         # other than a facade, and applying the largest allowed warp to it is
