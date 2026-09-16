@@ -3199,21 +3199,32 @@ class ReviewPanel(tk.Frame):
                 y = oy + i * ih / n
                 canvas.create_line(ox, y, ox + iw, y, **kw)
 
-    def _on_cross_motion(self, _event=None):
+    def _on_cross_motion(self, event=None):
         """Pointer over the black cross or border: reveal Q2's ruler.
 
         Hover, not click. A ruler you have to discover by clicking the one
         black strip in the window is a ruler nobody finds.
         """
-        if getattr(self, "_ruler_visible", False):
-            return                                  # already shown; no redraw
-        self._ruler_visible = True
-        self._schedule_redraw()
+        if event is None:
+            return
+        q2_left = self.cell_after.winfo_x()
+        in_ruler_zone = (event.y < layout.CROSS_BORDER
+                         and event.x >= q2_left)
+        if in_ruler_zone:
+            self.config(cursor="sb_v_double_arrow")
+            if not getattr(self, "_ruler_visible", False):
+                self._ruler_visible = True
+                self._schedule_redraw()
+        else:
+            cur = self.cget("cursor")
+            if cur == "sb_v_double_arrow":
+                self.config(cursor="")
 
     def _on_cross_leave(self, _event=None):
         """Left the cross: hide again, unless a ruler is being dragged out."""
         if getattr(self, "_ruler_dragging", False):
             return
+        self.config(cursor="")
         if not getattr(self, "_ruler_visible", False):
             return
         self._ruler_visible = False
@@ -3246,6 +3257,8 @@ class ReviewPanel(tk.Frame):
         if in_ruler_zone:
             self._ruler_visible = True
             self._ruler_dragging = True
+            self._ruler_drag_start_y = event.y
+            self._ruler_drag_start_val = getattr(self, "_ruler_y", 10)
             self.config(cursor="sb_v_double_arrow")
             self._schedule_redraw()
             return
@@ -3254,8 +3267,14 @@ class ReviewPanel(tk.Frame):
     def _on_cross_pull(self, event):
         """Drag in the cross: move ruler or preview guide."""
         if getattr(self, "_ruler_dragging", False):
-            self._ruler_y = max(2, min(RULER_MARGIN - 2, event.y))
-            self._schedule_redraw()
+            delta = event.y - self._ruler_drag_start_y
+            self._ruler_y = max(2, min(50, self._ruler_drag_start_val + delta))
+            aox, aoy = self._after_off
+            iw = self._ph_a.width() if self._ph_a else 0
+            off = self._ruler_y
+            self.c_after.delete("ruler")
+            self.c_after.create_line(aox + off, aoy + off, aox + iw - off, aoy + off,
+                                     fill="#ffffff", width=1, dash=(4, 2), tags="ruler")
             return
         if getattr(self, "_cross_pull", None) is None:
             return
@@ -3335,9 +3354,12 @@ class ReviewPanel(tk.Frame):
             return
         if not getattr(self, "_ruler_visible", False):
             return
-        cw = canvas.winfo_width()
-        ry = getattr(self, "_ruler_y", RULER_MARGIN // 2)
-        canvas.create_line(0, ry, cw, ry, fill="#aaaaaa", width=1, tags="ruler")
+        aox, aoy = self._after_off
+        iw = self._ph_a.width() if self._ph_a else 0
+        ih = self._ph_a.height() if self._ph_a else 0
+        off = getattr(self, "_ruler_y", 10)
+        canvas.create_line(aox + off, aoy + off, aox + iw - off, aoy + off,
+                           fill="#ffffff", width=1, dash=(4, 2), tags="ruler")
 
     def _draw_marks(self):
         """Control lines (vertical and horizontal), over the preview.
