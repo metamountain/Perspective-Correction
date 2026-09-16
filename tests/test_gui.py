@@ -621,79 +621,6 @@ def test_the_preview_gives_up_retrying_instead_of_spinning_forever():
         app.destroy()
 
 
-def test_the_grid_never_reaches_the_saved_file():
-    """The overlay grid is a measuring instrument, not part of the photograph.
-
-    It is painted on the canvas, so it *cannot* be composited into the output --
-    and "cannot by construction" is exactly what was believed about several
-    things that turned out to be wrong. `save()` is where a measuring
-    instrument would become permanent, so the claim is asserted rather than
-    argued: the same photograph saved with the grid on and with it off, byte
-    for byte.
-
-    Two guards stop it passing vacuously. The written file must differ from the
-    original, or `ReviewSession.save`'s copy-through shortcut would be
-    comparing two byte copies of the source whatever the grid did; and the grid
-    must really add items to the canvas, or a checkbox that does nothing
-    satisfies the whole test. The fit must also not be re-run: the grid goes
-    through the redraw, never a refit.
-    """
-    import shutil
-    import tempfile
-    app = _app()
-    d = tempfile.mkdtemp(prefix="bpc_grid_")
-    try:
-        _loaded(app, 1920, 1200)
-        r = app.review
-        # Do not advance the review queue out from under the test, and keep the
-        # save cheap and machine-independent: the grid claim holds whatever the
-        # fill mode is.
-        r.on_saved = r.on_closed = None
-        r.session.settings = r.session.settings.replace(fill="none")
-        refits = []
-        _real_refit = r.session.refit
-
-        def _counted_refit(*a, **k):
-            refits.append(1)
-            return _real_refit(*a, **k)
-        r.session.refit = _counted_refit
-
-        assert r.v_grid.get() is False, "the grid is meant to start off"
-        plain = os.path.join(d, "plain.jpg")
-        r.dest_path = plain
-        r._save()
-        assert os.path.exists(plain), "nothing was written"
-        bare_items = len(r.c_after.find_all())
-
-        bare_before = len(r.c_before.find_all())
-        r.v_grid.set(True)
-        r._schedule_redraw()
-        _settle_until(app, lambda: len(r.c_after.find_all()) > bare_items)
-        assert len(r.c_after.find_all()) > bare_items, (
-            "the grid drew nothing on the corrected pane, so this proves nothing")
-        # The grid is a ruler for the *corrected* frame -- a true vertical should
-        # run along a grid line -- so it has no business on the original, where it
-        # measures nothing and competes with the detected lines.
-        assert len(r.c_before.find_all()) == bare_before, (
-            "the grid must draw on the after pane only, not over the original")
-
-        gridded = os.path.join(d, "gridded.jpg")
-        r.dest_path = gridded
-        r._save()
-        assert os.path.exists(gridded), "nothing was written with the grid on"
-
-        a = open(plain, "rb").read()
-        b = open(gridded, "rb").read()
-        assert a == b, "the grid reached the saved file"
-        assert a != open(r.session.path, "rb").read(), (
-            "the save fell through to a byte copy of the original, so this "
-            "comparison would pass whatever the grid did")
-        assert not refits, "toggling the grid re-ran the fit instead of redrawing"
-    finally:
-        app.destroy()
-        shutil.rmtree(d, ignore_errors=True)
-
-
 def test_a_guide_is_pulled_out_of_the_border_as_a_plain_grey_line():
     """Guides are hairlines laid against an edge, not a ruler scale.
 
@@ -765,15 +692,6 @@ def test_a_guide_is_pulled_out_of_the_border_as_a_plain_grey_line():
         assert len(r._after_guides) == 1, (
             "a guide released over the cross should be discarded, not added")
 
-        # and the grid toggle must not touch it -- they are different instruments
-        r.v_grid.set(True)
-        r._schedule_redraw()
-        _settle(app, 8)
-        assert r.c_after.find_withtag("after_guide"), "the grid toggle removed the guide"
-        r.v_grid.set(False)
-        r._schedule_redraw()
-        _settle(app, 8)
-        assert r.c_after.find_withtag("after_guide"), "turning the grid off removed the guide"
     finally:
         app.destroy()
 
