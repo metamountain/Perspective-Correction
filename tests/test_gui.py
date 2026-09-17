@@ -1284,21 +1284,22 @@ def test_the_facade_strip_still_works_after_a_second_photograph_loads():
         _loaded(app, 1280, 800)
         r = app.review
         if getattr(r, "v_roi", None) is None:
-            raise pytest.skip("facade strip removed from Q4")
+            raise pytest.skip("facade strip not present")
         first = (r.v_roi, r.v_roi_x0, r.v_roi_x1)
         r.load(r.session.path, r.settings, r.dest_path)   # a second photograph
         _settle(app)
         assert (r.v_roi, r.v_roi_x0, r.v_roi_x1) == first, (
             "the strip's variables were rebuilt by the second load -- the "
             "checkbox now sets one nobody reads")
-        # And the widget the user presses must still drive the session.
-        assert r._roi_chk.winfo_exists(), "the strip checkbox vanished"
-        r._roi_chk.invoke()
+        # The ROI is now an icon + popup, not a checkbox. Drive it via the var.
+        r.v_roi.set(True)
+        r._apply_roi()
         _settle(app)
-        assert r.v_roi.get(), "pressing the real checkbox must turn the strip on"
+        assert r.v_roi.get(), "setting the var must turn the strip on"
         assert r.session.roi_x is not None, (
             "the strip is on, so the session must be restricted")
-        r._roi_chk.invoke()
+        r.v_roi.set(False)
+        r._apply_roi()
         _settle(app)
         assert r.session.roi_x is None, "turning it off must lift the restriction"
     finally:
