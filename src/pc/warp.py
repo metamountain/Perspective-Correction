@@ -57,24 +57,28 @@ def limit(roll: float, pitch: float, settings, yaw: float = 0.0,
             float(np.clip(y, -ymax, ymax)), clamped)
 
 
+def _max_safe_yaw(w: int, h: int, f: float, roll: float, pitch: float,
+                  max_area: float = 4.0) -> float:
+    """Largest |yaw| (radians) whose warped quad stays under ``max_area``× source."""
+    lo, hi = 0.0, math.radians(85)
+    for _ in range(40):
+        mid = 0.5 * (lo + hi)
+        K = G.intrinsics(f, w / 2.0, h / 2.0)
+        R = G.correction_rotation(roll, pitch, mid)
+        H = G.homography(K, R)
+        q = warped_quad(H, w, h)
+        if quad_area(q) / float(w * h) <= max_area:
+            lo = mid
+        else:
+            hi = mid
+    return lo
+
+
 def build(w: int, h: int, f: float, roll: float, pitch: float,
-          yaw: float = 0.0) -> np.ndarray:
+          yaw: float = 0.0, max_area: float = 4.0) -> np.ndarray:
     K = G.intrinsics(f, w / 2.0, h / 2.0)
     R = G.correction_rotation(roll, pitch, yaw)
-    if abs(yaw) > 1e-9:
-        # A pure rotation K·R·K⁻¹ preserves parallelism but distorts
-        # proportions at large yaw: the facade gets squeezed horizontally
-        # because the projection compresses the rotated scene.  Compensate
-        # by using a wider effective focal length in the output camera:
-        # f' = f / cos(yaw).  This stretches X back to its true scale,
-        # analogous to how manual perspective correction (inscribing a
-        # square and working with diagonals) preserves aspect ratio.
-        f_out = f / math.cos(yaw)
-        K_out = G.intrinsics(f_out, w / 2.0, h / 2.0)
-        H = K_out @ R @ np.linalg.inv(K)
-    else:
-        H = G.homography(K, R)
-    return H
+    return G.homography(K, R)
 
 
 def warped_quad(H: np.ndarray, w: int, h: int) -> np.ndarray:
@@ -253,16 +257,15 @@ def plan(img_w: int, img_h: int, H: np.ndarray, settings,
 
     coverage = (rw * rh) / quad_area(quad) if quad_area(quad) > 0 else 0.0
     if settings.crop == "auto" and (1.0 - coverage) > settings.crop_max_loss:
-        # Try line-based motif crop before falling back to the whole frame.
+        # Try line-based motif reframe before falling back to the whole frame.
         if line_segs is not None and len(line_segs) >= 4:
-            motif = _motif_rect(H, line_segs, quad, img_w, img_h)
+            margin = getattr(settings, "reframe_margin", 0.30)
+            motif = _motif_rect(H, line_segs, quad, img_w, img_h, margin_frac=margin)
             if motif is not None:
-                mx0, my0, mx1, my1 = motif
-                mw, mh = mx1 - mx0, my1 - my0
-                if mw >= 64 and mh >= 64:
-                    m_cov = (mw * mh) / quad_area(quad) if quad_area(quad) > 0 else 0.0
-                    S = np.array([[1, 0, -mx0], [0, 1, -my0], [0, 0, 1]], dtype=float)
-                    return S @ H, int(round(mw)), int(round(mh)), float(m_cov), area_ratio
+                H_m, ow_m, oh_m = motif
+                if ow_m >= 64 and oh_m >= 64:
+                    m_cov = float(ow_m * oh_m) / (quad_area(quad) if quad_area(quad) > 0 else 1.0)
+                    return H_m, int(round(ow_m)), int(round(oh_m)), float(m_cov), area_ratio
         return _whole_frame(H, quad, img_w, img_h, settings, area_ratio)
 
     if settings.keep_size:
@@ -276,16 +279,14 @@ def plan(img_w: int, img_h: int, H: np.ndarray, settings,
 
 
 def _motif_rect(H: np.ndarray, line_segs: np.ndarray, quad: np.ndarray,
-                img_w: int, img_h: int, margin_frac: float = 0.08):
-    """Reframe: centre the warped line-motif in an output of the same size
-    as the source, keeping the vertical extent of the motif unchanged.
+                img_w: int, img_h: int, margin_frac: float = 0.30):
+    """Reframe: centre the warped line-motif in an output of source size.
 
-    The long vertical (the building's corner edge) is the measure: its pixel
-    height in the warped image defines the scale.  The horizontal axis is then
-    shifted so the motif bounding box sits in the centre of the output canvas.
-    No crop, no area explosion — the output is always ``img_w × img_h`` (or
-    slightly larger if the motif is taller than the frame), and the regions
-    outside the warped quad are left for edge-pad.
+    The motif bounding box (warped line endpoints) is expanded by
+    ``margin_frac`` on each side.  The scale is chosen so the expanded motif
+    fits within the source dimensions — the output is always ``img_w × img_h``
+    (or slightly larger if the motif overflows, but never smaller).  This
+    keeps the facade at its natural pixel size without inflating the frame.
 
     Returns ``(H_total, out_w, out_h)`` or None when the lines give no usable
     target.
@@ -307,18 +308,20 @@ def _motif_rect(H: np.ndarray, line_segs: np.ndarray, quad: np.ndarray,
     if mw < 32 or mh < 32:
         return None
 
-    # The vertical extent of the motif is the measure.  If it fits in the
-    # frame height, keep scale = 1 (the corner edge keeps its pixel height).
-    # If it overflows, shrink to fit so nothing is lost.
-    s = min(1.0, img_h / mh)
+    # Scale so the motif (without margin) fills ~70% of the frame height.
+    # The margin provides context around it.  This keeps the facade at a
+    # natural size — not zoomed in to a single window, not shrunk to a
+    # sliver in a huge padded frame.
+    target_fill = 1.0 / (1.0 + 2.0 * margin_frac)
+    s_h = img_h * target_fill / mh
+    s_w = img_w * target_fill / mw
+    s = min(s_h, s_w)
 
-    # Output canvas: same aspect as source, scaled by s.
-    ow, oh = int(round(img_w * s)), int(round(img_h * s))
+    # Output canvas: source size (the image never gets smaller).
+    ow, oh = img_w, img_h
 
-    # Centre the motif in the output.  The motif centre in warped space:
+    # Centre the motif in the output.
     cx_m, cy_m = (mx0 + mx1) / 2.0, (my0 + my1) / 2.0
-    # We want the motif centre to land at the output centre (ow/2, oh/2).
-    # Translation: t = output_centre - s * warped_centre
     tx = ow / 2.0 - s * cx_m
     ty = oh / 2.0 - s * cy_m
 
