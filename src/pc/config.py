@@ -122,7 +122,7 @@ class Settings:
 
     # ---- gating ----
     min_confidence: float = 0.40
-    max_area_ratio: float = 4.0         # refuse absurd warps
+    max_area_ratio: float = 25.0        # crop canvas to this × source area (trim extreme fill zones)
 
     # ---- distortion correction (Stage 0) ----
     # "off" = no undistortion.  "lensfun" = look up the EXIF make/model/lens in
