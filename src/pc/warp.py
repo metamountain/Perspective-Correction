@@ -76,9 +76,59 @@ def _max_safe_yaw(w: int, h: int, f: float, roll: float, pitch: float,
 
 def build(w: int, h: int, f: float, roll: float, pitch: float,
           yaw: float = 0.0, max_area: float = 4.0) -> np.ndarray:
+    """Build the correction homography: pure K·R·K⁻¹ camera rotation.
+
+    This is the only mathematically valid perspective correction — it undoes
+    the camera's rotation relative to the scene.  No 4-point remapping or
+    1/cos stretching is applied, because those change proportions rather than
+    correcting them.  The output canvas may be larger than the input (the
+    rotation opens up corners that the fill band covers); it is never smaller.
+    """
     K = G.intrinsics(f, w / 2.0, h / 2.0)
     R = G.correction_rotation(roll, pitch, yaw)
     return G.homography(K, R)
+
+
+def _facade_perspective(w: int, h: int, vert_segs: np.ndarray,
+                        horiz_segs: np.ndarray) -> np.ndarray | None:
+    """Estimate 4 facade corners from line segments and build a perspective
+    transform that maps them to a fronto-parallel rectangle.
+
+    The left/right edges come from the extreme vertical lines; the top/bottom
+    from the extreme horizontal lines.  The target rectangle is sized so the
+    facade fills ~70% of the frame (margin handled by the caller's reframe).
+
+    Returns a 3×3 homography or None if the geometry is degenerate.
+    """
+    # Vertical lines: x-position at mid-height
+    v_mids_x = (vert_segs[:, 0] + vert_segs[:, 2]) / 2.0
+    h_mids_y = (horiz_segs[:, 1] + horiz_segs[:, 3]) / 2.0
+
+    # Use the 5th and 95th percentiles to be robust against outliers
+    x_left = float(np.percentile(v_mids_x, 5))
+    x_right = float(np.percentile(v_mids_x, 95))
+    y_top = float(np.percentile(h_mids_y, 5))
+    y_bot = float(np.percentile(h_mids_y, 95))
+
+    # Sanity: the facade must be a reasonable fraction of the frame
+    fw = x_right - x_left
+    fh = y_bot - y_top
+    if fw < w * 0.1 or fh < h * 0.1 or fw > w * 1.2 or fh > h * 1.2:
+        return None
+
+    # Source 4 corners (top-left, top-right, bottom-right, bottom-left)
+    src = np.float32([[x_left, y_top], [x_right, y_top],
+                      [x_right, y_bot], [x_left, y_bot]])
+
+    # Target: centred rectangle, facade fills 70% of the frame
+    fill = 0.70
+    tw, th = w * fill, h * fill
+    tx, ty = (w - tw) / 2.0, (h - th) / 2.0
+    dst = np.float32([[tx, ty], [tx + tw, ty],
+                      [tx + tw, ty + th], [tx, ty + th]])
+
+    H = cv2.getPerspectiveTransform(src, dst)
+    return H
 
 
 def warped_quad(H: np.ndarray, w: int, h: int) -> np.ndarray:
@@ -218,7 +268,7 @@ def _whole_frame(H, quad, img_w, img_h, settings, area_ratio):
 
 
 def plan(img_w: int, img_h: int, H: np.ndarray, settings,
-         line_segs: np.ndarray | None = None):
+         line_segs: np.ndarray | None = None, yaw: float = 0.0):
     """Work out the output canvas.
 
     Returns ``(H_total, out_w, out_h, coverage, area_ratio)`` where ``coverage``
@@ -257,15 +307,10 @@ def plan(img_w: int, img_h: int, H: np.ndarray, settings,
 
     coverage = (rw * rh) / quad_area(quad) if quad_area(quad) > 0 else 0.0
     if settings.crop == "auto" and (1.0 - coverage) > settings.crop_max_loss:
-        # Try line-based motif reframe before falling back to the whole frame.
-        if line_segs is not None and len(line_segs) >= 4:
-            margin = getattr(settings, "reframe_margin", 0.30)
-            motif = _motif_rect(H, line_segs, quad, img_w, img_h, margin_frac=margin)
-            if motif is not None:
-                H_m, ow_m, oh_m = motif
-                if ow_m >= 64 and oh_m >= 64:
-                    m_cov = float(ow_m * oh_m) / (quad_area(quad) if quad_area(quad) > 0 else 1.0)
-                    return H_m, int(round(ow_m)), int(round(oh_m)), float(m_cov), area_ratio
+        # The rotation opened up corners; keep the whole frame and let the
+        # fill band cover what the warp invented.  A reframe that scales the
+        # facade down to fit a source-sized canvas would shrink the image,
+        # which is forbidden: the output must never be smaller than the input.
         return _whole_frame(H, quad, img_w, img_h, settings, area_ratio)
 
     if settings.keep_size:
@@ -279,14 +324,14 @@ def plan(img_w: int, img_h: int, H: np.ndarray, settings,
 
 
 def _motif_rect(H: np.ndarray, line_segs: np.ndarray, quad: np.ndarray,
-                img_w: int, img_h: int, margin_frac: float = 0.30):
+                img_w: int, img_h: int, margin_frac: float = 0.30,
+                yaw: float = 0.0):
     """Reframe: centre the warped line-motif in an output of source size.
 
     The motif bounding box (warped line endpoints) is expanded by
-    ``margin_frac`` on each side.  The scale is chosen so the expanded motif
-    fits within the source dimensions — the output is always ``img_w × img_h``
-    (or slightly larger if the motif overflows, but never smaller).  This
-    keeps the facade at its natural pixel size without inflating the frame.
+    ``margin_frac`` on each side.  The X-axis is stretched by 1/cos(yaw) to
+    undo the horizontal foreshortening that K·R·K⁻¹ introduces — without this,
+    windows appear too narrow (squeezed).  The output is always source-sized.
 
     Returns ``(H_total, out_w, out_h)`` or None when the lines give no usable
     target.
@@ -308,24 +353,29 @@ def _motif_rect(H: np.ndarray, line_segs: np.ndarray, quad: np.ndarray,
     if mw < 32 or mh < 32:
         return None
 
-    # Scale so the motif (without margin) fills ~70% of the frame height.
-    # The margin provides context around it.  This keeps the facade at a
-    # natural size — not zoomed in to a single window, not shrunk to a
-    # sliver in a huge padded frame.
+    # Undo the horizontal foreshortening: K·R·K⁻¹ compresses X by cos(yaw),
+    # so stretch it back.  This is applied in the reframe transform, not in K,
+    # to avoid inflating the warped quad area.
+    sx = 1.0 / math.cos(yaw) if abs(yaw) > 1e-9 else 1.0
+
+    # Scale so the motif (without margin, after X-stretch) fills ~70% of frame.
     target_fill = 1.0 / (1.0 + 2.0 * margin_frac)
+    mw_stretched = mw * sx
     s_h = img_h * target_fill / mh
-    s_w = img_w * target_fill / mw
+    s_w = img_w * target_fill / mw_stretched
     s = min(s_h, s_w)
 
     # Output canvas: source size (the image never gets smaller).
     ow, oh = img_w, img_h
 
-    # Centre the motif in the output.
+    # Centre the motif in the output.  The X-stretch is applied around the
+    # motif centre so it doesn't shift the composition.
     cx_m, cy_m = (mx0 + mx1) / 2.0, (my0 + my1) / 2.0
-    tx = ow / 2.0 - s * cx_m
+    tx = ow / 2.0 - s * sx * cx_m
     ty = oh / 2.0 - s * cy_m
 
-    S = np.array([[s, 0, tx], [0, s, ty], [0, 0, 1]], dtype=float)
+    # S = scale + X-stretch + translation
+    S = np.array([[s * sx, 0, tx], [0, s, ty], [0, 0, 1]], dtype=float)
     return (S @ H, ow, oh)
 
 

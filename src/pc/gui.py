@@ -658,16 +658,7 @@ class ReviewPanel(tk.Frame):
         self._busy = False
         self._before_scale = 1.0
         self._redraw_tries = 0
-        self.bind("<Configure>", self._on_review_configure)
         self._show_hint()
-
-    def _on_review_configure(self, _event=None):
-        # The pane's real height is not known until it has been laid out, so
-        # the default for the adjustments rides on <Configure>.  It stands down
-        # the moment the user touches the toggle and returns early when its
-        # verdict has not changed, so it is safe on an event that fires
-        # continuously during a window drag.
-        self._adapt_adjust_default()
 
     def _show_hint(self):
         # The cross is shown from the first frame, not after the first load:
@@ -976,9 +967,7 @@ class ReviewPanel(tk.Frame):
             start_open = self._adj_open
         else:
             start_open = True
-        self.v_adjust = tk.BooleanVar(value=start_open)
-        ttk.Checkbutton(stat, text="Adjustments", variable=self.v_adjust,
-                        command=self._toggle_adjust).pack(side="right", padx=(8, 0))
+        self.v_adjust = tk.BooleanVar(value=True)
 
         adj = ttk.Frame(top)
         self._adj = adj
@@ -1182,53 +1171,10 @@ class ReviewPanel(tk.Frame):
         # Same pattern as the ComfyUI dock's `side="bottom"`.
         btns.pack(side="bottom", fill="x")
         btns2.pack(side="bottom", fill="x")
-        if self.v_adjust.get():
-            adj.pack(side="bottom", fill="x", after=btns2)
+        adj.pack(side="bottom", fill="x", after=btns2)
         stat.pack(side="bottom", fill="x", pady=(6, 4))
         self.lbl_status.pack(side="bottom", anchor="w", pady=(2, 0))
         hint.pack(side="bottom", anchor="w", pady=(4, 0))
-        # The control columns stay visible; there is no height-based verdict to
-        # apply on resize.  (The old adaptive default collapsed them at short
-        # windows, which is why the two-panel layout was never seen.)
-
-    def _adapt_adjust_default(self):
-        """Apply the height's verdict, while the choice is still the code's.
-
-        It stands down permanently the moment the user touches the toggle, and
-        it never records a choice of its own: `_adj_open` stays absent, so the
-        next photograph is judged on its own geometry rather than on this
-        guess. Returning early when nothing changes is what keeps it off the
-        hot path -- `<Configure>` fires continuously during a window drag.
-        """
-        if hasattr(self, "_adj_open") or not self.winfo_exists():
-            return
-        adj = getattr(self, "_adj", None)
-        if adj is None or not adj.winfo_exists():
-            return
-        want = layout.adjustments_start_open(self.winfo_height())
-        if want == bool(self.v_adjust.get()):
-            return
-        self.v_adjust.set(want)
-        if want:
-            adj.pack(side="bottom", fill="x", after=self._btns2)
-        else:
-            adj.pack_forget()
-
-    def _toggle_adjust(self):
-        """Hide or show the two control columns; the picture gets the height.
-
-        `pack` appends, so the re-expand has to name where the frame goes back
-        or the controls surface *below* the Save row -- the same trap as
-        `_set_stage`."""
-        self._adj_open = bool(self.v_adjust.get())
-        if self._adj_open:
-            # `after`, not `before`: these rows are packed with side="bottom",
-            # so the packing order runs upwards from the action row and the
-            # slot above it is the one *after* it in that order.  Getting this
-            # backwards puts the controls below Save.
-            self._adj.pack(side="bottom", fill="x", after=self._btns2)
-        else:
-            self._adj.pack_forget()
 
     def _apply_detector(self):
         """Switch detector and say what it found.
@@ -1832,8 +1778,7 @@ class ReviewPanel(tk.Frame):
         if on:
             self._exclusive("v_mark")
             self._pending_mark = None
-            # No loupe here: it is raised by the first mark press, not the mode.
-            pass
+            self._loupe_hide()
         else:
             self._pending_mark = None
             self._mark_drag = None
@@ -1847,9 +1792,9 @@ class ReviewPanel(tk.Frame):
         if on:
             self._exclusive("v_rect")
             self._rect_pending = []
+            self._loupe_hide()
         else:
             self._rect_pending = []
-            self.session.clear_planar()
             self._mark_drag = None
             self._loupe_hide()
         self._set_status(self.session.status_text())
@@ -1869,9 +1814,6 @@ class ReviewPanel(tk.Frame):
         hit = self.session.pick_planar_corner(fx, fy, display_scale=fs)
         if hit is not None:
             self._rect_drag = hit
-            self._loupe_show()
-            if event is not None:
-                self._loupe_move(event)
             return
         # Otherwise place the next corner (1→2→3→4).
         i = len(self.session.planar_quad)
@@ -1883,10 +1825,6 @@ class ReviewPanel(tk.Frame):
             self._redraw()
             return
         self.session.set_planar_point(i, fx, fy)
-        if i == 0:
-            self._loupe_show()
-            if event is not None:
-                self._loupe_move(event)
         if len(self.session.planar_quad) >= 4:
             self._loupe_hide()
             self._set_status("PC Rectangle set -- drag any corner to adjust")
@@ -2394,6 +2332,14 @@ class ReviewPanel(tk.Frame):
         x0, y0, x1, y1 = (frac_rect or (0.0, 0.0, 1.0, 1.0))
         self._draw_crop_outline(aox + x0 * iw, aoy + y0 * ih,
                                 aox + x1 * iw, aoy + y1 * ih)
+        # Q2: output dimensions + crop size, bottom-left.
+        ow, oh = arr.shape[1], arr.shape[0]
+        cw = max(1, int(round((x1 - x0) * ow)))
+        ch = max(1, int(round((y1 - y0) * oh)))
+        self.c_after.create_text(
+            8, box[1] - 6, anchor="sw",
+            text=f"{ow}×{oh}  {cw}×{ch}",
+            fill="#ffffff", font=("Segoe UI", 9))
 
     def _draw_crop_outline(self, rx0, ry0, rx1, ry1):
         """The kept rectangle's border and handles on the after canvas.
@@ -2508,9 +2454,6 @@ class ReviewPanel(tk.Frame):
                     return
         if self._pending_mark is None:
             self._pending_mark = (x, y)
-            self._loupe_show()          # up for this drag only
-            if event is not None:
-                self._loupe_move(event)  # show the point immediately, not on first motion
             self._mark_moved = False
             self._set_status("marking an edge: click the other end -- whichever "
                              "way it leans decides the plane\n"
@@ -2795,6 +2738,30 @@ class ReviewPanel(tk.Frame):
         if not (0.0 <= x0 < x1 <= 1.0 and (x1 - x0) >= 0.02):
             return None
         return x0, x1
+
+    def _draw_horiz_vp_markers(self, pw: int, ph_: int):
+        """P3: show horizontal VPs as dots on the before pane.
+
+        Filled dot = dominant (index 0), hollow = others.  Off-screen VPs
+        (at infinity) are skipped silently.
+        """
+        vps = self.session.model.horiz_vps[:4]
+        if not vps:
+            return
+        ox, oy = self._before_off
+        for i, vp in enumerate(vps):
+            # vp is a 3-element homogeneous point (x, y, w) in full-res pixels
+            vw = vp[2] if abs(vp[2]) > 1e-9 else 1.0
+            px = ox + (vp[0] / vw) * self._before_scale
+            py = oy + (vp[1] / vw) * self._before_scale
+            if not (-20 <= px <= pw + 20 and -20 <= py <= ph_ + 20):
+                continue  # off-screen (VP at infinity or far outside)
+            r = 5 if i == 0 else 4
+            col = INK["accent"] if i == 0 else INK["dim"]
+            self.c_before.create_oval(px - r, py - r, px + r, py + r,
+                                      outline=col, width=2,
+                                      fill=col if i == 0 else "",
+                                      tags="horiz_vp")
 
     def _draw_roi_rulers(self):
         """Two draggable vertical rulers on the before pane marking the ROI strip.
@@ -3177,9 +3144,19 @@ class ReviewPanel(tk.Frame):
             # the original it measures nothing and only competes with the lines
             # the detector drew, which is what this pane is for.
             self._draw_marks()
-            self._draw_rect_quad()
             self._draw_roi_rulers()
             self._draw_sam_prompts()
+            # P3: horizontal VP markers on the before pane
+            if (self.session.model is not None
+                    and self.v_correct_horizontal.get()):
+                self._draw_horiz_vp_markers(ph_b.width(), ph_b.height())
+            # Q1: original image dimensions, bottom-left.
+            self.c_before.create_text(
+                8, box_b[1] - 6, anchor="sw",
+                text=f"{self.session.w}×{self.session.h}",
+                fill="#ffffff", font=("Segoe UI", 9))
+            # Rectangle quad LAST: drawn over everything (loupe, marks, guides)
+            self._draw_rect_quad()
             self._show_after(self.session.crop_rect)
             self._set_status(self.session.status_text())
         except Exception:
@@ -3275,10 +3252,12 @@ class ReviewPanel(tk.Frame):
                                  image=self._palette_imgs[-1],
                                  text="", compound="center", indicatoron=False,
                                  width=side, height=side, padx=0, pady=0,
-                                 highlightthickness=0, bd=0, relief="flat",
+                                 highlightthickness=2,
+                                 highlightbackground=INK["field"],
+                                 bd=0, relief="flat",
                                  cursor="hand2", background=INK["field"],
                                  activebackground=INK["line"],
-                                 selectcolor=INK["dim"])
+                                 selectcolor=INK["accent"])
         _mk_btn.pack(side="top", pady=(gap * 2, 0))
         _attach_tooltip(_mk_btn, "Mark a straight edge by hand -- which way it leans\n"
                                   "decides whether it counts as vertical or horizontal")
@@ -3295,10 +3274,12 @@ class ReviewPanel(tk.Frame):
                                  image=self._palette_imgs[-1],
                                  text="", compound="center", indicatoron=False,
                                  width=side, height=side, padx=0, pady=0,
-                                 highlightthickness=0, bd=0, relief="flat",
+                                 highlightthickness=2,
+                                 highlightbackground=INK["field"],
+                                 bd=0, relief="flat",
                                  cursor="hand2", background=INK["field"],
                                  activebackground=INK["line"],
-                                 selectcolor=INK["dim"])
+                                 selectcolor=INK["accent"])
         _pr_btn.pack(side="top", pady=(gap, 0))
         _attach_tooltip(_pr_btn, "PC Rectangle: click 4 corners of a facade\n"
                                   "(TL, TR, BR, BL) to rectify it.\n"

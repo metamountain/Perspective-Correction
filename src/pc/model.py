@@ -434,11 +434,22 @@ def estimate(vert, horiz, w: int, h: int, settings, exif_focal_px=None) -> Model
         else:
             diag["yaw_skipped"] = "no horizontal VP found"
 
+    # Sanity clamp: a focal length below ~5% of the frame width is unphysical
+    # (it would imply an extreme fisheye).  The geometric estimator can produce
+    # such values when the VP is near the image centre and the line support is
+    # weak.  Fall back to the prior so K·R·K⁻¹ stays well-conditioned.
+    f_min = 0.05 * max(w, h)
+    if f_use < f_min:
+        diag["focal_clamped"] = f"estimated {f_use:.1f}px < minimum {f_min:.0f}px; using prior {f_prior:.0f}px"
+        f_use = f_prior
+        f_src = "clamped"
+
     conf, cdiag = _confidence(vert, hy, support, f_src, f_quality, roll, pitch,
                               f_use, cx, cy, w, h, settings, hv, hw)
     diag.update(cdiag)
     diag["hypotheses"] = len(hyps)
     diag["horizontal_vps"] = len(horiz_hyps)
+    diag["horiz_supports"] = [x.support for x in horiz_hyps[:4]]
     diag["yaw_deg"] = round(math.degrees(yaw), 3)
 
     return Model(roll=roll, pitch=pitch, yaw=yaw, f=f_use, f_source=f_src,
