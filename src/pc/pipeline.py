@@ -260,7 +260,7 @@ def process(src_path, dst_path, settings, debug_dir=None, dry_run=False,
         parts = [s.seg for s in (vert, horiz) if len(s)]
         if parts:
             all_segs = np.concatenate(parts, axis=0)
-    planned = W.plan(w, h, H, settings, line_segs=all_segs)
+    planned = W.plan(w, h, H, settings, line_segs=all_segs, yaw=yaw)
     if planned is None:
         return finish_skip("crop would be degenerate")
     H_total, ow, oh, coverage, area_ratio = planned
