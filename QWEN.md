@@ -4,6 +4,39 @@
 
 - **262k tokens** configured (user raised from default on 2026-07-15).
 
+## GUI coordinate scaling (CRITICAL — never mix spaces)
+
+The before-pane canvas has **two coordinate spaces** that must never be mixed:
+
+| Space | Units | Used by |
+|-------|-------|---------|
+| **Canvas pixels** (photo-relative) | `event.x - _before_off[0]` | Click handlers, rubber bands, cursor tracking |
+| **Full-resolution pixels** | Original image coordinates | `session.planar_quad`, `session.control_lines`, all stored geometry |
+
+**The conversion is `_before_scale`** (canvas px per full-res px):
+
+```python
+# Canvas → Full-res (STORING a point):
+fx = x / self._before_scale
+fy = y / self._before_scale
+self.session.set_planar_point(i, fx, fy)
+
+# Full-res → Canvas (DRAWING a stored point):
+cx = ox + px * self._before_scale
+cy = oy + py * self._before_scale
+
+# Hit-test (canvas point vs full-res stored points):
+hit = self.session.pick_planar_corner(fx, fy, display_scale=self._before_scale)
+```
+
+**Rules:**
+1. **NEVER store `event.x - offset` directly into a session array.** Always divide by `_before_scale` first. The session stores full-resolution pixels; the canvas is a scaled-down preview.
+2. **NEVER draw a stored point without multiplying by `_before_scale`.** A full-res coordinate drawn at 1:1 on a 0.4× canvas lands at 40% of its intended position.
+3. **Hit-tests take `display_scale`** so the grab radius is in screen pixels, not image pixels.
+4. **When adding any new click-to-place tool**, follow the `_click_rect` pattern: convert on input, convert on draw, pass scale to hit-test.
+
+This rule was violated in the PC Rectangle implementation (2026-09-17), causing corners to land at wrong positions. The fix is always the same: `x / _before_scale` before storing, `px * _before_scale` when drawing.
+
 ## Visual debugging (agent has vision, 2026-09-17)
 
 The agent can see images. Use this to **offload the user** — they should not
