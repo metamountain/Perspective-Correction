@@ -247,31 +247,50 @@ def max_inscribed_rect(quad: np.ndarray, aspect: float | None):
     return np.array([cx - hw, cy - hh, cx + hw, cy + hh])
 
 
-def _whole_frame(H, quad, img_w, img_h, settings, area_ratio):
+def _whole_frame(H, quad, img_w, img_h, settings, area_ratio,
+                 line_segs: np.ndarray | None = None):
     """The full warped quad on a canvas big enough to hold it.
 
     Nothing of the photograph is discarded; the corners the rotation opens up
     are filled by ``apply``.  When the quad inflates beyond ``max_area_ratio``
-    times the source, the output is cropped (centred on the warped image centre)
-    to that limit — this trims the Telea fill / garbage-pixel zones that a large
-    yaw warp opens up at the edges.  The crop never makes the output smaller
-    than the source.  ``keep_size`` scales the result back to the original
-    pixel dimensions, so a batch keeps a consistent size.
+    times the source, the output is cropped to that limit — centred on the
+    **facade** (midpoint of detected line segments after the warp), not on the
+    image centre.  At large yaw the facade shifts far from the centre; a
+    centre-anchored crop would cut it off.  The crop never makes the output
+    smaller than the source.  ``keep_size`` scales back to original dimensions.
     """
     x0, y0 = quad.min(axis=0)
     x1, y1 = quad.max(axis=0)
     ow, oh = int(round(x1 - x0)), int(round(y1 - y0))
     if ow < 8 or oh < 8:
         return None
-    # Crop to max_area_ratio × source when the quad inflates too much.
-    # This trims the fill/garbage zones at the edges of a large-yaw warp.
     max_area = getattr(settings, "max_area_ratio", 4.0)
     if ow * oh > max_area * img_w * img_h:
         s_crop = math.sqrt(img_w * img_h / (ow * oh) * max_area)
         ow_c, oh_c = int(round(ow * s_crop)), int(round(oh * s_crop))
-        # Centre the crop on the warped image centre
-        cx_q = (x0 + x1) / 2.0
-        cy_q = (y0 + y1) / 2.0
+        # Centre the crop on the FACADE, not the image centre.
+        # At large yaw the facade shifts far from centre; a centre-anchored
+        # crop would cut it off.  Use the midpoint of warped line endpoints.
+        if line_segs is not None and len(line_segs) >= 4:
+            pts = np.column_stack([line_segs[:, 0], line_segs[:, 1],
+                                   line_segs[:, 2], line_segs[:, 3]]).reshape(-1, 2)
+            warped_pts = G.apply_h(H, pts)
+            # Only use points that landed inside the quad (valid warp region)
+            qx0, qy0 = quad[:, 0].min(), quad[:, 1].min()
+            qx1, qy1 = quad[:, 0].max(), quad[:, 1].max()
+            pad = 0.05 * max(qx1 - qx0, qy1 - qy0)
+            inside = ((warped_pts[:, 0] >= qx0 - pad) & (warped_pts[:, 0] <= qx1 + pad) &
+                      (warped_pts[:, 1] >= qy0 - pad) & (warped_pts[:, 1] <= qy1 + pad))
+            if inside.sum() >= 4:
+                wp = warped_pts[inside]
+                cx_q = float(wp[:, 0].mean())
+                cy_q = float(wp[:, 1].mean())
+            else:
+                cx_q = (x0 + x1) / 2.0
+                cy_q = (y0 + y1) / 2.0
+        else:
+            cx_q = (x0 + x1) / 2.0
+            cy_q = (y0 + y1) / 2.0
         cx_c = cx_q - ow_c / (2.0 * s_crop)
         cy_c = cy_q - oh_c / (2.0 * s_crop)
         T = np.array([[s_crop, 0, -cx_c * s_crop],
@@ -319,7 +338,7 @@ def plan(img_w: int, img_h: int, H: np.ndarray, settings,
     area_ratio = quad_area(quad) / float(img_w * img_h)
 
     if settings.crop == "none":
-        return _whole_frame(H, quad, img_w, img_h, settings, area_ratio)
+        return _whole_frame(H, quad, img_w, img_h, settings, area_ratio, line_segs)
 
     centre = G.apply_h(H, np.array([[img_w / 2.0, img_h / 2.0]]))[0]
     aspect = (img_w / img_h) if settings.crop in ("aspect", "auto") else None
@@ -336,7 +355,7 @@ def plan(img_w: int, img_h: int, H: np.ndarray, settings,
         # fill band cover what the warp invented.  A reframe that scales the
         # facade down to fit a source-sized canvas would shrink the image,
         # which is forbidden: the output must never be smaller than the input.
-        return _whole_frame(H, quad, img_w, img_h, settings, area_ratio)
+        return _whole_frame(H, quad, img_w, img_h, settings, area_ratio, line_segs)
 
     if settings.keep_size:
         s = min(img_w / rw, img_h / rh)
