@@ -239,7 +239,7 @@ fix. Severity: **HIGH** = likely wrong behaviour, **MED** = latent risk,
 
 ### External tools
 
-- **Firecrawl API key:** `fc-72208db35c9d4c5b8996b00e0adff3a9` — use for web research when `web_fetch` gets 403/404. Endpoint: `https://api.firecrawl.dev/v1/scrape` (POST, header `Authorization: Bearer <key>`).
+- **Firecrawl:** use the MCP firecrawl server for web research when `web_fetch` gets 403/404.
 
 ### Next steps (user to decide)
 

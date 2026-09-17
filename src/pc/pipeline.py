@@ -253,7 +253,7 @@ def process(src_path, dst_path, settings, debug_dir=None, dry_run=False,
         return finish_skip(f"already upright ({total_deg:.2f}deg < "
                            f"{settings.min_correction_deg:.2f}deg)")
 
-    H = W.build(w, h, m.f, roll, pitch, yaw)
+    H = W.build(w, h, m.f, roll, pitch, yaw, max_area=settings.max_area_ratio)
     # Combine vertical + horizontal line segments for the motif crop.
     all_segs = None
     if len(vert) or len(horiz):

@@ -139,6 +139,10 @@ class Settings:
     # session start because the user sees the result on screen and "Reset crop"
     # undoes it; the number here is what `--max-crop-loss` maps to.
     crop_max_loss: float = 0.05
+    # Margin around the line-motif bounding box when reframing (fraction of
+    # motif size).  0.30 = 30% context on each side.  The output is always
+    # centred on the motif; this controls how much surrounding scene survives.
+    reframe_margin: float = 0.30
     pad: str = "edge"                   # edge | black | white | #rrggbb | r,g,b
     # What to do with the band the rotation opens up, once padding has put
     # something there.  "none" keeps the pad; the rest put pixels there that
