@@ -4,6 +4,42 @@
 
 - **262k tokens** configured (user raised from default on 2026-07-15).
 
+## SCALING RULE (global, do not break)
+
+The preview pipeline has exactly **one** scale chain. Every overlay, marker,
+ruler, or guide that is drawn onto the `render_after` output must use this
+chain — never invent a second one:
+
+```
+original image (self.w × self.h)
+    │  × s  where s = min(1, max_edge / max(w, h))
+    ▼
+preview space (sw × sh)          ← H_total maps FROM here
+    │  H_total  (W.build → W.plan bakes in crop/fit)
+    ▼
+final output (ow × oh)           ← this IS the array that _fit returns
+```
+
+**Rules:**
+1. To project a point from the original image onto the `render_after` output:
+   multiply by `s`, then apply `H_total` via `cv2.perspectiveTransform`.
+   **Do NOT** multiply by any additional scale factor afterwards — `H_total`
+   already lands in final-output pixel coordinates.
+2. `_fit()` at the end of `render_after` resizes the array to fit `max_edge`.
+   Because `W.plan` already accounts for this (the output dimensions `ow, oh`
+   are post-fit), the perspectiveTransform result is directly drawable on the
+   final array. No extra `fit_s` factor.
+3. In the GUI (`_redraw`), the before/after photos are fitted to their canvas
+   boxes by `_to_photo()`. The scale from original→canvas is:
+   `canvas_scale = photo_width / self.session.w` (for before) or
+   `photo_width / out_w` (for after). Use these for any canvas-space overlay.
+4. **Never** mix the two coordinate systems. A point in "original pixels" must
+   be converted to exactly one target space before drawing.
+
+This rule was violated ~50 times during the H-Marker session (2026-09-17),
+each time causing offset/scale bugs in Q2 marker projection. The fix is always
+the same: scale by `s`, warp by `H_total`, done.
+
 ## Session changes (2026-09-17, uncommitted)
 
 ### Loupe precision
