@@ -45,6 +45,8 @@ from PIL import Image, ImageTk
 from . import __version__
 from . import layout
 from . import masks as MK
+from . import model as M
+from . import warp as W
 from . import prefs
 from .config import Settings
 from .imageio import READABLE
@@ -1165,23 +1167,6 @@ class ReviewPanel(tk.Frame):
                         command=self._clear_crop)
         _b.pack(side="left", padx=(0, 6))
         _attach_tooltip(_b, "Remove any manual crop selection")
-        # ROI / Facade strip: dark-light-dark stripes icon. Click opens a popup
-        # with the two % spinboxes. The rulers on the before pane are the primary
-        # interaction; the popup is the numeric fine-tune.
-        if getattr(self, "v_roi", None) is None:
-            self.v_roi = tk.BooleanVar(value=False)
-            self.v_roi_x0 = tk.DoubleVar(value=20.0)
-            self.v_roi_x1 = tk.DoubleVar(value=80.0)
-        _roi_icon = tk.Canvas(btns2, width=24, height=16, bg=INK["panel"],
-                              highlightthickness=0, bd=0)
-        # dark-light-dark stripes
-        _roi_icon.create_rectangle(0, 0, 8, 16, fill="#3a3a3a", outline="")
-        _roi_icon.create_rectangle(8, 0, 16, 16, fill="#d0d0d0", outline="")
-        _roi_icon.create_rectangle(16, 0, 24, 16, fill="#3a3a3a", outline="")
-        _roi_icon.pack(side="left", padx=(6, 0))
-        _roi_icon.bind("<Button-1>", self._on_roi_icon_click)
-        _attach_tooltip(_roi_icon, "Facade strip (ROI): restrict horizontal\n"
-                                   "evidence to one facade on corner views.")
 
         # -- assembly: who gives up height first ---------------------------
         # `pack` hands each child its requested height in call order and gives
@@ -1660,12 +1645,12 @@ class ReviewPanel(tk.Frame):
         self._redraw()
 
     def _on_horizontal_toggle(self):
+        """Auto mode: VP-based yaw. Mutually exclusive with H-Marker."""
         on = self.v_correct_horizontal.get()
         if on and self.v_hmarker.get():
-            # Only one yaw source at a time: marker takes priority.
+            # Switching to auto turns off manual.
             self.v_hmarker.set(False)
             self._on_hmarker_toggle()
-            self.v_correct_horizontal.set(True)
         s = self.session
         if s is None:
             return
@@ -1674,9 +1659,6 @@ class ReviewPanel(tk.Frame):
         self._yaw_scale.configure(state=state)
         self._yaw_spin.configure(state=state)
         if on and self.session.mode == AUTO:
-            # the estimator only computes a yaw when the flag was already on
-            # at estimation time, so switching it on must re-fit -- cheap, it
-            # re-runs the fit over the existing lines, not the detector
             self.session.refit()
             self._sync_from_session()
         elif not on and self.session.mode == AUTO:
@@ -1684,13 +1666,10 @@ class ReviewPanel(tk.Frame):
             self._schedule_redraw()
 
     def _on_hmarker_toggle(self):
-        """H-Marker: yaw from hand-drawn horizontal line(s).
+        """Manual mode (H-Marker): yaw from line bearings, no VP.
 
-        1-2 lines: exact bearing constraint (each line states its own level).
-        3+ lines: least-squares interpolation -- the yaw that minimises the
-        total tilt across all lines.  Independent of correct_horizontal and
-        the VP-based path.  Errors are caught and shown in the status bar,
-        never crash the app.
+        Mutually exclusive with "horizontal auto".  When active, the bearing
+        algorithm replaces the VP path entirely -- different correction model.
         """
         on = self.v_hmarker.get()
         if not on:
@@ -1701,59 +1680,80 @@ class ReviewPanel(tk.Frame):
                 s.refit()
                 self._sync_from_session()
             return
-        # Only one yaw source at a time.
+        # Switching to manual turns off auto.
         if self.v_correct_horizontal.get():
             self.v_correct_horizontal.set(False)
-            self._on_horizontal_toggle()
+            s = self.session
+            if s is not None:
+                s.settings = s.settings.replace(correct_horizontal=False)
         s = self.session
         if s is None:
             self._set_status("no image loaded")
             self.v_hmarker.set(False)
             return
-        n = len(s.control_hlines)
-        if n < 1:
-            self._set_status("draw a horizontal marker first, then tick H-Marker")
+        n_v = len(s.control_lines)
+        n_h = len(s.control_hlines)
+        if n_v < 1 and n_h < 1:
+            self._set_status("draw at least one marker line (V or H)")
             self.v_hmarker.set(False)
             return
         try:
             import math as _m
             import numpy as _np
             from . import geometry as _G
-            roll, pitch, f, _ = s.current_angles()
-            cx, cy = s.w / 2.0, s.h / 2.0
-            if n <= 2:
-                # 1-2 lines: use the first (dominant) line's bearing.
-                seg = s.control_hlines[0]
-                mx = (float(seg[0]) + float(seg[2])) / 2.0
-                my = (float(seg[1]) + float(seg[3])) / 2.0
-                bx = (mx - cx) / f
-                by = (my - cy) / f
-                b = _np.array([bx, by, 1.0])
-                wv = _G.rot_x(pitch) @ _G.rot_z(-roll) @ b
-                yaw = _m.atan2(-wv[2], wv[0])
+            f = (s.model.f if s.model and s.model.f
+                 else M.focal_px_from_35mm(s.settings.default_focal_35mm,
+                                           s.w, s.h))
+            # Roll/pitch: from V-line(s) if available, else model.
+            if n_v >= 1:
+                roll, pitch = s._marker_roll_pitch(f)
+            elif s.model and s.model.f:
+                roll, pitch, _, _ = W.limit(s.model.roll, s.model.pitch,
+                                            s.settings)
             else:
-                # 3+ lines: least-squares -- minimise sum of squared z-components
-                # after rot_y(yaw).  For each line midpoint bearing b_i, the
-                # corrected world vector is wv_i = rot_x(pitch)@rot_z(-roll)@b_i.
-                # We need yaw such that (rot_y(yaw) @ wv_i)[2] ≈ 0 for all i.
-                # This gives: tan(yaw) = -sum(wv_i[2]) / sum(wv_i[0])
-                ws = []
-                for i in range(n):
+                roll, pitch = 0.0, 0.0
+            # Yaw from H-line(s): the line's image direction, un-rotated by
+            # roll/pitch, gives the world horizontal bearing.  The yaw that
+            # makes it axis-aligned is atan2 of its z/x components after
+            # removing the camera tilt.
+            cx, cy = s.w / 2.0, s.h / 2.0
+            yaw = 0.0
+            if n_h >= 1:
+                # For each H-line, compute the 3D direction of the line in
+                # camera coords (difference of two ray directions), then
+                # un-rotate by roll and pitch to get the world direction.
+                # The yaw that makes this world direction lie in the x-axis
+                # is atan2(w[2], w[0]).
+                yaws = []
+                for i in range(n_h):
                     seg = s.control_hlines[i]
-                    mx = (float(seg[0]) + float(seg[2])) / 2.0
-                    my = (float(seg[1]) + float(seg[3])) / 2.0
-                    bx = (mx - cx) / f
-                    by = (my - cy) / f
-                    b = _np.array([bx, by, 1.0])
-                    ws.append(_G.rot_x(pitch) @ _G.rot_z(-roll) @ b)
-                W = _np.array(ws)
-                yaw = _m.atan2(-W[:, 2].sum(), W[:, 0].sum())
-            yaw = (yaw + _m.pi / 2.0) % _m.pi - _m.pi / 2.0
+                    x0, y0, x1, y1 = (float(seg[0]), float(seg[1]),
+                                      float(seg[2]), float(seg[3]))
+                    # 3D direction of the line in camera coords.
+                    r0 = _np.array([(x0 - cx) / f, (y0 - cy) / f, 1.0])
+                    r1 = _np.array([(x1 - cx) / f, (y1 - cy) / f, 1.0])
+                    d3 = r1 - r0
+                    dn = _np.linalg.norm(d3)
+                    if dn < 1e-9:
+                        continue
+                    d3 = d3 / dn
+                    # Un-rotate by roll and pitch to get world direction.
+                    w = _G.rot_z(-roll) @ _G.rot_x(-pitch) @ d3
+                    # The yaw that sends this direction onto the x-axis.
+                    yaws.append(_m.atan2(w[2], w[0]))
+                if yaws:
+                    # Average angles (wrap-aware).
+                    yaw = _m.atan2(
+                        sum(_m.sin(y) for y in yaws),
+                        sum(_m.cos(y) for y in yaws))
             s._hmarker_yaw = yaw
             s._hmarker_active = True
             self.v_yaw.set(_m.degrees(yaw))
-            label = f"{n} line{'s' if n > 1 else ''}"
-            self._set_status(f"H-Marker: yaw = {_m.degrees(yaw):.1f}° ({label})")
+            self._yaw_scale.configure(state="normal")
+            self._yaw_spin.configure(state="normal")
+            label = f"{n_v}V + {n_h}H"
+            self._set_status(f"Marker: yaw={_m.degrees(yaw):.1f}° roll="
+                             f"{_m.degrees(roll):.1f}° pitch={_m.degrees(pitch):.1f}° ({label})")
             self._schedule_redraw()
         except Exception as e:
             self._set_status(f"H-Marker error: {e}")
@@ -2039,37 +2039,8 @@ class ReviewPanel(tk.Frame):
         c.place(**dict(zip(("x", "y"), self._loupe_park(size))))
 
     def _on_roi_icon_click(self, event=None):
-        """Toggle the ROI popup: a small window with the two % spinboxes."""
-        win = getattr(self, "_roi_popup", None)
-        if win is not None and win.winfo_exists():
-            win.destroy()
-            self._roi_popup = None
-            return
-        win = tk.Toplevel(self)
-        self._roi_popup = win
-        win.title("Facade strip (ROI)")
-        win.resizable(False, False)
-        win.transient(self)
-        win.configure(bg=INK["panel"])
-        x = event.x_root if event else win.winfo_rootx()
-        y = (event.y_root + 20) if event else win.winfo_rooty()
-        win.geometry(f"+{x}+{y}")
-        tk.Label(win, text="Facade strip", bg=INK["panel"],
-                 fg=INK["text"]).pack(pady=(6, 2))
-        row = tk.Frame(win, bg=INK["panel"])
-        row.pack()
-        self.v_roi.trace_add("write", lambda *_a: self._apply_roi())
-        ttk.Checkbutton(row, text="active", variable=self.v_roi,
-                        command=self._apply_roi).pack(side="left")
-        ttk.Label(row, text="  x:").pack(side="left")
-        s0 = ttk.Spinbox(row, from_=0, to=100, increment=5, width=4,
-                         textvariable=self.v_roi_x0, command=self._apply_roi)
-        s0.pack(side="left", padx=2)
-        ttk.Label(row, text="%  →").pack(side="left")
-        s1 = ttk.Spinbox(row, from_=0, to=100, increment=5, width=4,
-                         textvariable=self.v_roi_x1, command=self._apply_roi)
-        s1.pack(side="left", padx=2)
-        ttk.Label(row, text="%").pack(side="left")
+        """Toggle ROI on/off; apply the strip from the rulers."""
+        self._apply_roi()
 
     def _clear_marks(self):
         if self.session.clear_control_lines() or \
@@ -3178,9 +3149,34 @@ class ReviewPanel(tk.Frame):
             self._palette_btns.append(b)
             return b
 
-        tool("E7A8", self.v_mark, self._on_mark_toggle,
-             "Mark a straight edge by hand -- which way it leans decides "
-             "whether it counts as a vertical or a horizontal", lead=True)
+        # Mark: "#" glyph -- two straight lines crossed, the tool's promise.
+        from PIL import ImageDraw as _ID
+        gs = layout.tool_glyph()
+        _mk_img = Image.new("RGBA", (gs, gs), (0, 0, 0, 0))
+        _md = _ID.Draw(_mk_img)
+        fg_hex = INK["dim"] + "ff" if len(INK["dim"]) == 7 else INK["dim"]
+        lw = max(2, gs // 10)
+        m = gs // 4
+        # two verticals
+        _md.line([(m, 2), (m, gs - 2)], fill=fg_hex, width=lw)
+        _md.line([(gs - m, 2), (gs - m, gs - 2)], fill=fg_hex, width=lw)
+        # two horizontals
+        _md.line([(2, m), (gs - 2, m)], fill=fg_hex, width=lw)
+        _md.line([(2, gs - m), (gs - 2, gs - m)], fill=fg_hex, width=lw)
+        self._palette_imgs.append(ImageTk.PhotoImage(_mk_img))
+        _mk_btn = tk.Checkbutton(bar, variable=self.v_mark,
+                                 command=self._on_mark_toggle,
+                                 image=self._palette_imgs[-1],
+                                 text="", compound="center", indicatoron=False,
+                                 width=side, height=side, padx=0, pady=0,
+                                 highlightthickness=0, bd=0, relief="flat",
+                                 cursor="hand2", background=INK["field"],
+                                 activebackground=INK["line"],
+                                 selectcolor=INK["dim"])
+        _mk_btn.pack(side="top", pady=(gap * 2, 0))
+        _attach_tooltip(_mk_btn, "Mark a straight edge by hand -- which way it leans\n"
+                                  "decides whether it counts as vertical or horizontal")
+        self._palette_btns.append(_mk_btn)
         # Brush and box-select joined Mark here (2026-09-15, user: "either the
         # toolbar or the marker, I would prefer only the tool").  They were
         # text controls in the lower-left field while Mark was in both places,
@@ -3226,6 +3222,38 @@ class ReviewPanel(tk.Frame):
         # other tools that act on the original.
         self._strike_btn = tool("E9A8", None, self._strike_slanted,
                                 "Remove all lines that are neither vertical nor horizontal")
+        # ROI / Facade strip: dark-light-dark vertical stripes.  Click opens a
+        # popup with the two % spinboxes; the rulers on the before pane are the
+        # primary interaction.
+        if getattr(self, "v_roi", None) is None:
+            self.v_roi = tk.BooleanVar(value=False)
+            self.v_roi_x0 = tk.DoubleVar(value=20.0)
+            self.v_roi_x1 = tk.DoubleVar(value=80.0)
+        from PIL import ImageDraw
+        _roi_img = Image.new("RGBA", (layout.tool_glyph(),) * 2, (0, 0, 0, 0))
+        _d = ImageDraw.Draw(_roi_img)
+        gs = layout.tool_glyph()
+        # three vertical stripes: text-field-text (inverted: light-dark-light)
+        sw = gs // 3
+        _dark = INK["field"] + "ff" if len(INK["field"]) == 7 else INK["field"]
+        _light = INK["text"] + "ff" if len(INK["text"]) == 7 else INK["text"]
+        _d.rectangle([0, 2, sw, gs - 2], fill=_light)
+        _d.rectangle([sw, 2, sw * 2, gs - 2], fill=_dark)
+        _d.rectangle([sw * 2, 2, gs, gs - 2], fill=_light)
+        self._palette_imgs.append(ImageTk.PhotoImage(_roi_img))
+        _roi_btn = tk.Checkbutton(bar, variable=self.v_roi,
+                                  command=self._on_roi_icon_click,
+                                  image=self._palette_imgs[-1],
+                                  text="", compound="center", indicatoron=False,
+                                  width=side, height=side, padx=0, pady=0,
+                                  highlightthickness=0, bd=0, relief="flat",
+                                  cursor="hand2", background=INK["field"],
+                                  activebackground=INK["line"],
+                                  selectcolor=INK["dim"])
+        _roi_btn.pack(side="top", pady=(gap, 0))
+        _attach_tooltip(_roi_btn, "Facade strip (ROI): restrict horizontal\n"
+                                  "evidence to one facade on corner views.")
+        self._palette_btns.append(_roi_btn)
         # Planar left the palette (2026-09-14, "less is more"). The quad was
         # being asked to do two unrelated jobs -- rectify a flat face, and state
         # which plane the lines belong to -- and the second is answered better,
