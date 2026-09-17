@@ -251,14 +251,39 @@ def _whole_frame(H, quad, img_w, img_h, settings, area_ratio):
     """The full warped quad on a canvas big enough to hold it.
 
     Nothing of the photograph is discarded; the corners the rotation opens up
-    are filled by ``apply``.  ``keep_size`` scales the result back to the
-    original pixel dimensions, so a batch keeps a consistent size.
+    are filled by ``apply``.  When the quad inflates beyond ``max_area_ratio``
+    times the source, the output is cropped (centred on the warped image centre)
+    to that limit — this trims the Telea fill / garbage-pixel zones that a large
+    yaw warp opens up at the edges.  The crop never makes the output smaller
+    than the source.  ``keep_size`` scales the result back to the original
+    pixel dimensions, so a batch keeps a consistent size.
     """
     x0, y0 = quad.min(axis=0)
     x1, y1 = quad.max(axis=0)
     ow, oh = int(round(x1 - x0)), int(round(y1 - y0))
     if ow < 8 or oh < 8:
         return None
+    # Crop to max_area_ratio × source when the quad inflates too much.
+    # This trims the fill/garbage zones at the edges of a large-yaw warp.
+    max_area = getattr(settings, "max_area_ratio", 4.0)
+    if ow * oh > max_area * img_w * img_h:
+        s_crop = math.sqrt(img_w * img_h / (ow * oh) * max_area)
+        ow_c, oh_c = int(round(ow * s_crop)), int(round(oh * s_crop))
+        # Centre the crop on the warped image centre
+        cx_q = (x0 + x1) / 2.0
+        cy_q = (y0 + y1) / 2.0
+        cx_c = cx_q - ow_c / (2.0 * s_crop)
+        cy_c = cy_q - oh_c / (2.0 * s_crop)
+        T = np.array([[s_crop, 0, -cx_c * s_crop],
+                      [0, s_crop, -cy_c * s_crop],
+                      [0, 0, 1]], dtype=float)
+        # Never smaller than source
+        ow, oh = max(ow_c, img_w), max(oh_c, img_h)
+        if settings.keep_size:
+            s = min(img_w / float(ow), img_h / float(oh))
+            S = np.array([[s, 0, 0], [0, s, 0], [0, 0, 1]], dtype=float)
+            return S @ T @ H, img_w, img_h, 1.0, area_ratio
+        return T @ H, ow, oh, 1.0, area_ratio
     T = np.array([[1, 0, -x0], [0, 1, -y0], [0, 0, 1]], dtype=float)
     if settings.keep_size:
         s = min(img_w / float(ow), img_h / float(oh))
@@ -321,62 +346,6 @@ def plan(img_w: int, img_h: int, H: np.ndarray, settings,
         ow, oh = int(round(rw)), int(round(rh))
     S = np.array([[s, 0, -rect[0] * s], [0, s, -rect[1] * s], [0, 0, 1]], dtype=float)
     return S @ H, max(ow, 1), max(oh, 1), float(coverage), area_ratio
-
-
-def _motif_rect(H: np.ndarray, line_segs: np.ndarray, quad: np.ndarray,
-                img_w: int, img_h: int, margin_frac: float = 0.30,
-                yaw: float = 0.0):
-    """Reframe: centre the warped line-motif in an output of source size.
-
-    The motif bounding box (warped line endpoints) is expanded by
-    ``margin_frac`` on each side.  The X-axis is stretched by 1/cos(yaw) to
-    undo the horizontal foreshortening that K·R·K⁻¹ introduces — without this,
-    windows appear too narrow (squeezed).  The output is always source-sized.
-
-    Returns ``(H_total, out_w, out_h)`` or None when the lines give no usable
-    target.
-    """
-    pts = np.column_stack([line_segs[:, 0], line_segs[:, 1],
-                           line_segs[:, 2], line_segs[:, 3]]).reshape(-1, 2)
-    warped = G.apply_h(H, pts)
-    qx0, qy0 = quad[:, 0].min(), quad[:, 1].min()
-    qx1, qy1 = quad[:, 0].max(), quad[:, 1].max()
-    pad = 0.05 * max(qx1 - qx0, qy1 - qy0)
-    inside = ((warped[:, 0] >= qx0 - pad) & (warped[:, 0] <= qx1 + pad) &
-              (warped[:, 1] >= qy0 - pad) & (warped[:, 1] <= qy1 + pad))
-    if inside.sum() < 4:
-        return None
-    wp = warped[inside]
-    mx0, my0 = wp[:, 0].min(), wp[:, 1].min()
-    mx1, my1 = wp[:, 0].max(), wp[:, 1].max()
-    mw, mh = mx1 - mx0, my1 - my0
-    if mw < 32 or mh < 32:
-        return None
-
-    # Undo the horizontal foreshortening: K·R·K⁻¹ compresses X by cos(yaw),
-    # so stretch it back.  This is applied in the reframe transform, not in K,
-    # to avoid inflating the warped quad area.
-    sx = 1.0 / math.cos(yaw) if abs(yaw) > 1e-9 else 1.0
-
-    # Scale so the motif (without margin, after X-stretch) fills ~70% of frame.
-    target_fill = 1.0 / (1.0 + 2.0 * margin_frac)
-    mw_stretched = mw * sx
-    s_h = img_h * target_fill / mh
-    s_w = img_w * target_fill / mw_stretched
-    s = min(s_h, s_w)
-
-    # Output canvas: source size (the image never gets smaller).
-    ow, oh = img_w, img_h
-
-    # Centre the motif in the output.  The X-stretch is applied around the
-    # motif centre so it doesn't shift the composition.
-    cx_m, cy_m = (mx0 + mx1) / 2.0, (my0 + my1) / 2.0
-    tx = ow / 2.0 - s * sx * cx_m
-    ty = oh / 2.0 - s * cy_m
-
-    # S = scale + X-stretch + translation
-    S = np.array([[s * sx, 0, tx], [0, s, ty], [0, 0, 1]], dtype=float)
-    return (S @ H, ow, oh)
 
 
 def pad_colour(spec: str):
