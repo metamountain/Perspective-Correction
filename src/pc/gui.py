@@ -1697,6 +1697,7 @@ class ReviewPanel(tk.Frame):
             s = self.session
             if s is not None:
                 s._hmarker_yaw = None
+                s._hmarker_active = False
                 s.refit()
                 self._sync_from_session()
             return
@@ -1749,6 +1750,7 @@ class ReviewPanel(tk.Frame):
                 yaw = _m.atan2(-W[:, 2].sum(), W[:, 0].sum())
             yaw = (yaw + _m.pi / 2.0) % _m.pi - _m.pi / 2.0
             s._hmarker_yaw = yaw
+            s._hmarker_active = True
             self.v_yaw.set(_m.degrees(yaw))
             label = f"{n} line{'s' if n > 1 else ''}"
             self._set_status(f"H-Marker: yaw = {_m.degrees(yaw):.1f}° ({label})")
