@@ -315,7 +315,8 @@ class ReviewSession:
             # dropped for them -- refusing a little hand-stated evidence because
             # there is little of it is right for a detector and wrong here.
             horiz = L.LineSet(self.control_hlines)
-            settings = settings.replace(min_horizontal_support=0.0)
+            settings = settings.replace(min_horizontal_support=0.0,
+                                        correct_horizontal=True)
         else:
             # The strip is a mask layer now, applied below with every other
             # one, so there is nothing to filter here.  It used to be the single
@@ -866,9 +867,14 @@ class ReviewSession:
         mathematical limit for a folded angle.
 
         In auto mode it is the model's yaw through the same limits, which is
-        where ``correct_horizontal`` gates it to zero."""
+        where ``correct_horizontal`` gates it to zero.  A hand-drawn horizontal
+        marker (``_hmarker_yaw``) overrides the model's yaw when set -- it is a
+        direct bearing constraint that does not need a vanishing point."""
         if self.mode == MANUAL:
             return self.manual_yaw
+        hm = getattr(self, "_hmarker_yaw", None)
+        if hm is not None:
+            return hm
         if self.model is None or not self.model.f:
             return 0.0
         guessed = self.model.f_source in ("default", "prior", "none", "refined")
@@ -969,6 +975,24 @@ class ReviewSession:
         # size it was asked for overflows the pane it was drawn for
         out = W.apply(small, H_total, ow, oh, self.settings)
         out = self._fill_preview(out, H_total, sw, sh, ow, oh)
+        # Project hand-drawn horizontal reference lines onto the corrected frame.
+        # The user drew "this edge should be level" on the before image; the
+        # after image must show where that line lands so they can verify it is
+        # actually horizontal now.  Without this the marks exist only in Q1 and
+        # the correction result is blind to them.
+        if len(self.control_hlines) > 0:
+            # Project each hand-drawn horizontal reference line through the warp.
+            # A homography maps lines to lines, so transforming both endpoints
+            # and connecting them gives the exact image of the line in the
+            # corrected frame.  The user drew "this edge should be level"; the
+            # projected segment shows where it lands and at what angle -- if
+            # the correction is right, it will be horizontal.
+            pts = self.control_hlines.astype(np.float32).copy() * s
+            mapped = cv2.perspectiveTransform(pts.reshape(-1, 1, 2), H_total)
+            for i in range(len(self.control_hlines)):
+                a = tuple(mapped[2 * i].ravel().astype(int))
+                b = tuple(mapped[2 * i + 1].ravel().astype(int))
+                cv2.line(out, a, b, (80, 160, 80), 1)
         return _fit(crop(out), max_edge)
 
     def _fill_preview(self, out, H_total, sw, sh, ow, oh):

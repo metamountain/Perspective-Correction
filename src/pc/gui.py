@@ -1006,88 +1006,49 @@ class ReviewPanel(tk.Frame):
         self.v_roll = tk.DoubleVar(value=0.0)
         self.v_pitch = tk.DoubleVar(value=0.0)
         self.v_focal = tk.DoubleVar(value=28.0)
-        self._slider(ctl, 1, "roll (level)", self.v_roll, -20, 20, "deg", 0.1, "%.2f")
-        self._slider(ctl, 2, "pitch (verticals)", self.v_pitch, -30, 30, "deg", 0.1, "%.2f")
-        self._slider(ctl, 3, "focal length", self.v_focal, 8, 200, "mm eq", 1, "%.0f")
-        # Yaw slider: disabled until the checkbox is ticked.  The checkbox and
-        # the slider share a row so the relationship is visible at a glance.
         self.v_correct_horizontal = tk.BooleanVar(value=self.settings.correct_horizontal)
         self.v_yaw = tk.DoubleVar(value=0.0)
-        # The label names the limitation, because the checkbox cannot: yaw
-        # squares the camera onto ONE horizontal direction, so on a corner view
-        # with two facades it necessarily makes the second one worse.  See the
-        # yaw entry in CLAUDE.md -- this is a special case, not a default.
-        _hchk = ttk.Checkbutton(ctl, text="horizontal (yaw) - one facade only",
+        if getattr(self, "v_hmarker", None) is None:
+            self.v_hmarker = tk.BooleanVar(value=False)
+
+        # Row 0: horizontal marker (manuell) — yaw from hand-drawn lines.
+        _hm = ttk.Checkbutton(ctl, text="horizontal marker (manuell)",
+                              variable=self.v_hmarker,
+                              command=self._on_hmarker_toggle)
+        _hm.grid(row=0, column=0, columnspan=3, sticky="w")
+        _attach_tooltip(
+            _hm,
+            "Compute yaw directly from a hand-drawn horizontal marker.\n"
+            "1-2 lines: exact. 3+: least-squares interpolation.\n"
+            "Mutually exclusive with horizontal auto.")
+
+        # Row 1: horizontal auto (yaw) — VP-based correction + slider, as before.
+        _hchk = ttk.Checkbutton(ctl, text="horizontal auto (yaw)",
                                 variable=self.v_correct_horizontal,
                                 command=self._on_horizontal_toggle)
-        _hchk.grid(row=0, column=0, sticky="w")
+        _hchk.grid(row=1, column=0, sticky="w")
         _attach_tooltip(
             _hchk,
-            "Square the camera onto one horizontal direction.\n"
+            "Square the camera onto one horizontal direction via vanishing point.\n"
             "On a corner view with two facades this necessarily makes the second "
-            "one worse - it is a special case, not a default. Pair it with the "
-            "facade strip below to say WHICH facade you mean.")
-        # The facade strip (the former ROI-x control) restricts horizontal
-        # evidence and nothing else, so it sits in the row under the yaw switch
-        # it shapes:
-        # for corner views where one facade's horizontals would otherwise vote
-        # against the other.  Off by default (roi_x stays None = no change);
-        # the two spinboxes are fractions of the width in percent.
-        # **Made once**, same trap as `v_stroke` above: `_build` re-runs on every
-        # load, so rebuilding these variables would hand the widgets a fresh one
-        # while any earlier state pointed at the old -- the strip would silently
-        # stop working from the second photograph onwards.
-        if getattr(self, "v_roi", None) is None:
-            self.v_roi = tk.BooleanVar(value=False)
-            # Default to a 20-80 % strip, not 0-100: the full frame restricts nothing,
-            # so the useless default is also the unhelpful one.  The two draggable
-            # rulers on the before pane (see `_draw_roi_rulers`) are the primary way to
-            # set this; these spinboxes stay as a numeric fine-tune beside them.
-            self.v_roi_x0 = tk.DoubleVar(value=20.0)
-            self.v_roi_x1 = tk.DoubleVar(value=80.0)
-        self._roi_chk = ttk.Checkbutton(ctl, text="facade strip", variable=self.v_roi,
-                                        command=self._apply_roi)
-        self._roi_chk.grid(row=1, column=0, sticky="w", pady=(6, 0))
-        _attach_tooltip(
-            self._roi_chk,
-            "Corner views only: when two facades meet, their horizontals pull the "
-            "correction in opposite directions and the fit splits the difference.\n"
-            "Tick this and two rulers appear on the left image; drag them so the "
-            "strip covers ONE facade. Horizontals outside the strip stop counting.\n"
-            "Verticals are never restricted - they are what the correction is built "
-            "on, and they agree across both facades.\n"
-            "It sits beside the horizontal (yaw) switch because it does nothing "
-            "else: it only ever changes which horizontals are used.")
-        _s0 = ttk.Spinbox(ctl, from_=0, to=100, increment=5, width=4,
-                          textvariable=self.v_roi_x0, command=self._apply_roi)
-        _s0.grid(row=1, column=1, sticky="w", pady=(6, 0), padx=(6, 6))
-        _s0.bind("<KeyRelease>", self._apply_roi)
-        _attach_tooltip(
-            _s0,
-            "Left and right edge of the strip, as a percentage of image width.\n"
-            "The rulers on the picture are the quicker way; these are the fine tune.")
-        _s1 = ttk.Spinbox(ctl, from_=0, to=100, increment=5, width=4,
-                          textvariable=self.v_roi_x1, command=self._apply_roi)
-        _s1.grid(row=1, column=2, sticky="w", pady=(6, 0), padx=(0, 0))
-        _s1.bind("<KeyRelease>", self._apply_roi)
-        _attach_tooltip(
-            _s1,
-            "Left and right edge of the strip, as a percentage of image width.\n"
-            "The rulers on the picture are the quicker way; these are the fine tune.")
-        # ±30, not the automatic cap: a hand is allowed to ask for what the
-        # estimator's 8 deg gate refuses -- the manual path carries no limit.
+            "one worse - it is a special case, not a default.")
         self._yaw_scale = ttk.Scale(ctl, from_=-60, to=60, variable=self.v_yaw,
                                     orient="horizontal",
                                     command=lambda _v: self._on_slider())
-        self._yaw_scale.grid(row=0, column=1, sticky="ew", padx=6)
+        self._yaw_scale.grid(row=1, column=1, sticky="ew", padx=6)
         self._yaw_spin = ttk.Spinbox(ctl, textvariable=self.v_yaw, from_=-60, to=60,
                                      increment=0.1, format="%.2f", width=7,
                                      command=self._on_slider)
-        self._yaw_spin.grid(row=0, column=2, sticky="e", padx=(6, 0))
+        self._yaw_spin.grid(row=1, column=2, sticky="e", padx=(6, 0))
         self._yaw_spin.bind("<Return>", lambda _e: self._on_slider())
         if not self.settings.correct_horizontal:
             self._yaw_scale.configure(state="disabled")
             self._yaw_spin.configure(state="disabled")
+
+        # Rows 2-4: roll, pitch, focal sliders.
+        self._slider(ctl, 2, "roll (level)", self.v_roll, -20, 20, "deg", 0.1, "%.2f")
+        self._slider(ctl, 3, "pitch (verticals)", self.v_pitch, -30, 30, "deg", 0.1, "%.2f")
+        self._slider(ctl, 4, "focal length", self.v_focal, 8, 200, "mm eq", 1, "%.0f")
 
         # The line detector moved to the lower-left tools field with the rest of
         # the FIND controls (see `_build_tools`) -- beside the input image, where
@@ -1687,7 +1648,15 @@ class ReviewPanel(tk.Frame):
 
     def _on_horizontal_toggle(self):
         on = self.v_correct_horizontal.get()
-        self.session.settings = self.session.settings.replace(correct_horizontal=on)
+        if on and self.v_hmarker.get():
+            # Only one yaw source at a time: marker takes priority.
+            self.v_hmarker.set(False)
+            self._on_hmarker_toggle()
+            self.v_correct_horizontal.set(True)
+        s = self.session
+        if s is None:
+            return
+        s.settings = s.settings.replace(correct_horizontal=on)
         state = "normal" if on else "disabled"
         self._yaw_scale.configure(state=state)
         self._yaw_spin.configure(state=state)
@@ -1700,6 +1669,79 @@ class ReviewPanel(tk.Frame):
         elif not on and self.session.mode == AUTO:
             self.v_yaw.set(0.0)
             self._schedule_redraw()
+
+    def _on_hmarker_toggle(self):
+        """H-Marker: yaw from hand-drawn horizontal line(s).
+
+        1-2 lines: exact bearing constraint (each line states its own level).
+        3+ lines: least-squares interpolation -- the yaw that minimises the
+        total tilt across all lines.  Independent of correct_horizontal and
+        the VP-based path.  Errors are caught and shown in the status bar,
+        never crash the app.
+        """
+        on = self.v_hmarker.get()
+        if not on:
+            s = self.session
+            if s is not None:
+                s._hmarker_yaw = None
+                s.refit()
+                self._sync_from_session()
+            return
+        # Only one yaw source at a time.
+        if self.v_correct_horizontal.get():
+            self.v_correct_horizontal.set(False)
+            self._on_horizontal_toggle()
+        s = self.session
+        if s is None:
+            self._set_status("no image loaded")
+            self.v_hmarker.set(False)
+            return
+        n = len(s.control_hlines)
+        if n < 1:
+            self._set_status("draw a horizontal marker first, then tick H-Marker")
+            self.v_hmarker.set(False)
+            return
+        try:
+            import math as _m
+            import numpy as _np
+            from . import geometry as _G
+            roll, pitch, f, _ = s.current_angles()
+            cx, cy = s.w / 2.0, s.h / 2.0
+            if n <= 2:
+                # 1-2 lines: use the first (dominant) line's bearing.
+                seg = s.control_hlines[0]
+                mx = (float(seg[0]) + float(seg[2])) / 2.0
+                my = (float(seg[1]) + float(seg[3])) / 2.0
+                bx = (mx - cx) / f
+                by = (my - cy) / f
+                b = _np.array([bx, by, 1.0])
+                wv = _G.rot_x(pitch) @ _G.rot_z(-roll) @ b
+                yaw = _m.atan2(-wv[2], wv[0])
+            else:
+                # 3+ lines: least-squares -- minimise sum of squared z-components
+                # after rot_y(yaw).  For each line midpoint bearing b_i, the
+                # corrected world vector is wv_i = rot_x(pitch)@rot_z(-roll)@b_i.
+                # We need yaw such that (rot_y(yaw) @ wv_i)[2] ≈ 0 for all i.
+                # This gives: tan(yaw) = -sum(wv_i[2]) / sum(wv_i[0])
+                ws = []
+                for i in range(n):
+                    seg = s.control_hlines[i]
+                    mx = (float(seg[0]) + float(seg[2])) / 2.0
+                    my = (float(seg[1]) + float(seg[3])) / 2.0
+                    bx = (mx - cx) / f
+                    by = (my - cy) / f
+                    b = _np.array([bx, by, 1.0])
+                    ws.append(_G.rot_x(pitch) @ _G.rot_z(-roll) @ b)
+                W = _np.array(ws)
+                yaw = _m.atan2(-W[:, 2].sum(), W[:, 0].sum())
+            yaw = (yaw + _m.pi / 2.0) % _m.pi - _m.pi / 2.0
+            s._hmarker_yaw = yaw
+            self.v_yaw.set(_m.degrees(yaw))
+            label = f"{n} line{'s' if n > 1 else ''}"
+            self._set_status(f"H-Marker: yaw = {_m.degrees(yaw):.1f}° ({label})")
+            self._schedule_redraw()
+        except Exception as e:
+            self._set_status(f"H-Marker error: {e}")
 
     def _on_slider(self):
         self.session.set_manual(roll_deg=self.v_roll.get(), pitch_deg=self.v_pitch.get(),
