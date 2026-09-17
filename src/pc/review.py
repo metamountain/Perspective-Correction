@@ -336,6 +336,13 @@ class ReviewSession:
                        exif_px * self.scale if exif_px else None)
         if m.f:
             m.f = m.f / self.scale
+            # Sanity clamp: focal below 5% of frame width is unphysical
+            # (extreme fisheye).  Fall back to the 28 mm prior.
+            f_min = 0.05 * max(self.w, self.h)
+            if m.f < f_min:
+                m.f = M.focal_px_from_35mm(
+                    self.settings.default_focal_35mm, self.w, self.h)
+                m.f_source = "clamped"
         # map the inlier mask back onto the full line list, so the overlay can
         # distinguish "not an inlier" from "struck out by the user"
         full = np.zeros(len(self.vert), dtype=bool)
@@ -1048,7 +1055,7 @@ class ReviewSession:
             _parts = [x.seg for x in (self.vert, self.horiz) if len(x)]
             if _parts:
                 _segs = np.concatenate(_parts, axis=0)
-        planned = W.plan(sw, sh, H, self.settings, line_segs=_segs)
+        planned = W.plan(sw, sh, H, self.settings, line_segs=_segs, yaw=yaw)
         if planned is None:
             return _fit(self.bgr, max_edge)
         H_total, ow, oh, _, _ = planned
@@ -1171,6 +1178,12 @@ class ReviewSession:
                          f"the yaw is taken from that facade only")
         if clamped:
             parts.append("correction hit the configured limit")
+        # P4: warn when two horizontal VPs have meaningful support (two-facade)
+        if self.model is not None and self.settings.correct_horizontal:
+            supports = self.model.diagnostics.get("horiz_supports", [])
+            if sum(1 for s in supports[:2] if s > 0.2) >= 2:
+                parts.append("two horizontal directions detected — yaw follows "
+                             "the dominant facade; use ROI strip to choose")
         if skip:
             parts.append(f"would skip: {skip}")
         return "\n".join(parts)
@@ -1286,17 +1299,24 @@ class ReviewSession:
             os.makedirs(os.path.dirname(os.path.abspath(dst_path)) or ".", exist_ok=True)
             IO.save(dst_path, out, self.src, self.settings)
             return dst_path
-        H = W.build(self.w, self.h, f, roll, pitch, yaw, max_area=self.settings.max_area_ratio)
-        planned = W.plan(self.w, self.h, H, self.settings)
+        # keep_size=False: the corrected image must never be SMALLER than the
+        # original.  With keep_size=True, _whole_frame would scale an inflated
+        # quad (large yaw) back down to source dimensions — that is exactly the
+        # shrinkage the user forbade.  keep_size=False lets the output grow to
+        # fit the full warped frame; for small roll/pitch the quad barely
+        # inflates so the output stays close to source size either way.
+        save_settings = self.settings.replace(keep_size=False)
+        H = W.build(self.w, self.h, f, roll, pitch, yaw, max_area=save_settings.max_area_ratio)
+        planned = W.plan(self.w, self.h, H, save_settings)
         if planned is None:
             IO.copy_through(self.path, dst_path)
             return dst_path
         H_total, ow, oh, _, _ = planned
-        out = W.apply(self.bgr, H_total, ow, oh, self.settings)
-        if getattr(self.settings, "fill", "none") not in ("", "none"):
+        out = W.apply(self.bgr, H_total, ow, oh, save_settings)
+        if getattr(save_settings, "fill", "none") not in ("", "none"):
             from . import inpaint as FILL
             hole = W.filled_region(H_total, self.w, self.h, ow, oh)
-            out, _note = FILL.fill(out, hole, self.settings)
+            out, _note = FILL.fill(out, hole, save_settings)
         out = self._apply_crop(out)
         os.makedirs(os.path.dirname(dst_path) or ".", exist_ok=True)
         IO.save(dst_path, out, self.src, self.settings)
