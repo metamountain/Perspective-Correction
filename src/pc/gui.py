@@ -712,7 +712,8 @@ class ReviewPanel(tk.Frame):
             return
         app = self._app()
         if app is not None:
-            title = (f"{position}  {os.path.basename(path)}  |  Batch "
+            W, H = self.session.w, self.session.h
+            title = (f"{position}  {os.path.basename(path)}  {W}×{H}  |  Batch "
                      f"Perspective Correction  v{__version__}")
             app.title(title.strip())
         self._build()
@@ -763,7 +764,6 @@ class ReviewPanel(tk.Frame):
         dst = os.path.basename(self._target_path())
         self._before_lbl.configure(text=f"before   {_shorten_middle(src)}")
         self._after_lbl.configure(text=f"after   {_shorten_middle(dst)}")
-        self._update_after_dims()
 
     # -- layout ----------------------------------------------------------
     def _build(self):
@@ -869,10 +869,6 @@ class ReviewPanel(tk.Frame):
         ovbar.place(relx=1.0, x=-8, y=8, anchor="ne")
         self._after_lbl = ttk.Label(self.cell_after, text="after")
         self._after_lbl.pack(anchor="w")
-        # Live pixel dimensions: updated on every crop change so the user sees
-        # exactly what Q2 shows without guessing from the image.
-        self._after_dims = ttk.Label(self.cell_after, style="Dim.TLabel", text="")
-        self._after_dims.pack(anchor="e", side="right")
         self.c_after = tk.Canvas(self.cell_after, bg=INK["field"],
                                  highlightthickness=0, width=1, height=1)
         self.c_after.pack(fill="both", expand=True)
@@ -1169,6 +1165,23 @@ class ReviewPanel(tk.Frame):
                         command=self._clear_crop)
         _b.pack(side="left", padx=(0, 6))
         _attach_tooltip(_b, "Remove any manual crop selection")
+        # ROI / Facade strip: dark-light-dark stripes icon. Click opens a popup
+        # with the two % spinboxes. The rulers on the before pane are the primary
+        # interaction; the popup is the numeric fine-tune.
+        if getattr(self, "v_roi", None) is None:
+            self.v_roi = tk.BooleanVar(value=False)
+            self.v_roi_x0 = tk.DoubleVar(value=20.0)
+            self.v_roi_x1 = tk.DoubleVar(value=80.0)
+        _roi_icon = tk.Canvas(btns2, width=24, height=16, bg=INK["panel"],
+                              highlightthickness=0, bd=0)
+        # dark-light-dark stripes
+        _roi_icon.create_rectangle(0, 0, 8, 16, fill="#3a3a3a", outline="")
+        _roi_icon.create_rectangle(8, 0, 16, 16, fill="#d0d0d0", outline="")
+        _roi_icon.create_rectangle(16, 0, 24, 16, fill="#3a3a3a", outline="")
+        _roi_icon.pack(side="left", padx=(6, 0))
+        _roi_icon.bind("<Button-1>", self._on_roi_icon_click)
+        _attach_tooltip(_roi_icon, "Facade strip (ROI): restrict horizontal\n"
+                                   "evidence to one facade on corner views.")
 
         # -- assembly: who gives up height first ---------------------------
         # `pack` hands each child its requested height in call order and gives
@@ -2023,6 +2036,39 @@ class ReviewPanel(tk.Frame):
         # every time.
         c.place(**dict(zip(("x", "y"), self._loupe_park(size))))
 
+    def _on_roi_icon_click(self, event=None):
+        """Toggle the ROI popup: a small window with the two % spinboxes."""
+        win = getattr(self, "_roi_popup", None)
+        if win is not None and win.winfo_exists():
+            win.destroy()
+            self._roi_popup = None
+            return
+        win = tk.Toplevel(self)
+        self._roi_popup = win
+        win.title("Facade strip (ROI)")
+        win.resizable(False, False)
+        win.transient(self)
+        win.configure(bg=INK["panel"])
+        x = event.x_root if event else win.winfo_rootx()
+        y = (event.y_root + 20) if event else win.winfo_rooty()
+        win.geometry(f"+{x}+{y}")
+        tk.Label(win, text="Facade strip", bg=INK["panel"],
+                 fg=INK["text"]).pack(pady=(6, 2))
+        row = tk.Frame(win, bg=INK["panel"])
+        row.pack()
+        self.v_roi.trace_add("write", lambda *_a: self._apply_roi())
+        ttk.Checkbutton(row, text="active", variable=self.v_roi,
+                        command=self._apply_roi).pack(side="left")
+        ttk.Label(row, text="  x:").pack(side="left")
+        s0 = ttk.Spinbox(row, from_=0, to=100, increment=5, width=4,
+                         textvariable=self.v_roi_x0, command=self._apply_roi)
+        s0.pack(side="left", padx=2)
+        ttk.Label(row, text="%  →").pack(side="left")
+        s1 = ttk.Spinbox(row, from_=0, to=100, increment=5, width=4,
+                         textvariable=self.v_roi_x1, command=self._apply_roi)
+        s1.pack(side="left", padx=2)
+        ttk.Label(row, text="%").pack(side="left")
+
     def _clear_marks(self):
         if self.session.clear_control_lines() or \
                 self.session.clear_control_lines(kind="h"):
@@ -2056,23 +2102,7 @@ class ReviewPanel(tk.Frame):
             self._schedule_redraw()      # nothing on screen to draw over yet
             return
         self._show_after(self.session.crop_rect)
-        self._update_after_dims()
         self._set_status(self.session.status_text())
-
-    def _update_after_dims(self):
-        """Show the crop's pixel dimensions next to the 'after' label."""
-        lbl = getattr(self, "_after_dims", None)
-        if lbl is None or self.session is None:
-            return
-        rect = self.session.crop_rect
-        W, H = self.session.w, self.session.h
-        if rect is None:
-            lbl.configure(text=f"{W}×{H}")
-        else:
-            x0, y0, x1, y1 = rect
-            cw = int(round((x1 - x0) * W))
-            ch = int(round((y1 - y0) * H))
-            lbl.configure(text=f"{cw}×{ch}")
 
     def _on_crop_press(self, event):
         if getattr(self, "_ph_a", None) is None:
@@ -2679,7 +2709,8 @@ class ReviewPanel(tk.Frame):
 
         Mirrors `_apply_roi`'s validity test so the rulers and the estimator
         never disagree about whether a strip is in force."""
-        if not self.v_roi.get():
+        v = getattr(self, "v_roi", None)
+        if v is None or not v.get():
             return None
         try:
             x0 = float(self.v_roi_x0.get()) / 100.0
@@ -3046,6 +3077,11 @@ class ReviewPanel(tk.Frame):
             after = self.session.render_after(max_edge=max(box_a), apply_crop=False)
             self._after_base = after      # un-veiled, preview-sized; _show_after bakes it
             self._after_box = box_a
+            import logging as _log
+            _log.getLogger("pc.gui").info(
+                "render_after done: shape=%s mean=%.1f",
+                getattr(after, "shape", "?"),
+                float(after.mean()) if after is not None else -1)
             ph_b, s_b = _to_photo(before, box_b)
             # scale from the *original* image to what is on screen
             self._before_scale = s_b * (before.shape[1] / self.session.w)
