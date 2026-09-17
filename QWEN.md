@@ -4,6 +4,64 @@
 
 - **262k tokens** configured (user raised from default on 2026-07-15).
 
+## Visual debugging (agent has vision, 2026-09-17)
+
+The agent can see images. Use this to **offload the user** — they should not
+have to open the GUI, take a screenshot, and paste it back just so the agent
+can check something.
+
+### When to use visual debugging proactively
+
+- **After any GUI change** (layout, overlay, marker, crop, guide): launch the
+  GUI with a test image, capture a screenshot, inspect it before reporting
+  "done". Do not ask the user to verify what you can see yourself.
+- **When diagnosing an offset/scale bug**: take a screenshot of the affected
+  pane, measure pixel positions in the image, compare against expected values
+  from the code. This replaces the old "user eyeballs it → reports back" loop.
+- **When testing correction output**: run `render_after` (or the full pipeline)
+  on a test asset, save the result as PNG, read it back and check: are walls
+  vertical? Are horizontals level? Is the crop sensible?
+- **When verifying theme/colour changes**: screenshot the panel, confirm the
+  palette is applied (no OS-default black menus, correct INK colours).
+
+### How to capture GUI screenshots
+
+```python
+# Headless-friendly: render offscreen and save
+import tkinter as tk
+root = tk.Tk()
+root.withdraw()  # don't show
+# ... build the panel, call _redraw(), then:
+panel.update_idletasks()
+# For a specific canvas widget:
+canvas.postscript(file="shot.eps", colormode="color")  # vector
+# Or PIL-based pixel grab of the whole window:
+import subprocess
+subprocess.run(["powershell", "-c",
+    "Add-Type -AssemblyName System.Windows.Forms; "
+    "$b = New-Object System.Drawing.Bitmap([System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Width, [System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Height); "
+    "$g = [System.Drawing.Graphics]::FromImage($b); "
+    "$g.CopyFromScreen([System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Location, [System.Drawing.Point]::Empty, $b.Size); "
+    "$b.Save('shot.png')"])
+```
+
+Prefer the **offscreen render** path (call `_redraw` on a hidden root, grab
+canvas items programmatically) over full-screen grabs — they are deterministic
+and don't depend on window position.
+
+### Rules
+
+1. **Verify before reporting.** If you changed something visual, you must have
+   seen the result (screenshot or rendered array) before telling the user it's
+   fixed. "The code looks correct" is not sufficient for GUI work.
+2. **Don't ask the user to screenshot** unless the bug is only reproducible in
+   a live interactive session (e.g. a drag gesture that requires real mouse
+   input). For static states (initial load, after a button press, overlay
+   rendering) you can reproduce headlessly.
+3. **Save test screenshots** to `.qwen/tmp/` so they don't pollute the repo.
+4. **Use `zoom_image`** on screenshots when you need to inspect fine details
+   (marker positions, pixel-level offsets, colour values).
+
 ## SCALING RULE (global, do not break)
 
 The preview pipeline has exactly **one** scale chain. Every overlay, marker,
@@ -102,21 +160,21 @@ The guide system in `gui.py` was rewritten to match the reference implementation
   `sb_v_double_arrow` (user preference).
 - **Tag & colour:** `"after_guide"` tag, `GUIDE_GREY = "#9aa0a8"`.
 
-### Implementation status (verified against code, 2026-09-16)
+### Implementation status (verified against code, 2026-09-17)
 
 | ID | Description | Status |
 |---|---|---|
 | F1 | `fill_max_share` raise → warn + note | **Done** — `inpaint.py:673` returns `(bgr, note)` |
-| F2 | Auto-crop threshold too tight for review | **Partially done** — `review.py` uses `auto_crop_threshold = max(crop_max_loss, 0.30)`; no `interactive` flag in config (batch path still 5%) |
-| F3 | Size warning when output > 1.5× input | **Not done** — `_set_status` is still a `pass` no-op |
+| F2 | Auto-crop threshold too tight for review | **Done** — `review.py:74` uses `auto_crop_threshold = max(crop_max_loss, 0.30)` |
+| F3 | Size warning when output > 1.5× input | **Done** — `gui.py:953` real `lbl_status`; `_set_status` writes to it (28 call sites) |
 | F4 | Collapse three crop gates to one | **Done** — single `crop_max_loss` in config; review bumps to 30% locally |
-| F5 | Save button never disabled by warnings | **Not done** — no invariant test, no audit of `.config(state=)` calls |
-| P1 | Yaw-only clamp warns instead of refusing | **Not done** — `pipeline.py:191` still refuses on any `clamped=True` |
-| P2 | Surface support-gate decision in diagnostics | **Not done** — no `yaw_skipped` key in model.py |
+| F5 | Save button never disabled by warnings | **Done** — `_save()` has no state-gate; test at `test_gui.py:487` |
+| P1 | Yaw-only clamp warns instead of refusing | **Done** — `pipeline.py:208-218` pure-yaw breach warns + applies capped |
+| P2 | Surface support-gate decision in diagnostics | **Done** — `model.py:432-435` sets `diag["yaw_skipped"]` |
 | P3 | Display multiple horizontal VPs as markers | **Not done** |
 | P4 | Two-facade warning in status area | **Not done** |
-| P5 | Document + test manual-yaw bypass | **Partially done** — docstring added to `current_yaw()`; no dedicated test |
-| gui split | 12-file composition split of gui.py (4864 lines) | **Not done** — still one file |
+| P5 | Document + test manual-yaw bypass | **Done** — docstring at `review.py:925`; test at `test_review.py:995` |
+| gui split | 12-file composition split of gui.py (5040 lines) | **Not done** — deprioritised by user |
 | Shootout | 20-image benchmark suite | **Not done** — no `tests/shootout/` directory |
 | cli MED | `isatty()` gate blocks piped double-click | **Not done** — `cli.py:651` unchanged |
 
@@ -152,11 +210,10 @@ fix. Severity: **HIGH** = likely wrong behaviour, **MED** = latent risk,
 
 ### Next steps (user to decide)
 
-Open items ranked by impact if the user wants to continue:
+All F1-F5 and P1/P2/P5 are **done**. Remaining:
 
-1. **F3 + gui MED #1** — wire `_set_status` to a real status label (unblocks F3, P2 display, P4 display, and all interaction feedback)
-2. **P1** — yaw-only clamp → warn not refuse (one block in pipeline.py)
-3. **P2** — `yaw_skipped` diagnostic in model.py (small, unblocks P4)
-4. **F5** — Save-always-enabled test + audit
-5. **gui.py split** — 12-file composition (large, structural; do after the above so controllers are stable)
-6. **Shootout suite** — 9–10 h effort; independent of the above
+1. **P4** — two-facade warning in status area (small, diagnostic)
+2. **P3** — multi-VP markers in GUI (cosmetic)
+3. **Shootout suite** — 9–10 h effort; independent
+4. **cli MED** — `isatty()` gate (minor)
+5. **gui.py split** — deprioritised by user (last)
