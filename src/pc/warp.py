@@ -199,7 +199,8 @@ def _whole_frame(H, quad, img_w, img_h, settings, area_ratio):
     return T @ H, max(ow, 1), max(oh, 1), 1.0, area_ratio
 
 
-def plan(img_w: int, img_h: int, H: np.ndarray, settings):
+def plan(img_w: int, img_h: int, H: np.ndarray, settings,
+         line_segs: np.ndarray | None = None):
     """Work out the output canvas.
 
     Returns ``(H_total, out_w, out_h, coverage, area_ratio)`` where ``coverage``
@@ -214,6 +215,12 @@ def plan(img_w: int, img_h: int, H: np.ndarray, settings):
     default) and otherwise keeps the whole frame and pads the corners the
     rotation opened up.  The choice is per photograph, because whether the loss
     is small is a property of the photograph and not of the folder.
+
+    When ``line_segs`` is provided (N×2×2 endpoints in full-resolution pixels)
+    and the auto-crop would otherwise fall back to the whole frame, the plan
+    instead crops to the bounding box of the detected lines plus a margin.
+    This targets the architectural subject and discards the pad zones that a
+    large yaw warp opens up (grass, sky, inpainted fill).
     """
     quad = warped_quad(H, img_w, img_h)
     area_ratio = quad_area(quad) / float(img_w * img_h)
@@ -232,6 +239,16 @@ def plan(img_w: int, img_h: int, H: np.ndarray, settings):
 
     coverage = (rw * rh) / quad_area(quad) if quad_area(quad) > 0 else 0.0
     if settings.crop == "auto" and (1.0 - coverage) > settings.crop_max_loss:
+        # Try line-based motif crop before falling back to the whole frame.
+        if line_segs is not None and len(line_segs) >= 4:
+            motif = _motif_rect(H, line_segs, quad, img_w, img_h)
+            if motif is not None:
+                mx0, my0, mx1, my1 = motif
+                mw, mh = mx1 - mx0, my1 - my0
+                if mw >= 64 and mh >= 64:
+                    m_cov = (mw * mh) / quad_area(quad) if quad_area(quad) > 0 else 0.0
+                    S = np.array([[1, 0, -mx0], [0, 1, -my0], [0, 0, 1]], dtype=float)
+                    return S @ H, int(round(mw)), int(round(mh)), float(m_cov), area_ratio
         return _whole_frame(H, quad, img_w, img_h, settings, area_ratio)
 
     if settings.keep_size:
@@ -242,6 +259,39 @@ def plan(img_w: int, img_h: int, H: np.ndarray, settings):
         ow, oh = int(round(rw)), int(round(rh))
     S = np.array([[s, 0, -rect[0] * s], [0, s, -rect[1] * s], [0, 0, 1]], dtype=float)
     return S @ H, max(ow, 1), max(oh, 1), float(coverage), area_ratio
+
+
+def _motif_rect(H: np.ndarray, line_segs: np.ndarray, quad: np.ndarray,
+                img_w: int, img_h: int, margin_frac: float = 0.08):
+    """Bounding box of warped line endpoints, inset to the valid region.
+
+    Returns ``(x0, y0, x1, y1)`` in output-canvas coordinates (same space as
+    ``quad``), or None if the lines don't form a usable crop target.
+    """
+    pts = np.column_stack([line_segs[:, 0], line_segs[:, 1],
+                           line_segs[:, 2], line_segs[:, 3]]).reshape(-1, 2)
+    warped = G.apply_h(H, pts)
+    # Keep only points that land inside (or near) the warped quad.
+    qx0, qy0 = quad[:, 0].min(), quad[:, 1].min()
+    qx1, qy1 = quad[:, 0].max(), quad[:, 1].max()
+    pad = 0.05 * max(qx1 - qx0, qy1 - qy0)
+    inside = ((warped[:, 0] >= qx0 - pad) & (warped[:, 0] <= qx1 + pad) &
+              (warped[:, 1] >= qy0 - pad) & (warped[:, 1] <= qy1 + pad))
+    if inside.sum() < 4:
+        return None
+    wp = warped[inside]
+    x0, y0 = wp[:, 0].min(), wp[:, 1].min()
+    x1, y1 = wp[:, 0].max(), wp[:, 1].max()
+    # Margin as a fraction of the motif extent (not the full frame).
+    mx = margin_frac * max(x1 - x0, 1)
+    my = margin_frac * max(y1 - y0, 1)
+    x0 -= mx; y0 -= my; x1 += mx; y1 += my
+    # Clamp to the warped quad so we never crop into pure pad.
+    x0 = max(x0, qx0); y0 = max(y0, qy0)
+    x1 = min(x1, qx1); y1 = min(y1, qy1)
+    if x1 - x0 < 32 or y1 - y0 < 32:
+        return None
+    return (x0, y0, x1, y1)
 
 
 def pad_colour(spec: str):

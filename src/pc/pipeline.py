@@ -254,7 +254,13 @@ def process(src_path, dst_path, settings, debug_dir=None, dry_run=False,
                            f"{settings.min_correction_deg:.2f}deg)")
 
     H = W.build(w, h, m.f, roll, pitch, yaw)
-    planned = W.plan(w, h, H, settings)
+    # Combine vertical + horizontal line segments for the motif crop.
+    all_segs = None
+    if len(vert) or len(horiz):
+        parts = [s.seg for s in (vert, horiz) if len(s)]
+        if parts:
+            all_segs = np.concatenate(parts, axis=0)
+    planned = W.plan(w, h, H, settings, line_segs=all_segs)
     if planned is None:
         return finish_skip("crop would be degenerate")
     H_total, ow, oh, coverage, area_ratio = planned
@@ -286,9 +292,15 @@ def process(src_path, dst_path, settings, debug_dir=None, dry_run=False,
         if getattr(settings, "fill", "none") not in ("", "none"):
             from . import inpaint as FILL
             hole = W.filled_region(H_total, w, h, ow, oh)
-            out, note = FILL.fill(out, hole, settings)
-            if note:
-                base["fill"] = note
+            share = float(np.mean(hole))
+            cap = float(getattr(settings, "fill_max_share", 0.35))
+            if share > cap:
+                base["fill"] = (f"fill skipped — hole is {share:.0%} of the frame "
+                                f"(over --fill-max-share {cap:.0%}); consider cropping first")
+            else:
+                out, note = FILL.fill(out, hole, settings)
+                if note:
+                    base["fill"] = note
         os.makedirs(os.path.dirname(os.path.abspath(dst_path)) or ".", exist_ok=True)
         io.save(dst_path, out, src, settings)
     except Exception as exc:
