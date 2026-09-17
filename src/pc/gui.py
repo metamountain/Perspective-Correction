@@ -1146,6 +1146,9 @@ class ReviewPanel(tk.Frame):
             self.v_stroke_w = tk.IntVar(value=60)
         if getattr(self, "v_mark", None) is None:
             self.v_mark = tk.BooleanVar(value=False)
+        if getattr(self, "v_planar", None) is None:
+            self.v_planar = tk.BooleanVar(value=False)
+            self._planar_pending = []
         if getattr(self, "v_sam", None) is None:
             self.v_sam = tk.BooleanVar(value=False)
             self._sam_box = None
@@ -1792,6 +1795,7 @@ class ReviewPanel(tk.Frame):
     # later one looks broken.  That is exactly how the mask brush went dead: SAM
     # is tested first, so leaving SAM on made the brush unreachable.
     _TOOL_MODES = (("v_mark", "_on_mark_toggle"),
+                   ("v_planar", "_on_planar_toggle"),
                    ("v_stroke", "_on_stroke_toggle"),
                    ("v_sam", "_on_sam_toggle"))
 
@@ -1836,6 +1840,70 @@ class ReviewPanel(tk.Frame):
             self._loupe_hide()
         self._set_status(self.session.status_text())
         self._redraw()
+
+    def _on_planar_toggle(self):
+        """Entering or leaving facade-rect mode (four corners)."""
+        on = self.v_planar.get()
+        if on:
+            self._exclusive("v_planar")
+            self._planar_pending = []
+        else:
+            self._planar_pending = []
+            self.session.clear_planar()
+            self._mark_drag = None
+            self._loupe_hide()
+        self._set_status(self.session.status_text())
+        self._redraw()
+
+    def _click_planar(self, x, y, event=None):
+        """Four clicks place the facade corners; a click on a placed corner
+        grabs it for nudging.  The fourth click closes the quad and the
+        rectified preview appears in the after pane."""
+        # Grab an existing corner first (nudge).
+        hit = self.session.pick_planar_corner(x, y, display_scale=self._before_scale)
+        if hit is not None:
+            self._planar_drag = hit
+            self._loupe_show()
+            if event is not None:
+                self._loupe_move(event)
+            return
+        # Otherwise place the next corner (1→2→3→4).
+        i = len(self.session.planar_quad)
+        if i >= 4:
+            # All four placed; a fifth click clears and starts over.
+            self.session.clear_planar()
+            self._planar_pending = []
+            self._set_status("facade quad cleared -- click corner 1 again")
+            self._redraw()
+            return
+        self.session.set_planar_point(i, x, y)
+        if i == 0:
+            self._loupe_show()
+            if event is not None:
+                self._loupe_move(event)
+        if len(self.session.planar_quad) >= 4:
+            self._loupe_hide()
+            self._set_status("facade quad set -- drag any corner to adjust")
+        else:
+            self._set_status(f"facade corner {i + 1}/4 placed -- click the next "
+                             f"corner (top-left, top-right, bottom-right, bottom-left)")
+        self._redraw()
+
+    def _planar_drag_move(self, event):
+        """Nudge the grabbed corner; the rectified preview follows live."""
+        if self._planar_drag is None or self.session is None:
+            return
+        x = event.x - self._before_off[0]
+        y = event.y - self._before_off[1]
+        self.session.set_planar_point(self._planar_drag, x, y)
+        self._redraw()
+
+    def _planar_drag_release(self):
+        if self._planar_drag is None:
+            return
+        self._planar_drag = None
+        self._loupe_hide()
+        self._sync_from_session()
 
     @staticmethod
     def _kind_for(x0, y0, x1, y1):
@@ -2371,7 +2439,7 @@ class ReviewPanel(tk.Frame):
         # must be reachable wherever they land.  Checked first -- it is the most
         # specific gesture (a click on a drawn line).
         if getattr(self, "v_roi", None) is not None and self.v_roi.get():
-            hit = self._roi_ruler_at(event.x)
+            hit = self._roi_ruler_at(event.x, event.y)
             if hit is not None:
                 self._on_roi_drag_start(hit)
                 return
@@ -2383,6 +2451,9 @@ class ReviewPanel(tk.Frame):
             return
         if getattr(self, "v_mark", None) is not None and self.v_mark.get():
             self._click_mark(x, y, event)
+            return
+        if getattr(self, "v_planar", None) is not None and self.v_planar.get():
+            self._click_planar(x, y, event)
             return
         idx = self.session.pick_line(x, y, display_scale=self._before_scale)
         if idx is None:
@@ -2645,6 +2716,21 @@ class ReviewPanel(tk.Frame):
         if getattr(self, "v_sam", None) is not None and self.v_sam.get():
             self._on_sam_drag(event)
             return
+        if getattr(self, "_planar_drag", None) is not None:
+            self._planar_drag_move(event)
+            return
+        if getattr(self, "v_planar", None) is not None and self.v_planar.get():
+            # Rubber band from the last placed corner to the cursor.
+            self.c_before.delete("planar_rubber")
+            quad = self.session.planar_quad if self.session else []
+            if quad:
+                ox, oy = self._before_off
+                s = self._before_scale
+                lx, ly = quad[-1]
+                self.c_before.create_line(ox + lx * s, oy + ly * s, event.x, event.y,
+                                          fill="#5ac37f", width=2, dash=(4, 4),
+                                          tags="planar_rubber")
+            return
         if getattr(self, "_roi_drag", None) is not None:
             self._on_roi_drag_move(event)
             return
@@ -2660,6 +2746,9 @@ class ReviewPanel(tk.Frame):
     def _on_before_b1release(self, event):
         if getattr(self, "v_sam", None) is not None and self.v_sam.get():
             self._on_sam_release(event)
+            return
+        if getattr(self, "_planar_drag", None) is not None:
+            self._planar_drag_release()
             return
         if getattr(self, "_roi_drag", None) is not None:
             self._on_roi_drag_release()
@@ -2715,28 +2804,31 @@ class ReviewPanel(tk.Frame):
         wash = dict(fill=INK["field"], stipple="gray50")
         self.c_before.create_rectangle(ox, oy, px0, oy + ih, **wash, tags="roi_ruler")
         self.c_before.create_rectangle(px1, oy, ox + iw, oy + ih, **wash, tags="roi_ruler")
-        for pxf, pct in ((px0, x0f * 100.0), (px1, x1f * 100.0)):
+        for pxf in (px0, px1):
             self.c_before.create_line(pxf, oy, pxf, oy + ih, fill="#9fd8ff",
                                       width=2, tags="roi_ruler")
-            self.c_before.create_line(pxf - 5, oy, pxf + 5, oy, fill="#9fd8ff",
-                                      width=2, tags="roi_ruler")
-            self.c_before.create_text(pxf, oy + 10, text=f"{pct:.0f}%",
-                                       anchor="s", fill="#9fd8ff",
-                                       font=("TkDefaultFont", 7), tags="roi_ruler")
+            cy = oy + ih // 2
+            self.c_before.create_oval(pxf - 7, cy - 7, pxf + 7, cy + 7,
+                                      outline="#9fd8ff", width=2, fill=INK["field"],
+                                      tags="roi_ruler")
 
-    def _roi_ruler_at(self, x):
-        """Which ROI ruler (0=left, 1=right) sits near canvas-x, or None.
+    def _roi_ruler_at(self, x, y=None):
+        """Which ROI ruler (0=left, 1=right) sits near the handle, or None.
 
-        An 8 px grab band either side of a line: wide enough to find by eye, narrow
-        enough that a click meant for the picture does not accidentally drag it."""
+        The grab zone is the small circle in the middle of each line, not the
+        whole line: a click meant for the picture does not accidentally drag
+        the strip."""
         strip = self._roi_strip()
         if strip is None or getattr(self, "_ph_b", None) is None:
             return None
-        ox = self._before_off[0]
-        iw = self._ph_b.width()
+        ox, oy = self._before_off
+        iw, ih = self._ph_b.width(), self._ph_b.height()
+        cy = oy + ih // 2
         for i, f in enumerate(strip):
-            if abs(x - (ox + f * iw)) <= 8:
-                return i
+            px = ox + f * iw
+            if abs(x - px) <= 14:
+                if y is None or abs(y - cy) <= 14:
+                    return i
         return None
 
     def _on_roi_drag_start(self, idx):
@@ -3072,6 +3164,7 @@ class ReviewPanel(tk.Frame):
             # the original it measures nothing and only competes with the lines
             # the detector drew, which is what this pane is for.
             self._draw_marks()
+            self._draw_planar_quad()
             self._draw_roi_rulers()
             self._draw_sam_prompts()
             self._show_after(self.session.crop_rect)
@@ -3177,6 +3270,27 @@ class ReviewPanel(tk.Frame):
         _attach_tooltip(_mk_btn, "Mark a straight edge by hand -- which way it leans\n"
                                   "decides whether it counts as vertical or horizontal")
         self._palette_btns.append(_mk_btn)
+        # Facade rect: four corners → perspective transform.  The icon is a
+        # simple rectangle outline, placed directly under the # mark icon.
+        _pr_img = Image.new("RGBA", (gs, gs), (0, 0, 0, 0))
+        _prd = _ID.Draw(_pr_img)
+        _prd.rectangle([m // 2, m // 2, gs - m // 2, gs - m // 2],
+                       outline=fg_hex, width=lw)
+        self._palette_imgs.append(ImageTk.PhotoImage(_pr_img))
+        _pr_btn = tk.Checkbutton(bar, variable=self.v_planar,
+                                 command=self._on_planar_toggle,
+                                 image=self._palette_imgs[-1],
+                                 text="", compound="center", indicatoron=False,
+                                 width=side, height=side, padx=0, pady=0,
+                                 highlightthickness=0, bd=0, relief="flat",
+                                 cursor="hand2", background=INK["field"],
+                                 activebackground=INK["line"],
+                                 selectcolor=INK["dim"])
+        _pr_btn.pack(side="top", pady=(gap, 0))
+        _attach_tooltip(_pr_btn, "Facade rect: click 4 corners of a facade\n"
+                                  "(TL, TR, BR, BL) to rectify it.\n"
+                                  "Drag corners to adjust. 5th click clears.")
+        self._palette_btns.append(_pr_btn)
         # Brush and box-select joined Mark here (2026-09-15, user: "either the
         # toolbar or the marker, I would prefer only the tool").  They were
         # text controls in the lower-left field while Mark was in both places,
@@ -3507,7 +3621,7 @@ class ReviewPanel(tk.Frame):
         for i, (x0, y0, x1, y1) in enumerate(
                 self.session.control_lines_for_display(
                     self._before_scale, kind="h")):
-            col = "#e040fb" if active_h else "#b39ddb"
+            col = "#e040fb" if active_h else "#ce93d8"
             self.c_before.create_line(ox + x0, oy + y0, ox + x1, oy + y1,
                                       fill=col, width=lw, arrow="both",
                                       arrowshape=(9, 11, 4))
@@ -3524,6 +3638,36 @@ class ReviewPanel(tk.Frame):
             # One point leans no way yet, so it wears neither plane colour.
             self.c_before.create_oval(px - 6, py - 6, px + 6, py + 6,
                                        outline="#9e9e9e", width=2)
+
+    def _draw_planar_quad(self):
+        """Draw the four facade corners and the connecting edges on the before pane.
+
+        Placed corners are small squares; the in-progress edge (from the last
+        placed corner to the cursor) is a dashed rubber band, like mark lines."""
+        quad = self.session.planar_quad if self.session else []
+        if not quad:
+            return
+        ox, oy = self._before_off
+        s = self._before_scale
+        pts = [(ox + px * s, oy + py * s) for px, py in quad]
+        col = "#5ac37f"
+        # Edges: 0-1, 1-2, 2-3, 3-0 (closed when all four placed).
+        n = len(pts)
+        for i in range(n - 1):
+            self.c_before.create_line(pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1],
+                                      fill=col, width=2, tags="planar_quad")
+        if n >= 4:
+            self.c_before.create_line(pts[3][0], pts[3][1], pts[0][0], pts[0][1],
+                                      fill=col, width=2, tags="planar_quad")
+        # Corner handles.
+        for i, (cx, cy) in enumerate(pts):
+            r = 6
+            self.c_before.create_rectangle(cx - r, cy - r, cx + r, cy + r,
+                                           fill=INK["field"], outline=col, width=2,
+                                           tags="planar_quad")
+            self.c_before.create_text(cx + r + 8, cy - r - 4, text=str(i + 1),
+                                      fill=col, font=("TkDefaultFont", 8),
+                                      anchor="w", tags="planar_quad")
 
     def _draw_delete_handle(self, cx, cy, col, tag=""):
         r = 8

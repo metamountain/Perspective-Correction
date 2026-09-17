@@ -1022,7 +1022,13 @@ class ReviewSession:
         already smaller than the one the fractions are stored against, so the
         second rectangle lands somewhere nobody dragged.  Shading the discarded
         part instead keeps one coordinate system for the whole session.
-        """
+
+        When a planar quad (four facade corners) is placed, the rectified view
+        replaces the rotation-based preview entirely -- it is the direct answer
+        to "straighten this facade" and does not go through roll/pitch/yaw at
+        all."""
+        if len(self.planar_quad) >= 4:
+            return self.planar_rectified(max_edge=max_edge)
         roll, pitch, f, _ = self.current_angles()
         yaw = self.current_yaw()
         crop = self._apply_crop if apply_crop else (lambda img: img)

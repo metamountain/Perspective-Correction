@@ -264,6 +264,15 @@ def process(src_path, dst_path, settings, debug_dir=None, dry_run=False,
     if planned is None:
         return finish_skip("crop would be degenerate")
     H_total, ow, oh, coverage, area_ratio = planned
+    # The f/cos(yaw) proportion fix widens the output (de-squeeze), so the raw
+    # quad area can be extreme even when the motif crop keeps only a small
+    # region.  When a line-based crop is in effect, judge the gate on the
+    # cropped output size rather than the full warped quad.
+    if all_segs is not None and len(all_segs) >= 4:
+        out_area = float(ow * oh)
+        src_area = float(w * h)
+        if out_area / src_area <= settings.max_area_ratio:
+            area_ratio = out_area / src_area
     if area_ratio > settings.max_area_ratio:
         return finish_skip(f"warp too extreme (area x{area_ratio:.1f})")
     base.update(coverage=coverage, out_size=(ow, oh))

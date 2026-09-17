@@ -60,7 +60,21 @@ def limit(roll: float, pitch: float, settings, yaw: float = 0.0,
 def build(w: int, h: int, f: float, roll: float, pitch: float,
           yaw: float = 0.0) -> np.ndarray:
     K = G.intrinsics(f, w / 2.0, h / 2.0)
-    return G.homography(K, G.correction_rotation(roll, pitch, yaw))
+    R = G.correction_rotation(roll, pitch, yaw)
+    if abs(yaw) > 1e-9:
+        # A pure rotation K·R·K⁻¹ preserves parallelism but distorts
+        # proportions at large yaw: the facade gets squeezed horizontally
+        # because the projection compresses the rotated scene.  Compensate
+        # by using a wider effective focal length in the output camera:
+        # f' = f / cos(yaw).  This stretches X back to its true scale,
+        # analogous to how manual perspective correction (inscribing a
+        # square and working with diagonals) preserves aspect ratio.
+        f_out = f / math.cos(yaw)
+        K_out = G.intrinsics(f_out, w / 2.0, h / 2.0)
+        H = K_out @ R @ np.linalg.inv(K)
+    else:
+        H = G.homography(K, R)
+    return H
 
 
 def warped_quad(H: np.ndarray, w: int, h: int) -> np.ndarray:
@@ -263,15 +277,22 @@ def plan(img_w: int, img_h: int, H: np.ndarray, settings,
 
 def _motif_rect(H: np.ndarray, line_segs: np.ndarray, quad: np.ndarray,
                 img_w: int, img_h: int, margin_frac: float = 0.08):
-    """Bounding box of warped line endpoints, inset to the valid region.
+    """Reframe: centre the warped line-motif in an output of the same size
+    as the source, keeping the vertical extent of the motif unchanged.
 
-    Returns ``(x0, y0, x1, y1)`` in output-canvas coordinates (same space as
-    ``quad``), or None if the lines don't form a usable crop target.
+    The long vertical (the building's corner edge) is the measure: its pixel
+    height in the warped image defines the scale.  The horizontal axis is then
+    shifted so the motif bounding box sits in the centre of the output canvas.
+    No crop, no area explosion — the output is always ``img_w × img_h`` (or
+    slightly larger if the motif is taller than the frame), and the regions
+    outside the warped quad are left for edge-pad.
+
+    Returns ``(H_total, out_w, out_h)`` or None when the lines give no usable
+    target.
     """
     pts = np.column_stack([line_segs[:, 0], line_segs[:, 1],
                            line_segs[:, 2], line_segs[:, 3]]).reshape(-1, 2)
     warped = G.apply_h(H, pts)
-    # Keep only points that land inside (or near) the warped quad.
     qx0, qy0 = quad[:, 0].min(), quad[:, 1].min()
     qx1, qy1 = quad[:, 0].max(), quad[:, 1].max()
     pad = 0.05 * max(qx1 - qx0, qy1 - qy0)
@@ -280,18 +301,29 @@ def _motif_rect(H: np.ndarray, line_segs: np.ndarray, quad: np.ndarray,
     if inside.sum() < 4:
         return None
     wp = warped[inside]
-    x0, y0 = wp[:, 0].min(), wp[:, 1].min()
-    x1, y1 = wp[:, 0].max(), wp[:, 1].max()
-    # Margin as a fraction of the motif extent (not the full frame).
-    mx = margin_frac * max(x1 - x0, 1)
-    my = margin_frac * max(y1 - y0, 1)
-    x0 -= mx; y0 -= my; x1 += mx; y1 += my
-    # Clamp to the warped quad so we never crop into pure pad.
-    x0 = max(x0, qx0); y0 = max(y0, qy0)
-    x1 = min(x1, qx1); y1 = min(y1, qy1)
-    if x1 - x0 < 32 or y1 - y0 < 32:
+    mx0, my0 = wp[:, 0].min(), wp[:, 1].min()
+    mx1, my1 = wp[:, 0].max(), wp[:, 1].max()
+    mw, mh = mx1 - mx0, my1 - my0
+    if mw < 32 or mh < 32:
         return None
-    return (x0, y0, x1, y1)
+
+    # The vertical extent of the motif is the measure.  If it fits in the
+    # frame height, keep scale = 1 (the corner edge keeps its pixel height).
+    # If it overflows, shrink to fit so nothing is lost.
+    s = min(1.0, img_h / mh)
+
+    # Output canvas: same aspect as source, scaled by s.
+    ow, oh = int(round(img_w * s)), int(round(img_h * s))
+
+    # Centre the motif in the output.  The motif centre in warped space:
+    cx_m, cy_m = (mx0 + mx1) / 2.0, (my0 + my1) / 2.0
+    # We want the motif centre to land at the output centre (ow/2, oh/2).
+    # Translation: t = output_centre - s * warped_centre
+    tx = ow / 2.0 - s * cx_m
+    ty = oh / 2.0 - s * cy_m
+
+    S = np.array([[s, 0, tx], [0, s, ty], [0, 0, 1]], dtype=float)
+    return (S @ H, ow, oh)
 
 
 def pad_colour(spec: str):
