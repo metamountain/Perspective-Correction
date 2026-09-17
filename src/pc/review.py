@@ -485,7 +485,12 @@ class ReviewSession:
         if abs(roll) < 1e-9 and abs(pitch) < 1e-9 and abs(yaw) < 1e-9:
             return False
         H = W.build(self.w, self.h, f, roll, pitch, yaw, max_area=self.settings.max_area_ratio)
-        planned = W.plan(self.w, self.h, H, self.settings)
+        _segs = None
+        if len(self.vert) or len(self.horiz):
+            _parts = [x.seg for x in (self.vert, self.horiz) if len(x)]
+            if _parts:
+                _segs = np.concatenate(_parts, axis=0)
+        planned = W.plan(self.w, self.h, H, self.settings, line_segs=_segs, yaw=yaw)
         if planned is None:
             return False
         H_total, ow, oh, _, _ = planned
@@ -1307,7 +1312,12 @@ class ReviewSession:
         # inflates so the output stays close to source size either way.
         save_settings = self.settings.replace(keep_size=False)
         H = W.build(self.w, self.h, f, roll, pitch, yaw, max_area=save_settings.max_area_ratio)
-        planned = W.plan(self.w, self.h, H, save_settings)
+        _segs = None
+        if len(self.vert) or len(self.horiz):
+            _parts = [x.seg for x in (self.vert, self.horiz) if len(x)]
+            if _parts:
+                _segs = np.concatenate(_parts, axis=0)
+        planned = W.plan(self.w, self.h, H, save_settings, line_segs=_segs, yaw=yaw)
         if planned is None:
             IO.copy_through(self.path, dst_path)
             return dst_path
