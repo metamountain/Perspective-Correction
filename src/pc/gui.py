@@ -3971,11 +3971,12 @@ class ReviewPanel(tk.Frame):
         # now, not as they were when this window opened.
         self._sync_comfy()
         try:
-            # The planar branch went with the tool (user, 2026-09-15). It tested
-            # `v_planar`, which no longer exists, so `getattr` returned None and
-            # the branch was already unreachable -- dead weight reading as a
-            # decision. `session.save_planar` stays in review.py with its tests.
-            self.session.save(dst)
+            # PC Rectangle (planar) takes priority over the rotation path:
+            # if four corners are set, save the rectified facade.
+            if len(self.session.planar_quad) >= 4:
+                self.session.save_planar(dst)
+            else:
+                self.session.save(dst)
         except Exception as exc:
             messagebox.showerror("Save", str(exc), parent=self)
             return
@@ -3996,7 +3997,10 @@ class ReviewPanel(tk.Frame):
             return
         self._sync_comfy()
         try:
-            self.session.save(dst)
+            if len(self.session.planar_quad) >= 4:
+                self.session.save_planar(dst)
+            else:
+                self.session.save(dst)
         except Exception as exc:
             messagebox.showerror("Save As", str(exc), parent=self)
             return
