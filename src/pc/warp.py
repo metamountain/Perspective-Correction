@@ -252,57 +252,83 @@ def _whole_frame(H, quad, img_w, img_h, settings, area_ratio,
     """The full warped quad on a canvas big enough to hold it.
 
     Nothing of the photograph is discarded; the corners the rotation opens up
-    are filled by ``apply``.  When the quad inflates beyond ``max_area_ratio``
-    times the source, the output is cropped to that limit — centred on the
-    **facade** (midpoint of detected line segments after the warp), not on the
-    image centre.  At large yaw the facade shifts far from the centre; a
-    centre-anchored crop would cut it off.  The crop never makes the output
-    smaller than the source.  ``keep_size`` scales back to original dimensions.
+    are filled by ``apply``.  When line segments are available, the output is
+    cropped to the **facade bounding box** (warped line endpoints) plus a
+    margin — this trims the Telea fill / garbage-pixel zones that a large-yaw
+    warp opens up at the edges without shrinking the facade itself.
+
+    KEY: The facade keeps its source pixel count.  K·R·K⁻¹ at large yaw
+    inflates the facade (500px → 1200px); we scale the output back so the
+    facade is ~the same size as in the source.  The output canvas is then
+    sized to fit the scaled facade + margin, never smaller than source.
     """
     x0, y0 = quad.min(axis=0)
     x1, y1 = quad.max(axis=0)
     ow, oh = int(round(x1 - x0)), int(round(y1 - y0))
     if ow < 8 or oh < 8:
         return None
-    max_area = getattr(settings, "max_area_ratio", 4.0)
-    if ow * oh > max_area * img_w * img_h:
-        s_crop = math.sqrt(img_w * img_h / (ow * oh) * max_area)
-        ow_c, oh_c = int(round(ow * s_crop)), int(round(oh * s_crop))
-        # Centre the crop on the FACADE, not the image centre.
-        # At large yaw the facade shifts far from centre; a centre-anchored
-        # crop would cut it off.  Use the midpoint of warped line endpoints.
-        if line_segs is not None and len(line_segs) >= 4:
-            pts = np.column_stack([line_segs[:, 0], line_segs[:, 1],
-                                   line_segs[:, 2], line_segs[:, 3]]).reshape(-1, 2)
-            warped_pts = G.apply_h(H, pts)
-            # Only use points that landed inside the quad (valid warp region)
-            qx0, qy0 = quad[:, 0].min(), quad[:, 1].min()
-            qx1, qy1 = quad[:, 0].max(), quad[:, 1].max()
-            pad = 0.05 * max(qx1 - qx0, qy1 - qy0)
-            inside = ((warped_pts[:, 0] >= qx0 - pad) & (warped_pts[:, 0] <= qx1 + pad) &
-                      (warped_pts[:, 1] >= qy0 - pad) & (warped_pts[:, 1] <= qy1 + pad))
-            if inside.sum() >= 4:
-                wp = warped_pts[inside]
-                cx_q = float(wp[:, 0].mean())
-                cy_q = float(wp[:, 1].mean())
-            else:
-                cx_q = (x0 + x1) / 2.0
-                cy_q = (y0 + y1) / 2.0
-        else:
-            cx_q = (x0 + x1) / 2.0
-            cy_q = (y0 + y1) / 2.0
-        cx_c = cx_q - ow_c / (2.0 * s_crop)
-        cy_c = cy_q - oh_c / (2.0 * s_crop)
-        T = np.array([[s_crop, 0, -cx_c * s_crop],
-                      [0, s_crop, -cy_c * s_crop],
-                      [0, 0, 1]], dtype=float)
-        # Never smaller than source
-        ow, oh = max(ow_c, img_w), max(oh_c, img_h)
-        if settings.keep_size:
-            s = min(img_w / float(ow), img_h / float(oh))
-            S = np.array([[s, 0, 0], [0, s, 0], [0, 0, 1]], dtype=float)
-            return S @ T @ H, img_w, img_h, 1.0, area_ratio
-        return T @ H, ow, oh, 1.0, area_ratio
+
+    # If we have line segments, crop to the facade bounding box + margin.
+    # This is the key fix for large yaw: instead of keeping the entire inflated
+    # quad (9× source at 40°), we keep only the facade region and scale it
+    # back to its source size.
+    if line_segs is not None and len(line_segs) >= 4:
+        pts = np.column_stack([line_segs[:, 0], line_segs[:, 1],
+                               line_segs[:, 2], line_segs[:, 3]]).reshape(-1, 2)
+
+        # Measure facade size in SOURCE space (before warp)
+        src_pts = pts  # line endpoints are in source image coords
+        sx0, sy0 = src_pts[:, 0].min(), src_pts[:, 1].min()
+        sx1, sy1 = src_pts[:, 0].max(), src_pts[:, 1].max()
+        src_fw, src_fh = sx1 - sx0, sy1 - sy0
+
+        # Warp to get facade position in output space
+        warped_pts = G.apply_h(H, pts)
+        qx0, qy0 = quad[:, 0].min(), quad[:, 1].min()
+        qx1, qy1 = quad[:, 0].max(), quad[:, 1].max()
+        pad = 0.05 * max(qx1 - qx0, qy1 - qy0)
+        inside = ((warped_pts[:, 0] >= qx0 - pad) & (warped_pts[:, 0] <= qx1 + pad) &
+                  (warped_pts[:, 1] >= qy0 - pad) & (warped_pts[:, 1] <= qy1 + pad))
+        if inside.sum() >= 4:
+            wp = warped_pts[inside]
+            fx0, fy0 = wp[:, 0].min(), wp[:, 1].min()
+            fx1, fy1 = wp[:, 0].max(), wp[:, 1].max()
+            fw, fh = fx1 - fx0, fy1 - fy0
+
+            # Scale factor: make the warped facade the same size as in source.
+            # This undoes the K·R·K⁻¹ inflation without distorting proportions.
+            s_scale = min(src_fw / fw, src_fh / fh) if (fw > 0 and fh > 0) else 1.0
+            # Clamp: never upscale beyond 1.5× (avoid noise amplification),
+            # never downscale below 0.5× (facade must stay visible).
+            s_scale = max(0.5, min(1.5, s_scale))
+
+            # Margin: 30% of facade size on each side
+            margin_frac = getattr(settings, "reframe_margin", 0.30)
+            mx, my = fw * margin_frac * s_scale, fh * margin_frac * s_scale
+
+            # Crop region in warped space (before scaling)
+            cx0 = max(x0, fx0 - mx / s_scale)
+            cy0 = max(y0, fy0 - my / s_scale)
+            cx1 = min(x1, fx1 + mx / s_scale)
+            cy1 = min(y1, fy1 + my / s_scale)
+            ow_c, oh_c = int(round((cx1 - cx0) * s_scale)), int(round((cy1 - cy0) * s_scale))
+
+            # Never smaller than source
+            ow_c = max(ow_c, img_w)
+            oh_c = max(oh_c, img_h)
+
+            # Transform: translate to crop origin, then scale
+            S = np.array([[s_scale, 0, 0], [0, s_scale, 0], [0, 0, 1]], dtype=float)
+            T = np.array([[1, 0, -cx0], [0, 1, -cy0], [0, 0, 1]], dtype=float)
+            H_out = S @ T @ H
+
+            if settings.keep_size:
+                s2 = min(img_w / float(ow_c), img_h / float(oh_c))
+                S2 = np.array([[s2, 0, 0], [0, s2, 0], [0, 0, 1]], dtype=float)
+                return S2 @ H_out, img_w, img_h, 1.0, area_ratio
+            return H_out, ow_c, oh_c, 1.0, area_ratio
+
+    # Fallback: no line segments, use the full quad
     T = np.array([[1, 0, -x0], [0, 1, -y0], [0, 0, 1]], dtype=float)
     if settings.keep_size:
         s = min(img_w / float(ow), img_h / float(oh))
