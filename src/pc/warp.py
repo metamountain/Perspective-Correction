@@ -269,18 +269,12 @@ def _whole_frame(H, quad, img_w, img_h, settings, area_ratio,
         return None
 
     # If we have line segments, crop to the facade bounding box + margin.
-    # This is the key fix for large yaw: instead of keeping the entire inflated
-    # quad (9× source at 40°), we keep only the facade region and scale it
-    # back to its source size.
+    # The front edge (nearest vertical building edge) keeps its source pixel
+    # height — no downscale.  The output grows to fit the warped facade; it
+    # never shrinks below the source dimensions.
     if line_segs is not None and len(line_segs) >= 4:
         pts = np.column_stack([line_segs[:, 0], line_segs[:, 1],
                                line_segs[:, 2], line_segs[:, 3]]).reshape(-1, 2)
-
-        # Measure facade size in SOURCE space (before warp)
-        src_pts = pts  # line endpoints are in source image coords
-        sx0, sy0 = src_pts[:, 0].min(), src_pts[:, 1].min()
-        sx1, sy1 = src_pts[:, 0].max(), src_pts[:, 1].max()
-        src_fw, src_fh = sx1 - sx0, sy1 - sy0
 
         # Warp to get facade position in output space
         warped_pts = G.apply_h(H, pts)
@@ -295,32 +289,29 @@ def _whole_frame(H, quad, img_w, img_h, settings, area_ratio,
             fx1, fy1 = wp[:, 0].max(), wp[:, 1].max()
             fw, fh = fx1 - fx0, fy1 - fy0
 
-            # Scale factor: make the warped facade the same size as in source.
-            # This undoes the K·R·K⁻¹ inflation without distorting proportions.
-            s_scale = min(src_fw / fw, src_fh / fh) if (fw > 0 and fh > 0) else 1.0
-            # Clamp: never upscale beyond 1.5× (avoid noise amplification),
-            # never downscale below 0.5× (facade must stay visible).
-            s_scale = max(0.5, min(1.5, s_scale))
+            # No downscale: the warped facade keeps its full pixel count.
+            # s_scale=1.0 means "what the warp produced is what you get."
+            # The output grows (never shrinks) to fit the inflated quad.
+            s_scale = 1.0
 
-            # Margin: 30% of facade size on each side
-            margin_frac = getattr(settings, "reframe_margin", 0.30)
-            mx, my = fw * margin_frac * s_scale, fh * margin_frac * s_scale
+            # Margin: 20% of facade size on each side for context
+            margin_frac = getattr(settings, "reframe_margin", 0.20)
+            mx, my = fw * margin_frac, fh * margin_frac
 
-            # Crop region in warped space (before scaling)
-            cx0 = max(x0, fx0 - mx / s_scale)
-            cy0 = max(y0, fy0 - my / s_scale)
-            cx1 = min(x1, fx1 + mx / s_scale)
-            cy1 = min(y1, fy1 + my / s_scale)
-            ow_c, oh_c = int(round((cx1 - cx0) * s_scale)), int(round((cy1 - cy0) * s_scale))
+            # Crop region in warped space
+            cx0 = max(x0, fx0 - mx)
+            cy0 = max(y0, fy0 - my)
+            cx1 = min(x1, fx1 + mx)
+            cy1 = min(y1, fy1 + my)
+            ow_c, oh_c = int(round(cx1 - cx0)), int(round(cy1 - cy0))
 
-            # Never smaller than source
+            # Never smaller than source (max quality: no reduction)
             ow_c = max(ow_c, img_w)
             oh_c = max(oh_c, img_h)
 
-            # Transform: translate to crop origin, then scale
-            S = np.array([[s_scale, 0, 0], [0, s_scale, 0], [0, 0, 1]], dtype=float)
+            # Transform: translate to crop origin only (no scale-back)
             T = np.array([[1, 0, -cx0], [0, 1, -cy0], [0, 0, 1]], dtype=float)
-            H_out = S @ T @ H
+            H_out = T @ H
 
             if settings.keep_size:
                 s2 = min(img_w / float(ow_c), img_h / float(oh_c))
