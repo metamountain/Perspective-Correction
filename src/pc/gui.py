@@ -1009,6 +1009,19 @@ class ReviewPanel(tk.Frame):
             "1-2 lines: exact. 3+: least-squares interpolation.\n"
             "Mutually exclusive with horizontal auto.")
 
+        # Row 0b: Auto Facade — detect 4 corners from lines, planar warp.
+        self.v_autofacade = tk.BooleanVar(value=False)
+        _af = ttk.Checkbutton(ctl, text="auto facade (4-point)",
+                              variable=self.v_autofacade,
+                              command=self._on_autofacade_toggle)
+        _af.grid(row=0, column=1, columnspan=2, sticky="w", padx=(12, 0))
+        _attach_tooltip(
+            _af,
+            "Detect the 4 facade corners automatically from detected lines\n"
+            "(GLNet-style) and apply a planar warp. Best for corner views\n"
+            "where the rotation path cannot square the target facade.\n"
+            "Mutually exclusive with horizontal auto and H-Marker.")
+
         # Row 1: horizontal auto (yaw) — VP-based correction + slider, as before.
         _hchk = ttk.Checkbutton(ctl, text="horizontal auto (yaw)",
                                 variable=self.v_correct_horizontal,
@@ -1613,6 +1626,55 @@ class ReviewPanel(tk.Frame):
         elif not on and self.session.mode == AUTO:
             self.v_yaw.set(0.0)
             self._schedule_redraw()
+
+    def _on_autofacade_toggle(self):
+        """Auto Facade: detect 4 corners from lines, fill planar_quad.
+
+        Mutually exclusive with H-Marker and horizontal auto."""
+        on = self.v_autofacade.get()
+        s = self.session
+        if s is None:
+            self._set_status("no image loaded")
+            self.v_autofacade.set(False)
+            return
+        if not on:
+            # Deactivate: clear the planar quad, restore rotation path
+            s.clear_planar()
+            s.refit()
+            self._sync_from_session()
+            return
+        # Turn off other modes
+        if self.v_hmarker.get():
+            self.v_hmarker.set(False)
+            self._on_hmarker_toggle()
+        if self.v_correct_horizontal.get():
+            self.v_correct_horizontal.set(False)
+            s.settings = s.settings.replace(correct_horizontal=False)
+
+        # Get line segments in full-res pixels
+        inv = 1.0 / max(s.scale, 1e-9)
+        v_segs = s.vert.seg * inv if len(s.vert) else np.empty((0, 4))
+        h_segs = s.horiz.seg * inv if len(s.horiz) else np.empty((0, 4))
+
+        from . import planar as PL
+        corners = PL.auto_facade_corners(v_segs, h_segs, s.w, s.h)
+        if corners is None:
+            self._set_status("auto facade: not enough lines for 4 corners")
+            self.v_autofacade.set(False)
+            return
+
+        # Fill planar_quad (full-res pixels, order: LU, UR, RL, LL)
+        s.clear_planar()
+        for i, (px, py) in enumerate(corners):
+            s.set_planar_point(i, float(px), float(py))
+
+        self._set_status(
+            f"auto facade: corners detected "
+            f"({corners[0][0]:.0f},{corners[0][1]:.0f}) "
+            f"({corners[1][0]:.0f},{corners[1][1]:.0f}) "
+            f"({corners[2][0]:.0f},{corners[2][1]:.0f}) "
+            f"({corners[3][0]:.0f},{corners[3][1]:.0f})")
+        self._redraw()
 
     def _on_hmarker_toggle(self):
         """Manual mode (H-Marker): yaw from line bearings, no VP.
