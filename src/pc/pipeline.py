@@ -89,7 +89,11 @@ def analyse(bgr, settings, exif_focal_px=None, image_path="", roi_x=None):
                 settings.horizontal_window_deg, settings.angular_softness)
         info["scheme"] = sc.summary()
     if roi_x is not None:
-        keep = L.in_xband(horiz.seg, roi_x[0] * scale, roi_x[1] * scale)
+        # roi_x is a fraction of full-res width; horiz.seg is in gray pixels.
+        # Convert: fraction × gray_width (NOT fraction × scale — that gives
+        # sub-pixel values when scale≈1 and filters everything out).
+        gh_roi, gw_roi = gray.shape[:2]
+        keep = L.in_xband(horiz.seg, roi_x[0] * gw_roi, roi_x[1] * gw_roi)
         if keep.any():
             horiz = horiz.subset(keep)
     gh, gw = gray.shape[:2]
