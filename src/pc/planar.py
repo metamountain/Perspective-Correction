@@ -179,8 +179,11 @@ def auto_facade_corners(vert_segs, horiz_segs, img_w, img_h):
         x, y = pt
         return (0 <= x < img_w) and (0 <= y < img_h)
 
-    # Try successive lines until all 4 intersections are inside the image.
-    n_try = min(12, max(len(upper), len(lower), len(left), len(right)))
+    # Strategy: try combinations of lines from each bucket.  Start with the
+    # most extreme lines and work inward until all 4 intersections are inside
+    # the image.  For busy facades where the outermost lines intersect outside
+    # the frame, this naturally finds the innermost usable combination.
+    n_try = min(15, max(len(upper), len(lower), len(left), len(right)))
     for i_up in range(min(n_try, len(upper))):
         for i_lo in range(min(n_try, len(lower))):
             for i_le in range(min(n_try, len(left))):
@@ -197,5 +200,34 @@ def auto_facade_corners(vert_segs, horiz_segs, img_w, img_h):
 
                     if all(in_image(p) for p in (lu, ur, rl, ll)):
                         return [lu, ur, rl, ll]
+
+    # Fallback: relax to "at least 3 of 4 inside" and clamp the outlier
+    # to the nearest image border.  This handles facades where one corner
+    # (usually top) is above the frame.
+    best = None
+    for i_up in range(min(5, len(upper))):
+        for i_lo in range(min(5, len(lower))):
+            for i_le in range(min(5, len(left))):
+                for i_ri in range(min(5, len(right))):
+                    up = upper[i_up]
+                    lo = lower[i_lo]
+                    le = left[i_le]
+                    ri = right[i_ri]
+                    pts = [_intersect(le, up), _intersect(up, ri),
+                           _intersect(ri, lo), _intersect(lo, le)]
+                    if any(p is None for p in pts):
+                        continue
+                    n_in = sum(1 for p in pts if in_image(p))
+                    if n_in >= 3:
+                        # Clamp out-of-image points to the border
+                        clamped = []
+                        for p in pts:
+                            x = max(0, min(img_w - 1, p[0]))
+                            y = max(0, min(img_h - 1, p[1]))
+                            clamped.append((x, y))
+                        if best is None or n_in > best[0]:
+                            best = (n_in, clamped)
+    if best is not None:
+        return best[1]
 
     return None
