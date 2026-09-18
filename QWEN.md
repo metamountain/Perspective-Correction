@@ -34,6 +34,14 @@ hit = self.session.pick_planar_corner(fx, fy, display_scale=self._before_scale)
 2. **NEVER draw a stored point without multiplying by `_before_scale`.** A full-res coordinate drawn at 1:1 on a 0.4× canvas lands at 40% of its intended position.
 3. **Hit-tests take `display_scale`** so the grab radius is in screen pixels, not image pixels.
 4. **When adding any new click-to-place tool**, follow the `_click_rect` pattern: convert on input, convert on draw, pass scale to hit-test.
+5. **Marker projection (H-Marker / control lines):** The projected marker position on the canvas is `canvas_x = offset + full_res_x * _before_scale`. If a refit/recompute changes the stored full-res point, the canvas redraw MUST re-apply `_before_scale`. A "correct" full-res value drawn without scale looks like the marker jumped to a wrong position. This has been broken and re-fixed 10+ times (2026-09-18: "projektion marker wurde zerstört").
+
+**Checklist before committing ANY change that touches stored geometry or its display:**
+- [ ] Every `session.set_*` / array write is in full-res pixels (divided by scale)
+- [ ] Every canvas draw of a stored point multiplies by `_before_scale`
+- [ ] Every hit-test passes `display_scale=self._before_scale`
+- [ ] After a refit that changes the model, the overlay redraw uses the SAME scale chain as initial load
+- [ ] Visual check: open GUI, place a marker, confirm it stays where you clicked
 
 This rule was violated in the PC Rectangle implementation (2026-09-17), causing corners to land at wrong positions. The fix is always the same: `x / _before_scale` before storing, `px * _before_scale` when drawing.
 
@@ -237,9 +245,24 @@ A finding names **file + symbol/line**, states the problem, and gives a suggeste
 fix. Severity: **HIGH** = likely wrong behaviour, **MED** = latent risk,
 **LOW** = style/clarity/minor. A finding is a pointer, not a verdict.
 
-### External tools
+### External tools / MCP servers
 
-- **Firecrawl:** use the MCP firecrawl server for web research when `web_fetch` gets 403/404.
+Available via `tool_search` (call with `select:<name>` or keyword query):
+
+| Server | Key tools | Use for |
+|--------|-----------|---------|
+| **context7** | `resolve-library-id`, `query-docs` | Up-to-date library/framework docs (OpenCV, Tkinter, numpy, torch). Prefer over training data for API syntax. |
+| **firecrawl** | `firecrawl_search`, `firecrawl_scrape`, `firecrawl_developer_search` | Web research when `web_fetch` gets 403/404. `developer_search` with `categories: ["developer"]` finds GitHub repos, issues, PRs, docs. |
+| **github** | `search_code`, `search_issues`, `get_file_contents`, `list_commits`, `create_pull_request` | Search code across repos, read files from remote repos, check upstream for bug reports/fixes. |
+| **playwright** | `browser_navigate`, `browser_snapshot`, `browser_click`, `browser_take_screenshot` | Browser automation: test web UIs, scrape pages that need JS, verify rendered output. |
+| **tavily** | `tavily_search`, `tavily_extract`, `tavily_research` | Web search with structured results; `research` for multi-source deep dives. |
+
+**When to use which:**
+- "How do I call cv2.ximgproc.fldLineDetector?" → **context7** (library docs)
+- "Is there a known bug in OpenCV 4.10 LSD on Windows?" → **firecrawl** `developer_search` or **github** `search_issues`
+- "What does the reference implementation do for X?" → **github** `get_file_contents` / `search_code`
+- "Verify the rendered HTML/PDF looks right" → **playwright** screenshot
+- "Find recent papers on single-image perspective correction" → **tavily_research** or **firecrawl** with `categories: ["research"]`
 
 ### Next steps (user to decide)
 
