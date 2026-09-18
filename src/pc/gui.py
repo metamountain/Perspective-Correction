@@ -999,10 +999,10 @@ class ReviewPanel(tk.Frame):
             self.v_hmarker = tk.BooleanVar(value=False)
 
         # Row 0: horizontal marker (manuell) — yaw from hand-drawn lines.
-        _hm = ttk.Checkbutton(ctl, text="horizontal marker (manuell)",
+        _hm = ttk.Checkbutton(ctl, text="h-marker",
                               variable=self.v_hmarker,
                               command=self._on_hmarker_toggle)
-        _hm.grid(row=0, column=0, columnspan=3, sticky="w")
+        _hm.grid(row=0, column=0, sticky="w")
         _attach_tooltip(
             _hm,
             "Compute yaw directly from a hand-drawn horizontal marker.\n"
@@ -1011,10 +1011,10 @@ class ReviewPanel(tk.Frame):
 
         # Row 0b: PC Rectangle (auto) — detect 4 corners from lines, planar warp.
         self.v_autofacade = tk.BooleanVar(value=False)
-        _af = ttk.Checkbutton(ctl, text="pc rectangle (auto)",
+        _af = ttk.Checkbutton(ctl, text="pc rect (auto)",
                               variable=self.v_autofacade,
                               command=self._on_autofacade_toggle)
-        _af.grid(row=0, column=1, columnspan=2, sticky="w", padx=(12, 0))
+        _af.grid(row=0, column=1, sticky="w", padx=(8, 0))
         _attach_tooltip(
             _af,
             "Auto-detect the 4 facade corners from detected lines\n"
@@ -1668,6 +1668,11 @@ class ReviewPanel(tk.Frame):
         s.clear_planar()
         for i, (px, py) in enumerate(corners):
             s.set_planar_point(i, float(px), float(py))
+
+        # Activate rect mode so the corners are draggable
+        if not self.v_rect.get():
+            self.v_rect.set(True)
+            self._on_rect_toggle()
 
         self._set_status(
             f"PC Rectangle (auto): corners detected CCW "

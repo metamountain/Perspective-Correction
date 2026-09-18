@@ -109,6 +109,25 @@ def analyse(bgr, settings, exif_focal_px=None, image_path="", roi_x=None):
     if m.f:
         m.f = m.f / scale                       # back to full resolution pixels
     m.detect_info = info
+
+    # Corner-view pitch damping: at large yaw the pitch computed from all
+    # verticals (both facades) is invalid for the target facade.  Damp pitch
+    # proportionally to |yaw| so that at 45°+ only ~30% of the original pitch
+    # is applied — enough to level the frame, not enough to tilt the
+    # corrected facade's verticals.
+    if settings.correct_horizontal and m.yaw is not None:
+        yaw_abs = abs(m.yaw)
+        if yaw_abs > math.radians(20):
+            # Linear damping: 20°→100%, 50°+→30%
+            t = min(1.0, (yaw_abs - math.radians(20)) / math.radians(30))
+            damp = 1.0 - 0.7 * t
+            m.diagnostics["pitch_damped"] = (
+                f"|yaw|={math.degrees(yaw_abs):.0f}°: pitch "
+                f"{math.degrees(m.pitch):+.1f}°×{damp:.2f}="
+                f"{math.degrees(m.pitch * damp):+.1f}°"
+            )
+            m.pitch *= damp
+
     return m, vert, horiz, scale, detector
 
 
