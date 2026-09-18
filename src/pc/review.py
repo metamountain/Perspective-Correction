@@ -1069,9 +1069,14 @@ class ReviewSession:
         # size it was asked for overflows the pane it was drawn for
         out = W.apply(small, H_total, ow, oh, self.settings)
         out = self._fill_preview(out, H_total, sw, sh, ow, oh)
-        # Project hand-drawn marker lines through the warp.  H_total already
-        # maps preview-space → final output space (W.plan bakes in the crop/fit
-        # transform), so we only need to scale original→preview before applying it.
+        # Fit FIRST so the final array is at display size, then project the
+        # markers onto it.  Drawing before _fit would leave the marker coords
+        # in OW×OH space while the array is smaller → wrong position.
+        out = _fit(crop(out), max_edge)
+        fit_s = out.shape[1] / float(ow) if ow > 0 else 1.0
+        # Project hand-drawn marker lines through the warp.  H_total maps
+        # preview-space → OW×OH output space; scale original→preview before,
+        # then scale the result by fit_s to land on the final array.
         if len(self.control_hlines) > 0 or len(self.control_lines) > 0:
             for arr, col in ((self.control_hlines, (80, 160, 80)),
                              (self.control_lines, (200, 80, 200))):
@@ -1083,10 +1088,11 @@ class ReviewSession:
                     pts[i, 1] = [arr[i, 2] * s, arr[i, 3] * s]
                 mapped = cv2.perspectiveTransform(pts.reshape(-1, 1, 2), H_total)
                 for i in range(len(arr)):
-                    a = (int(mapped[2 * i, 0, 0]), int(mapped[2 * i, 0, 1]))
-                    b = (int(mapped[2 * i + 1, 0, 0]), int(mapped[2 * i + 1, 0, 1]))
+                    a = (int(mapped[2 * i, 0, 0] * fit_s),
+                         int(mapped[2 * i, 0, 1] * fit_s))
+                    b = (int(mapped[2 * i + 1, 0, 0] * fit_s),
+                         int(mapped[2 * i + 1, 0, 1] * fit_s))
                     cv2.line(out, a, b, col, 2)
-        out = _fit(crop(out), max_edge)
         return out
 
     def _fill_preview(self, out, H_total, sw, sh, ow, oh):
