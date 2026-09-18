@@ -85,3 +85,112 @@ def transform_for(quad):
     w, h = target_size(q)
     dst = np.array([[0.0, 0.0], [w - 1, 0.0], [w - 1, h - 1], [0.0, h - 1]], dtype=np.float64)
     return homography_from_quad(q, dst), w, h
+
+
+# ---------------------------------------------------------------------------
+# Automatic facade corner detection (GLNet-style)
+# ---------------------------------------------------------------------------
+
+def _line_intercept_y(seg):
+    """Y-intercept of a line segment [x0,y0,x1,y1]. None if vertical."""
+    x0, y0, x1, y1 = float(seg[0]), float(seg[1]), float(seg[2]), float(seg[3])
+    dx = x1 - x0
+    if abs(dx) < 1e-9:
+        return None
+    m = (y1 - y0) / dx
+    return y0 - m * x0
+
+
+def _line_intercept_x(seg):
+    """X-intercept of a line segment [x0,y0,x1,y1]. None if horizontal or vertical."""
+    x0, y0, x1, y1 = float(seg[0]), float(seg[1]), float(seg[2]), float(seg[3])
+    dx = x1 - x0
+    dy = y1 - y0
+    if abs(dx) < 1e-9:
+        return None  # vertical line: no x-intercept in the usual sense
+    m = dy / dx
+    if abs(m) < 1e-9:
+        return None  # horizontal line: parallel to x-axis
+    return -(y0 - m * x0) / m
+
+
+def _intersect(l1, l2):
+    """Intersection of two line segments treated as infinite lines. Returns (x,y) or None."""
+    x1, y1, x2, y2 = float(l1[0]), float(l1[1]), float(l1[2]), float(l1[3])
+    x3, y3, x4, y4 = float(l2[0]), float(l2[1]), float(l2[2]), float(l2[3])
+    a1, b1 = y2 - y1, x1 - x2
+    c1 = a1 * x1 + b1 * y1
+    a2, b2 = y4 - y3, x3 - x4
+    c2 = a2 * x3 + b2 * y3
+    det = a1 * b2 - a2 * b1
+    if abs(det) < 1e-9:
+        return None
+    return ((b2 * c1 - b1 * c2) / det, (a1 * c2 - a2 * c1) / det)
+
+
+def auto_facade_corners(vert_segs, horiz_segs, img_w, img_h):
+    """Detect 4 facade corners from line segments (GLNet-style).
+
+    Splits lines into 4 positional buckets relative to the image center,
+    picks the extreme line per bucket, and computes their pairwise
+    intersections.  Falls back to the next-most-extreme line if an
+    intersection lands outside the image.
+
+    Returns ``[lu, ur, rl, ll]`` (top-left, top-right, bottom-right,
+    bottom-left) as a list of ``(x, y)`` tuples in image pixels, or None
+    if fewer than 2 verticals and 2 horizontals are available.
+    """
+    if len(vert_segs) < 2 or len(horiz_segs) < 2:
+        return None
+
+    cx, cy = img_w / 2.0, img_h / 2.0
+
+    # Bucket by position relative to image center
+    upper = [s for s in horiz_segs if (float(s[1]) + float(s[3])) / 2.0 < cy]
+    lower = [s for s in horiz_segs if (float(s[1]) + float(s[3])) / 2.0 > cy]
+    left = [s for s in vert_segs if (float(s[0]) + float(s[2])) / 2.0 < cx]
+    right = [s for s in vert_segs if (float(s[0]) + float(s[2])) / 2.0 > cx]
+
+    # Fallback: if a bucket is empty, use all lines of that orientation
+    if not upper:
+        upper = list(horiz_segs)
+    if not lower:
+        lower = list(horiz_segs)
+    if not left:
+        left = list(vert_segs)
+    if not right:
+        right = list(vert_segs)
+
+    # Sort each bucket by extremity (using mid-point, not intercept —
+    # intercepts are unreliable for short segments and near-parallel lines)
+    # Upper: topmost by mid-y (smallest y = highest in image)
+    upper.sort(key=lambda s: (float(s[1]) + float(s[3])) / 2.0)
+    # Lower: bottommost by mid-y (largest y = lowest in image)
+    lower.sort(key=lambda s: (float(s[1]) + float(s[3])) / 2.0, reverse=True)
+    # Left: leftmost by mid-x
+    left.sort(key=lambda s: (float(s[0]) + float(s[2])) / 2.0)
+    # Right: rightmost by mid-x
+    right.sort(key=lambda s: (float(s[0]) + float(s[2])) / 2.0, reverse=True)
+
+    def in_image(pt):
+        return pt is not None and 0 <= pt[0] <= img_w and 0 <= pt[1] <= img_h
+
+    # Try successive lines until all 4 intersections are inside the image
+    for i_up in range(min(5, len(upper))):
+        for i_lo in range(min(5, len(lower))):
+            for i_le in range(min(5, len(left))):
+                for i_ri in range(min(5, len(right))):
+                    up = upper[i_up]
+                    lo = lower[i_lo]
+                    le = left[i_le]
+                    ri = right[i_ri]
+
+                    lu = _intersect(le, up)   # top-left
+                    ur = _intersect(up, ri)   # top-right
+                    rl = _intersect(ri, lo)   # bottom-right
+                    ll = _intersect(lo, le)   # bottom-left
+
+                    if all(in_image(p) for p in (lu, ur, rl, ll)):
+                        return [lu, ur, rl, ll]
+
+    return None

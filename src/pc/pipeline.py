@@ -89,13 +89,20 @@ def analyse(bgr, settings, exif_focal_px=None, image_path="", roi_x=None):
                 settings.horizontal_window_deg, settings.angular_softness)
         info["scheme"] = sc.summary()
     if roi_x is not None:
-        # roi_x is a fraction of full-res width; horiz.seg is in gray pixels.
+        # roi_x is a fraction of full-res width; segs are in gray pixels.
         # Convert: fraction × gray_width (NOT fraction × scale — that gives
         # sub-pixel values when scale≈1 and filters everything out).
         gh_roi, gw_roi = gray.shape[:2]
-        keep = L.in_xband(horiz.seg, roi_x[0] * gw_roi, roi_x[1] * gw_roi)
-        if keep.any():
-            horiz = horiz.subset(keep)
+        keep_h = L.in_xband(horiz.seg, roi_x[0] * gw_roi, roi_x[1] * gw_roi)
+        if keep_h.any():
+            horiz = horiz.subset(keep_h)
+        # Verticals must ALSO be restricted to the ROI: a corner view has two
+        # facades with different vertical VP clusters.  Without this filter the
+        # pitch/roll fit mixes both facades and the yaw correction pulls the
+        # wrong facade's verticals off-plumb.
+        keep_v = L.in_xband(vert.seg, roi_x[0] * gw_roi, roi_x[1] * gw_roi)
+        if keep_v.any():
+            vert = vert.subset(keep_v)
     gh, gw = gray.shape[:2]
     exif_small = exif_focal_px * scale if exif_focal_px else None
     m = M.estimate(vert, horiz, gw, gh, settings, exif_small)
