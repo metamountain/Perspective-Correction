@@ -122,7 +122,7 @@ class Settings:
 
     # ---- gating ----
     min_confidence: float = 0.40
-    max_area_ratio: float = 25.0        # crop canvas to this × source area (trim extreme fill zones)
+    max_area_ratio: float = 9.0         # crop canvas to this × source area (trim fill zones)
 
     # ---- distortion correction (Stage 0) ----
     # "off" = no undistortion.  "lensfun" = look up the EXIF make/model/lens in
@@ -152,7 +152,7 @@ class Settings:
     # why that is defensible here and why "none" is one flag away.
     fill: str = "telea"                 # none | telea | lama | comfyui
     fill_max_edge: int = 2048           # generate at this size, paste back full res
-    fill_max_share: float = 0.35        # refuse to invent more of the frame than this
+    fill_max_share: float = 0.40        # refuse to invent more of the frame than this
     fill_device: str = ""               # torch device for lama; "" = its default
     comfy_url: str = "http://127.0.0.1:8188"
     comfy_workflow: str = ""            # "" = inpaint.DEFAULT_WORKFLOW, and the

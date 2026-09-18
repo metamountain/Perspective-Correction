@@ -387,10 +387,18 @@ def estimate(vert, horiz, w: int, h: int, settings, exif_focal_px=None) -> Model
     # scene at 3 deg of tilt came back as 42.5 mm, tripling the pitch
     # correction.  So when `sigma_geo` says the measurement is vague, f is held
     # fixed at the blended value and only (roll, pitch) are fitted.
+    # Focal lower bound for the refinement: never allow f below 5% of frame.
+    # Without this, Nelder-Mead can drive f to unphysical values (e.g. 29px on
+    # a 1320px frame) where K·R·K⁻¹ produces wrong proportions instead of
+    # correcting them.  The bound is set BEFORE the optimiser so it never
+    # explores the fisheye regime.
+    f_floor = math.log(0.05 * max(w, h))
     fit_focal = settings.refine and math.isfinite(sigma_geo) and sigma_geo < 0.35
     if settings.refine and len(inl_set) >= 2:
         if fit_focal:
-            fn = lambda p: _cost_terms(p, inl_set, hv, hw, cx, cy, f_prior, f_sigma)
+            def fn(p):
+                pf = max(p[2], f_floor)  # clamp inside the cost function
+                return _cost_terms([p[0], p[1], pf], inl_set, hv, hw, cx, cy, f_prior, f_sigma)
             x0 = np.array([roll, pitch, math.log(f_use)])
             step = [math.radians(0.6), math.radians(0.6), 0.05]
         else:
@@ -405,7 +413,7 @@ def estimate(vert, horiz, w: int, h: int, settings, exif_focal_px=None) -> Model
                 and moved_f < 0.35:
             roll, pitch = float(x[0]), float(x[1])
             if fit_focal:
-                f_use = float(math.exp(x[2]))
+                f_use = max(float(math.exp(x[2])), 0.05 * max(w, h))
                 f_src = "refined"
         u = G.up_from_roll_pitch(roll, pitch)
 
@@ -438,11 +446,18 @@ def estimate(vert, horiz, w: int, h: int, settings, exif_focal_px=None) -> Model
     # (it would imply an extreme fisheye).  The geometric estimator can produce
     # such values when the VP is near the image centre and the line support is
     # weak.  Fall back to the prior so K·R·K⁻¹ stays well-conditioned.
+    # CRITICAL: roll/pitch must be RECOMPUTED after the clamp, because they
+    # were derived from the (wrong) focal via up_vector(K(f)).  With f=29px
+    # the up-vector points in a completely different direction than with
+    # f=600px, so the angles are garbage.
     f_min = 0.05 * max(w, h)
     if f_use < f_min:
         diag["focal_clamped"] = f"estimated {f_use:.1f}px < minimum {f_min:.0f}px; using prior {f_prior:.0f}px"
         f_use = f_prior
         f_src = "clamped"
+        # Recompute roll/pitch with the corrected focal
+        u = G.up_vector(hy.vp, G.intrinsics(f_use, cx, cy))
+        roll, pitch = G.roll_pitch_from_up(u)
 
     conf, cdiag = _confidence(vert, hy, support, f_src, f_quality, roll, pitch,
                               f_use, cx, cy, w, h, settings, hv, hw)
