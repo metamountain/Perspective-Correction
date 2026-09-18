@@ -172,19 +172,15 @@ def auto_facade_corners(vert_segs, horiz_segs, img_w, img_h):
     # Right: rightmost by mid-x
     right.sort(key=lambda s: (float(s[0]) + float(s[2])) / 2.0, reverse=True)
 
-    def in_image(pt, margin=0.5):
-        """Point is usable if within 1.5× the image bounds (allows corners
-        slightly outside the frame — normal for perspective views where the
-        facade extends beyond the photograph)."""
+    def in_image(pt):
+        """Point must be strictly inside the image frame."""
         if pt is None:
             return False
         x, y = pt
-        mx, my = img_w * margin, img_h * margin
-        return (-mx <= x <= img_w + mx) and (-my <= y <= img_h + my)
+        return (0 <= x < img_w) and (0 <= y < img_h)
 
-    # Try successive lines until all 4 intersections are usable.
-    # Allow up to 8 candidates per bucket (not just 5) for busy facades.
-    n_try = min(8, max(len(upper), len(lower), len(left), len(right)))
+    # Try successive lines until all 4 intersections are inside the image.
+    n_try = min(12, max(len(upper), len(lower), len(left), len(right)))
     for i_up in range(min(n_try, len(upper))):
         for i_lo in range(min(n_try, len(lower))):
             for i_le in range(min(n_try, len(left))):
@@ -201,19 +197,5 @@ def auto_facade_corners(vert_segs, horiz_segs, img_w, img_h):
 
                     if all(in_image(p) for p in (lu, ur, rl, ll)):
                         return [lu, ur, rl, ll]
-
-    # Final fallback: use the very first (most extreme) lines regardless of
-    # whether the intersections are inside the image.  A perspective view of a
-    # tall building routinely has corner intersections above/below the frame.
-    up = upper[0]
-    lo = lower[0]
-    le = left[0]
-    ri = right[0]
-    lu = _intersect(le, up)
-    ur = _intersect(up, ri)
-    rl = _intersect(ri, lo)
-    ll = _intersect(lo, le)
-    if all(p is not None for p in (lu, ur, rl, ll)):
-        return [lu, ur, rl, ll]
 
     return None
