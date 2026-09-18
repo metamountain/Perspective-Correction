@@ -1009,17 +1009,18 @@ class ReviewPanel(tk.Frame):
             "1-2 lines: exact. 3+: least-squares interpolation.\n"
             "Mutually exclusive with horizontal auto.")
 
-        # Row 0b: Auto Facade — detect 4 corners from lines, planar warp.
+        # Row 0b: PC Rectangle (auto) — detect 4 corners from lines, planar warp.
         self.v_autofacade = tk.BooleanVar(value=False)
-        _af = ttk.Checkbutton(ctl, text="auto facade (4-point)",
+        _af = ttk.Checkbutton(ctl, text="pc rectangle (auto)",
                               variable=self.v_autofacade,
                               command=self._on_autofacade_toggle)
         _af.grid(row=0, column=1, columnspan=2, sticky="w", padx=(12, 0))
         _attach_tooltip(
             _af,
-            "Detect the 4 facade corners automatically from detected lines\n"
-            "(GLNet-style) and apply a planar warp. Best for corner views\n"
-            "where the rotation path cannot square the target facade.\n"
+            "Auto-detect the 4 facade corners from detected lines\n"
+            "(GLNet-style: extreme lines per quadrant → intersections)\n"
+            "and fill the PC Rectangle quad. Corners are draggable for\n"
+            "manual fine-tuning. Order: CCW from top-left.\n"
             "Mutually exclusive with horizontal auto and H-Marker.")
 
         # Row 1: horizontal auto (yaw) — VP-based correction + slider, as before.
@@ -1669,11 +1670,11 @@ class ReviewPanel(tk.Frame):
             s.set_planar_point(i, float(px), float(py))
 
         self._set_status(
-            f"auto facade: corners detected "
-            f"({corners[0][0]:.0f},{corners[0][1]:.0f}) "
-            f"({corners[1][0]:.0f},{corners[1][1]:.0f}) "
-            f"({corners[2][0]:.0f},{corners[2][1]:.0f}) "
-            f"({corners[3][0]:.0f},{corners[3][1]:.0f})")
+            f"PC Rectangle (auto): corners detected CCW "
+            f"({corners[0][0]:.0f},{corners[0][1]:.0f})→"
+            f"({corners[1][0]:.0f},{corners[1][1]:.0f})→"
+            f"({corners[2][0]:.0f},{corners[2][1]:.0f})→"
+            f"({corners[3][0]:.0f},{corners[3][1]:.0f}) — drag to adjust")
         self._redraw()
 
     def _on_hmarker_toggle(self):
