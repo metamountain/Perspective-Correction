@@ -967,7 +967,7 @@ class ReviewPanel(tk.Frame):
             start_open = self._adj_open
         else:
             start_open = True
-        self.v_adjust = tk.BooleanVar(value=True)
+        self.v_adjust = tk.BooleanVar(value=start_open)
 
         adj = ttk.Frame(top)
         self._adj = adj
@@ -1185,10 +1185,28 @@ class ReviewPanel(tk.Frame):
         # Same pattern as the ComfyUI dock's `side="bottom"`.
         btns.pack(side="bottom", fill="x")
         btns2.pack(side="bottom", fill="x")
-        adj.pack(side="bottom", fill="x", after=btns2)
+        self._adj_after = btns2  # remember the reference for _toggle_adjust
+        if start_open:
+            adj.pack(side="bottom", fill="x", after=btns2)
         stat.pack(side="bottom", fill="x", pady=(6, 4))
         self.lbl_status.pack(side="bottom", anchor="w", pady=(2, 0))
         hint.pack(side="bottom", anchor="w", pady=(4, 0))
+
+    def _toggle_adjust(self):
+        """Collapse or expand the adjustments panel.  The state lives on the
+        panel (``_adj_open``), not the widget, because ``load`` destroys every
+        child and rebuilds -- a collapse that re-opened itself on the next
+        photograph of a queue would be worse than no collapse at all."""
+        open_ = self.v_adjust.get()
+        self._adj_open = open_
+        if open_:
+            after = getattr(self, "_adj_after", None)
+            if after is not None:
+                self._adj.pack(side="bottom", fill="x", after=after)
+            else:
+                self._adj.pack(side="bottom", fill="x")
+        else:
+            self._adj.pack_forget()
 
     def _apply_detector(self):
         """Switch detector and say what it found.
@@ -2526,6 +2544,9 @@ class ReviewPanel(tk.Frame):
             self._set_status("marking an edge: click the other end -- whichever "
                              "way it leans decides the plane\n"
                              "(as far from the first point as the structure allows)")
+            self._loupe_show()
+            if event is not None:
+                self._loupe_move(event)   # show the point immediately, not on first motion
             self._redraw()
             return
         x0, y0 = self._pending_mark
@@ -2630,7 +2651,18 @@ class ReviewPanel(tk.Frame):
                                          command=app._download_models)
             app.btn_weights.grid(row=0, column=2, sticky="w", padx=(6, 0))
             _attach_tooltip(app.btn_weights, "Download or check detector model weights")
-        det.columnconfigure(3, weight=1)
+        # Mask active toggle: sits beside the line detector (what-the-estimator-
+        # sees belongs together).  The variable is made here, once; the msk row
+        # in Q1 no longer carries its own checkbox.
+        if getattr(self, "v_mask_active", None) is None:
+            self.v_mask_active = tk.BooleanVar(value=True)
+        self.msk_active_cb = ttk.Checkbutton(det, text="mask active",
+                        variable=self.v_mask_active,
+                        command=self._on_mask_active_toggle)
+        self.msk_active_cb.grid(row=0, column=3, sticky="w", padx=(12, 0))
+        _attach_tooltip(self.msk_active_cb,
+                        "Toggle mask on/off without clearing the painted region")
+        det.columnconfigure(4, weight=1)
 
         # The facade strip (the former ROI-x control) moved up beside the
         # horizontal (yaw) checkbox in `_build` -- it restricts horizontal
@@ -2671,16 +2703,8 @@ class ReviewPanel(tk.Frame):
         _b = ttk.Button(msk, text="mask folder...", command=self._pick_mask_folder)
         _b.grid(row=0, column=2, sticky="w")
         _attach_tooltip(_b, "Choose the folder containing mask PNG files (one per image)")
-        # True, because `_apply_mask` defaults `_mask_enabled` to True: a box
-        # drawn unchecked while masks were in fact being applied is a control
-        # that lies about the state it reports.
-        self.v_mask_active = tk.BooleanVar(value=True)
-        self.msk_active_cb = ttk.Checkbutton(msk, text="active",
-                        variable=self.v_mask_active,
-                        command=self._on_mask_active_toggle)
-        self.msk_active_cb.grid(row=0, column=3, sticky="w", padx=(10, 0))
-        _attach_tooltip(self.msk_active_cb,
-                        "Toggle mask on/off without clearing the painted region")
+        # The "active" toggle moved to the line-detector row (det) in Q4 --
+        # what-the-estimator-sees belongs together.  The variable is made there.
         self.v_maskinv = tk.BooleanVar(value=self.settings.mask_invert)
         ttk.Checkbutton(msk, text="mask marks what to KEEP",
                         variable=self.v_maskinv, command=self._apply_mask

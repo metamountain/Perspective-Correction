@@ -12,6 +12,7 @@ import os
 import sys
 import time
 import types
+from unittest import SkipTest
 
 import numpy as np
 import pytest
