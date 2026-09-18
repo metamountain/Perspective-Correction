@@ -1013,15 +1013,14 @@ class ReviewPanel(tk.Frame):
         self.v_autofacade = tk.BooleanVar(value=False)
         _af = ttk.Checkbutton(ctl, text="pc rect (auto)",
                               variable=self.v_autofacade,
-                              command=self._on_autofacade_toggle)
+                              command=self._on_autofacade_toggle,
+                              state="disabled")
         _af.grid(row=0, column=1, sticky="w", padx=(8, 0))
         _attach_tooltip(
             _af,
-            "Auto-detect the 4 facade corners from detected lines\n"
-            "(GLNet-style: extreme lines per quadrant → intersections)\n"
-            "and fill the PC Rectangle quad. Corners are draggable for\n"
-            "manual fine-tuning. Order: CCW from top-left.\n"
-            "Mutually exclusive with horizontal auto and H-Marker.")
+            "DISABLED: auto corner detection picks lines from all facades,\n"
+            "not one plane -- the result is unreliable on corner views.\n"
+            "Use the PC Rectangle button (manual 4-corner click) instead.")
 
         # Row 1: horizontal auto (yaw) — VP-based correction + slider, as before.
         _hchk = ttk.Checkbutton(ctl, text="horizontal auto (yaw)",
