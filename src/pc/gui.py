@@ -53,7 +53,7 @@ from .imageio import READABLE
 from .pipeline import ERROR, OK, SKIPPED, process
 from .inpaint import join_url as _join_url, split_url as _split_url
 from . import sam2seg
-from .review import AUTO, MANUAL, ReviewSession, darken_outside_crop
+from .review import AUTO, ReviewSession, darken_outside_crop
 
 QUEUED = "queued"
 STATUS_COLOUR = {OK: "#5ac37f", SKIPPED: "#e0b24c", ERROR: "#ef6b6b", QUEUED: "#8899aa"}
