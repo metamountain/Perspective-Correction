@@ -136,9 +136,20 @@ def main(argv):
             name, out, err = _run_module(n)
             done[name] = (out, err)
     else:
+        import multiprocessing
         from concurrent.futures import ProcessPoolExecutor
         workers = min(MAX_WORKERS, os.cpu_count() or 1, len(names))
-        with ProcessPoolExecutor(max_workers=workers) as ex:
+        # "spawn" explicitly, because the default is NOT the same everywhere:
+        # Windows spawns, Linux forks. Forking inherits a live interpreter --
+        # imported C extensions, open handles, threads -- while spawning
+        # re-imports from clean. That is the only start-method-sensitive
+        # construct in the whole run, so leaving it to the platform means the
+        # suite here and the suite in CI are not running the same way. This
+        # does NOT claim to be the cause of the failing Linux CI job; it
+        # removes one of the two places where the platforms genuinely differ,
+        # so that whoever reads that log next has one fewer variable.
+        ctx = multiprocessing.get_context("spawn")
+        with ProcessPoolExecutor(max_workers=workers, mp_context=ctx) as ex:
             for name, out, err in ex.map(_run_module, names):
                 done[name] = (out, err)
 

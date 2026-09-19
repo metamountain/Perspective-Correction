@@ -2617,12 +2617,30 @@ class ReviewPanel(tk.Frame):
 
         msk = ttk.Frame(parent)
         msk.pack(fill="x")
+        # Eleven widgets sat in one `grid(row=0, ...)` and did not fit: measured
+        # at the 1920x1080 window floor the row asked for ~1097 px of a 910 px
+        # field, so "Clear Mask" was clipped to "Cle".  It overflowed at
+        # 2560x1400 too.  Nothing caught it, because `pack`/`grid` still MAP a
+        # clipped child -- `winfo_ismapped()` is 1 and `winfo_width()` is the
+        # full requested width -- so the existing "every child has width > 0"
+        # assertion this project already wrote for the same bug in `btns` reads
+        # green here.  Only the container's allocation tells the truth.
+        #
+        # Split in two, by what the controls mean rather than by where they
+        # fitted: where the mask COMES FROM on top, what is DONE to it below.
+        # Two packed sub-frames, not two grid rows -- grid columns are shared
+        # between rows, so a 189 px checkbutton in column 0 would widen the
+        # "mask" label's column with it.
+        msk_src = ttk.Frame(msk)
+        msk_src.grid(row=0, column=0, columnspan=9, sticky="w")
+        msk_act = ttk.Frame(msk)
+        msk_act.grid(row=1, column=0, columnspan=9, sticky="w", pady=(4, 0))
         self.v_maskmode = tk.StringVar(value=self.settings.mask_mode)
-        ttk.Label(msk, text="mask", width=18).grid(row=0, column=0, sticky="w")
-        self.cb_maskmode = ttk.Combobox(msk, textvariable=self.v_maskmode, width=8,
+        ttk.Label(msk_src, text="mask", width=18).pack(side="left")
+        self.cb_maskmode = ttk.Combobox(msk_src, textvariable=self.v_maskmode, width=8,
                                         state="readonly",
                                         values=["off", "file", "birefnet", "gdino"])
-        self.cb_maskmode.grid(row=0, column=1, sticky="w", padx=(6, 6))
+        self.cb_maskmode.pack(side="left", padx=(6, 6))
         self.cb_maskmode.bind("<<ComboboxSelected>>", lambda e: self._apply_mask())
         _attach_tooltip(self.cb_maskmode,
                         "Where the ignore mask comes from.\n"
@@ -2632,40 +2650,40 @@ class ReviewPanel(tk.Frame):
                         "gdino finds the building by name, then mattes inside "
                         "that box with BiRefNet - so it needs a BiRefNet model "
                         "set below, or it refuses.")
-        _b = ttk.Button(msk, text="mask folder...", command=self._pick_mask_folder)
-        _b.grid(row=0, column=2, sticky="w")
+        _b = ttk.Button(msk_src, text="mask folder...", command=self._pick_mask_folder)
+        _b.pack(side="left")
         _attach_tooltip(_b, "Choose the folder containing mask PNG files (one per image)")
         # The "active" toggle moved to the line-detector row (det) in Q4 --
         # what-the-estimator-sees belongs together.  The variable is made there.
         self.v_maskinv = tk.BooleanVar(value=self.settings.mask_invert)
-        ttk.Checkbutton(msk, text="mask marks what to KEEP",
+        ttk.Checkbutton(msk_act, text="mask marks what to KEEP",
                         variable=self.v_maskinv, command=self._apply_mask
-                        ).grid(row=0, column=4, sticky="w", padx=(10, 0))
+                        ).pack(side="left")
         self.v_invert = tk.BooleanVar(value=False)
-        _cb = ttk.Checkbutton(msk, text="invert mask",
+        _cb = ttk.Checkbutton(msk_act, text="invert mask",
                               variable=self.v_invert,
                               command=self._on_invert_toggle)
         _attach_tooltip(_cb, "Swap it: what is red becomes the part that "
                              "counts, and the rest is ignored.\n"
                              "Applies to every source at once - brush, SAM, "
                              "gdino, BiRefNet and the facade strip together.")
-        _cb.grid(row=0, column=8, sticky="w", padx=(10, 0))
-        _b = ttk.Button(msk, text="BiRefNet model...", command=self._pick_birefnet_model)
-        _b.grid(row=0, column=5, sticky="w", padx=(10, 0))
+        _cb.pack(side="left", padx=(10, 0))
+        _b = ttk.Button(msk_src, text="BiRefNet model...", command=self._pick_birefnet_model)
+        _b.pack(side="left", padx=(10, 0))
         _attach_tooltip(_b, "Select the BiRefNet segmentation model to use")
-        _b = ttk.Button(msk, text="Mask Apply", command=self._apply_mask)
-        _b.grid(row=0, column=6, sticky="w", padx=(10, 0))
+        _b = ttk.Button(msk_act, text="Mask Apply", command=self._apply_mask)
+        _b.pack(side="left", padx=(10, 0))
         _attach_tooltip(_b, "Re-apply the current mask to filter detected lines")
-        _b = ttk.Button(msk, text="Clear Mask", command=self._clear_mask)
-        _b.grid(row=0, column=7, sticky="w", padx=(10, 0))
+        _b = ttk.Button(msk_act, text="Clear Mask", command=self._clear_mask)
+        _b.pack(side="left", padx=(10, 0))
         _attach_tooltip(_b, "Remove all painted mask and SAM selection")
         self.lbl_mask = ttk.Label(msk, text="", wraplength=760, justify="left")
-        self.lbl_mask.grid(row=1, column=0, columnspan=4, sticky="w", pady=(4, 0))
+        self.lbl_mask.grid(row=2, column=0, columnspan=4, sticky="w", pady=(4, 0))
         self.v_alpha = tk.DoubleVar(value=0.28)
-        ttk.Label(msk, text="mask opacity", width=18).grid(row=2, column=0, sticky="w")
+        ttk.Label(msk, text="mask opacity", width=18).grid(row=3, column=0, sticky="w")
         ttk.Scale(msk, from_=0.0, to=1.0, variable=self.v_alpha, orient="horizontal",
                   command=lambda _v: self._on_alpha()
-                  ).grid(row=2, column=1, columnspan=3, sticky="ew", padx=6)
+                  ).grid(row=3, column=1, columnspan=3, sticky="ew", padx=6)
         # The gdino prompt is the interactive half of that mask mode: type a word,
         # press Enter, and the box (and the matte inside it) is re-found.  It is
         # only read when the source combobox says gdino, so it stays inert in the

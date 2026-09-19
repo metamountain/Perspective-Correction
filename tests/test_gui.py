@@ -1468,3 +1468,92 @@ def test_loupe_alt_damping_tracks_cursor_at_half_rate():
         r._loupe_hide()
     finally:
         app.destroy()
+
+
+def test_no_tools_field_row_asks_for_more_width_than_it_gets():
+    """A clipped control is mapped, full-width and invisible to the old check.
+
+    `test_the_save_button_is_reachable_at_every_window_size` asserts every
+    child has `winfo_width() > 0`, which is the right question for a control
+    that never got packed -- and the wrong one for a control that did. Tk maps
+    a child that does not fit and reports its full requested width; the
+    container simply clips it. Measured before the fix: the mask row asked for
+    ~1097 px of a 910 px field at the 1920x1080 window floor, "Clear Mask"
+    rendered as "Cle", and every existing assertion stayed green. It was found
+    by looking at a screenshot, which is not a thing a suite can do.
+
+    So this asks the container, not the child: no row may request more width
+    than the field it sits in. Written generically over the tool-field rows so
+    that adding one more control to either of them trips this rather than
+    silently eating the last button.
+    """
+    app = _app()
+    try:
+        app.geometry("1920x1080-4000+0")          # the window's own minsize
+        app.update(); time.sleep(0.02)
+        app._add([ASSET])
+        _settle(app)
+        review = app.review
+        assert review is not None, "no review panel"
+
+        rows, seen = [], set()
+        def walk(widget):
+            for child in widget.winfo_children():
+                try:
+                    cls = child.winfo_class()
+                except Exception:
+                    cls = ""
+                if cls in ("TButton", "TCheckbutton", "TCombobox"):
+                    parent = child.master
+                    if id(parent) not in seen:
+                        seen.add(id(parent))
+                        rows.append(parent)
+                walk(child)
+        walk(review)
+        assert rows, "found no control rows at all -- the walk is wrong"
+
+        # Group each container's children into visual LINES, and ask the
+        # geometry manager which line a child is on rather than guessing from
+        # pixels. Two earlier attempts had NO TEETH and both failed the same
+        # way -- they passed on the known-broken code:
+        #   1. "skip any container whose children are not all at one y" threw
+        #      away the very frame that overflowed, because it also held the
+        #      note label and the opacity slider on later rows.
+        #   2. "group by winfo_y()" split a single grid row into one group per
+        #      widget, because `sticky="w"` centres children vertically, so a
+        #      combobox and a label on the same row sit at different y.
+        # Both were caught by reverting the fix and re-running; a test that
+        # cannot fail is not a test, and this one had to be shown failing.
+        too_wide = []
+        for row in rows:
+            field = row.winfo_width()
+            if field <= 1:
+                continue                      # never mapped; a different bug
+            lines = {}
+            for k in row.winfo_children():
+                try:
+                    mgr = k.winfo_manager()
+                    if mgr == "grid":
+                        key = ("grid", k.grid_info().get("row"))
+                    elif mgr == "pack":
+                        key = ("y", k.winfo_y() // 16)
+                    else:
+                        continue
+                except Exception:
+                    continue
+                lines.setdefault(key, []).append(k)
+            for key, kids in lines.items():
+                if len(kids) < 2:
+                    continue                  # a lone wide label may wrap
+                need = sum(k.winfo_reqwidth() for k in kids)
+                if need > field:
+                    labels = [repr(k.cget("text"))[:24]
+                              for k in kids if "text" in k.keys()]
+                    too_wide.append(
+                        f"{need}px wanted in {field}px on line {key}: "
+                        + ", ".join(labels))
+        assert not too_wide, (
+            "a control row is clipped at the 1920x1080 window floor:\n  "
+            + "\n  ".join(too_wide))
+    finally:
+        app.destroy()
