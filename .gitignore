@@ -53,3 +53,8 @@ models/*.tar
 
 # local backups taken before a large doc edit; the content is in git history
 *.bak
+
+# trashed files (recoverable until manually deleted) and HPC save records
+Trashcan/
+verworfen/
+hpc_save/
