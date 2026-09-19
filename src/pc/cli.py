@@ -651,6 +651,21 @@ def main(argv=None) -> int:
         print("no readable images found")
         return 1
 
+    # --overwrite replaces the user's original files, so this has to fail
+    # safe: prompt when someone is at a keyboard to answer, and otherwise
+    # refuse rather than guess. An audit once filed the isatty() check
+    # itself as the defect ("blocks piped double-click") -- it does not:
+    # the isatty() check is what stands between a piped/non-interactive
+    # start and the *silent* loss of every original in the batch. It is
+    # deliberately not "read a piped answer instead" -- `echo y | rectify
+    # --overwrite *.jpg` must not work either, because then any redirect
+    # that happens to produce a leading "y" (or nothing at all, EOF reads
+    # as "") authorises destruction nobody typed. --yes ("do not ask
+    # before overwriting", the flag below) is the one way to say "I mean
+    # it" non-interactively -- a double-clicked .bat or a CI job that
+    # really wants --overwrite puts --yes in the command, same as it would
+    # need to answer any other unattended prompt. See tests/test_cli.py's
+    # two overwrite tests for both directions of this pinned.
     if args.overwrite and not args.yes and not args.dry_run:
         if sys.stdin is not None and sys.stdin.isatty():
             ans = input(f"--overwrite will replace {len(files)} original file(s). Continue? [y/N] ")

@@ -1557,3 +1557,54 @@ def test_no_tools_field_row_asks_for_more_width_than_it_gets():
             + "\n  ".join(too_wide))
     finally:
         app.destroy()
+
+
+def test_every_tool_key_is_the_same_size_and_every_glyph_renders():
+    """A column of keys is judged on its alignment before anything else.
+
+    Three of the seven keys used to be assembled by hand beside the factory
+    that built the rest, and picked up `highlightthickness=2` on the way --
+    which Tk adds OUTSIDE the requested width, so those keys were 4 px larger
+    than their neighbours in a vertical column where nothing hides it. They
+    also lit up in a different colour when held. Both are the same defect:
+    a second construction site.
+
+    So this asserts the two things a second construction site breaks -- one
+    size for every key, and a glyph actually present on each -- rather than
+    asserting any particular size, which would be a number copied out of the
+    code instead of a claim about it.
+    """
+    from pc.gui import _DRAWN_GLYPHS, _glyph_pil, INK
+    from pc import layout
+
+    # Every mark this palette draws must actually draw something. A glyph that
+    # comes back None falls through to a bullet character, which is how a key
+    # can look "fine" while saying nothing.
+    for name in _DRAWN_GLYPHS:
+        img = _glyph_pil(name, layout.tool_glyph(), INK["dim"])
+        assert img is not None, f"{name} rendered nothing"
+        assert img.size == (layout.tool_glyph(),) * 2, f"{name} is {img.size}"
+        assert img.getbbox() is not None, f"{name} rendered an empty box"
+
+    app = _app()
+    try:
+        app.geometry("1920x1080-4000+0")
+        app.update(); time.sleep(0.02)
+        app._add([ASSET])
+        _settle(app)
+        keys = getattr(app.review, "_palette_btns", [])
+        assert len(keys) >= 6, f"only {len(keys)} tool keys -- the palette is not built"
+        sizes = {(k.winfo_width(), k.winfo_height()) for k in keys}
+        assert len(sizes) == 1, (
+            "the tool keys are not all one size, so the column does not line "
+            f"up: {sorted(sizes)}")
+        highlights = {int(k.cget("highlightthickness")) for k in keys}
+        assert len(highlights) == 1, (
+            "a key carries a different highlight thickness, which Tk adds "
+            f"outside the requested width: {sorted(highlights)}")
+        selects = {str(k.cget("selectcolor")) for k in keys}
+        assert len(selects) <= 2, (
+            "more than two 'held' colours in one palette -- which tool am I "
+            f"holding has to have one answer (the brush inverts, so two): {sorted(selects)}")
+    finally:
+        app.destroy()

@@ -59,7 +59,7 @@ left alone (see Done).
   | command | what it runs | measured 2026-09-20 |
   |---|---|---|
   | `python tests/run_tests.py` | fast — skips `test_gui`, `test_assets` | **283 tests, 0 failed, ~19 s** |
-  | `python tests/run_tests.py --full` (or `PC_FULL=1`) | everything, 23 modules | **328 tests, 0 failed, 2 skipped, ~65 s** |
+  | `python tests/run_tests.py --full` (or `PC_FULL=1`) | everything, 23 modules | **332 tests, 0 failed, 2 skipped, ~67 s** |
 
   The fast run says so on exit (`!! FAST RUN -- did NOT run: test_assets,
   test_gui`). **Green there does not mean green.** `-s` forces the old sequential
@@ -169,8 +169,8 @@ declared `mlsd` extra) is in the **system** interpreter, so
 
 ## Ledger — the only place status lives
 
-**Suite, measured 2026-09-20 at `fa88c86`+: `--full` = 328 tests, 0 failed,
-2 skipped, 65.4 s. The suite is green for the first time in this file's history.** Fast run
+**Suite, measured 2026-09-20 at `bd37bea`+: `--full` = 332 tests, 0 failed,
+2 skipped, 67.0 s. The suite is green for the first time in this file's history.** Fast run
 = 283 in ~19 s and is not the suite. **And the honest one:
 `PC_TEST_ASSETS=0 python tests/run_tests.py test_assets` over the whole
 photograph pool = 11 tests, 0 failed, 2 skipped, 133.7 s** — `--full` still
@@ -188,16 +188,19 @@ features ahead of everything else.*
 
 **A. Tools and UI — small and visible.**
 
-1. **Tool icons as one coherent set; bigger buttons; typography and spacing.**
-   The window is judged by this. Do it as a **single pass** — icons, font sizes,
-   button sizes and spacing share a visual language and will not match if split
-   across sessions. Partially advanced already (button padding, type scale and
-   control sizes were enlarged 09-14) but the icon set itself is untouched.
+1. ~~**Tool icons as one coherent set.**~~ **Done 2026-09-20 — see the Ledger.**
+   The button sizes and type scale half of this entry landed 09-14; the icons
+   landed today. **What is left of the "single pass" is spacing**, and it is
+   deliberately not being called done: the column pitch and the field paddings
+   were not touched, and nobody has looked at them as a set.
 2. **More tools — only where a gesture is already being done the long way.**
    Not a wish for its own sake. Shortcuts are done (`m` mark, `b` brush,
    `p` planar, `s` SAM).
-3. **P4 — two-facade warning in the status area.** Small, diagnostic. The status
-   label now exists (`lbl_status`), so this is only the detection plus a line.
+3. **P4 — two-facade warning.** **The detection half was measured 2026-09-20 and
+   does not work; nothing was built.** See the Ledger. It is now **blocked on
+   `knowledge.md` §1 (facade-outline-first)**, not on effort: a threshold over
+   `ArchitectureScheme`'s post-hoc split cannot represent the case, because the
+   split itself under-detects the second plane.
 4. **P3 — show the multiple horizontal VPs as markers.** Cosmetic, and it
    overlaps the found-geometry overlay research goal below; decide which one is
    being built before building either.
@@ -248,8 +251,10 @@ features ahead of everything else.*
 7. **`gui.py` is 5217 lines** — 3.5× the next largest file (`review.py`, 1369).
    A 12-file composition split was proposed and **deprioritised by the user**. It
    stays deprioritised; recorded so it is not re-proposed as if new.
-8. **`cli.py:651` `isatty()` gate** blocks a piped double-click launch. MED,
-   minor, unchanged.
+8. ~~**`cli.py` `isatty()` gate**~~ **Struck 2026-09-20: it was not a defect.**
+   See the Ledger — the gate refuses rather than proceeding, which is the only
+   safe answer for a flag that destroys originals, and `--yes` is the documented
+   way to mean it non-interactively.
 
 **C. Decide, do not necessarily fix.**
 
@@ -460,6 +465,89 @@ features ahead of everything else.*
   default in code (grepping `src/` for the path finds nothing), so it has not
   been rewritten - silently changing where someone's work is saved is worse than
   telling them. **Check it before the next review session.**
+- **The tool palette is one set now, and one construction site.** It was
+  **seven keys in four visual languages** — two flat line diagrams, a solid
+  disc, a monochromed dinosaur emoji, and two *pictorial* font icons that were
+  also saying the wrong thing: **SAM, which box-selects a building, wore an
+  eyedropper, and "strike slanted lines" wore Segoe's debug beetle.** Six marks
+  are now drawn in one language (`_glyph_pil`): straight strokes at one pen, no
+  tapers or highlights, perspective on the one glyph whose meaning *is*
+  perspective, and every mark cropped to its ink by `_fit_ink` so they share a
+  footprint — measured before, the drawn keys spanned 0.69 and 0.77 of the box
+  against the font's 1.00, so they were simply smaller in an identical key.
+  **The bigger find was underneath the glyphs.** Three keys were assembled by
+  hand beside the factory that built the rest, and had drifted in three ways
+  that are not about taste: `highlightthickness=2`, which Tk adds *outside* the
+  requested width, made them **4 px larger** in a vertical column where nothing
+  hides it (measured 38 px against 34 px); they lit up in `INK["accent"]` when
+  held while the others used `INK["line"]`, so **"which tool am I holding" had
+  two different answers**; and their glyphs used inline pixel arithmetic
+  (`gs // 10`, `gs // 4`) — the hard rule's forbidden thing, and plausibly
+  *why* they drifted. All seven now go through one `tool()` factory; exactly one
+  `tk.Checkbutton(bar` remains in the file. The pen and box live in
+  `layout.py` (`glyph_stroke`, `glyph_box`).
+  **Two deliberate exceptions, recorded rather than quietly made**: the brush
+  stays a filled inverted disc (it is a swatch, not a diagram — user,
+  09-15), and **the Grounding DINO key keeps its dinosaur**, a pun the user put
+  there on purpose. A previous session already traded its colour for coherence
+  and stopped short of replacing it, which is the right place to stop.
+  **The measurement disagreed with the eye, and the eye won** — that is the part
+  worth keeping. A run-length median says the three icon-font keys at the top of
+  the same column stroke at **1.0 px**, and the first version of `glyph_stroke`
+  believed it (it had measured the two *pictorial* glyphs, which are heavier and
+  never represented the set). Rendered at 1 px the drawn marks **vanish** beside
+  those icons; at 2 px they match. Font glyphs are antialiased, so a one-pixel
+  core carries soft shoulders and *looks* wider, while a hard-edged drawn stroke
+  measures exactly what it is. **No run-length median reports optical weight.**
+  The docstring now records the number that misled rather than the number that
+  was chosen. Pinned by
+  `test_every_tool_key_is_the_same_size_and_every_glyph_renders` (verified
+  failing on the reintroduced defect: `[(34, 34), (38, 38)]`) and
+  `test_the_drawn_glyph_pen_is_one_number_and_follows_the_glyph_size` (verified
+  failing on a 1 px pen). `docs/ui.png` re-taken again.
+- **[measured, nothing built] P4's two-facade detection does not work.** Same
+  discipline as the P9 and pitch-cap passes: the obvious signal was scored over
+  the whole 51-file pool before any production code was written, and it failed.
+  **Signal 1** (opposite-side horizontal VPs weighted by RANSAC support) ranks
+  `lochfassade.jpg` — the pool's most unambiguous corner view — at **46 of 51**,
+  *below* two confirmed-flat facades, because `ArchitectureScheme` reports its
+  second plane at support 0.045. **Signal 2** (spatial separation of the two
+  planes' line midpoints) fixes `lochfassade` but puts `39079116`, the asset the
+  whole item exists for, at the **bottom**, indistinguishable from near-flat
+  photographs. No threshold and no obvious combination separates them.
+  **Why it cannot work as specified**: the receding row is not a clean two-plane
+  corner at all — its horizontals smear across many shallow-angle planes, which
+  a binary h1/h2 read-out was never going to represent — and the post-hoc split
+  under-detects a narrow or steeply foreshortened second plane. **A diagnostic
+  that fires on flat facades and stays silent on the pool's clearest corner
+  would be worse than the current silence**, so none was added. Blocked on
+  `knowledge.md` §1, facade-outline-first.
+  **Discrepancy found on the way, not hidden**: `knowledge.md` §1 (line 38)
+  cites `Alte_Scheune` scheme support as `h1=0.61, h2=0.36`; measured today it
+  is **`h1=0.596, h2=0.147`**, reproduced three ways and byte-identical each
+  time (seeded RNG). `lochfassade`'s cited `h2=0.045` reproduces exactly. The
+  `Alte_Scheune` number is unexplained — **do not build on §1's h2 figure
+  without re-measuring it.**
+- **[not a defect] The `cli.py` `isatty()` gate was a wrong finding, and is
+  struck.** It had been carried as an open MED item — "blocks piped
+  double-click". Measured: when stdin is not a tty the `else` branch prints
+  `--overwrite needs --yes when running non-interactively` and **returns 1
+  before any file is touched**. That is the only safe answer for a flag that
+  destroys originals, and it deliberately also stops `echo y | ... --overwrite`
+  from authorising destruction nobody typed. `--yes` (`cli.py:75`) is the
+  documented way to mean it non-interactively. **No logic changed** — a comment
+  explaining why, so the next audit does not re-file it, plus two tests pinning
+  *both* directions: refusal without `--yes` (asserting `process` was never
+  called, not merely that a message was printed) and no refusal with it.
+  Red/green demonstrated by mutating the `return 1` to `pass`.
+- **CI gained a windows-only `--full` job.** The existing `test` job is
+  untouched and still runs the fast run on the full matrix; `full-windows` is a
+  sibling with no `needs:`, so neither gates the other. Windows-only on purpose:
+  the Linux leg is failing for an unrelated undiagnosed reason, and `test_gui`
+  opens real Tk windows. **Whether a runner's single virtual display tolerates
+  `test_gui`'s off-screen `geometry("<WxH>-4000+0")` is UNVERIFIED and cannot be
+  checked from here — the first run of that job is the experiment, not a
+  formality.** YAML machine-validated.
 - **This file rewritten from measurement** - see the header.
 
 **2026-09-19 → 20 (from `QWEN.md`, verified against the code)**
