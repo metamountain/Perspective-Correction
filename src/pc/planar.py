@@ -55,12 +55,26 @@ def target_size(quad):
     the left and right -- the document-scanner convention.  It preserves the
     *apparent* aspect of the surface as it sits in the photograph; recovering the
     true aspect would need the focal length, which a frontal facade does not give.
+
+    The result is then scaled up (never down) so that the output canvas covers
+    at least the source quad's bounding box.  This guarantees the warp ADDS
+    pixels for the perspective expansion instead of compressing them -- a facade
+    shot at an angle has apparent edges shorter than its true size, and mapping
+    those short lengths onto the output would squeeze the image.
     """
     quad = np.asarray(quad, dtype=np.float64)
     p0, p1, p2, p3 = quad
     top = float(np.linalg.norm(p1 - p0)); bottom = float(np.linalg.norm(p2 - p3))
     left = float(np.linalg.norm(p3 - p0)); right = float(np.linalg.norm(p2 - p1))
-    return max(1, int(round(max(top, bottom)))), max(1, int(round(max(left, right))))
+    w = max(1, int(round(max(top, bottom))))
+    h = max(1, int(round(max(left, right))))
+    # Never shrink below the source quad's bounding box: the warp must add
+    # pixels for the perspective expansion, not compress existing ones.
+    bbox_w = int(np.ceil(max(p0[0], p1[0], p2[0], p3[0]) - min(p0[0], p1[0], p2[0], p3[0])))
+    bbox_h = int(np.ceil(max(p0[1], p1[1], p2[1], p3[1]) - min(p0[1], p1[1], p2[1], p3[1])))
+    w = max(w, bbox_w)
+    h = max(h, bbox_h)
+    return w, h
 
 
 def quad_area(quad):
