@@ -81,7 +81,7 @@ step("both canvases exist", lambda: f"before={r.c_before.winfo_width()}x{r.c_bef
 step("session is None when empty", lambda: f"session={r.session}")
 step("empty canvas has drawn items", lambda: f"items={len(r.c_before.find_all())}")
 step("grey add icons in image corner", lambda: f"plus={r.add_btn.cget('text')!r} folder={'ok' if r.add_folder_btn.winfo_ismapped() else 'missing'}")
-step("controls present with no photo", lambda: f"grid_var={app.review.v_grid.get()}")
+step("controls present with no photo", lambda: f"lines_var={app.review.v_show_lines.get()}")
 
 print("== 2. load a photograph ==")
 step("add", lambda: app._add([ASSET]))
@@ -103,9 +103,14 @@ for w,h in [(1280,800),(1920,1080),(2560,1400)]:
                 f"btns {r._btns.winfo_ismapped() if hasattr(r,'_btns') else '?'}")
     step(f"resize {w}x{h}", _rs)
 
+# The grid overlay this used to toggle was retired with the ruler-to-guides
+# rewrite; `v_grid` survived here alone for days, failing against a feature
+# that no longer existed. The live before-pane toggle is `v_show_lines`
+# (gui.py:839). A diagnostic that fails on its own staleness is worse than
+# none -- it made a healthy window look broken.
 print("== 4. toggles ==")
-step("grid on", lambda: (app.review.v_grid.set(True), app.review._schedule_redraw(), pump(app,15), "on")[-1])
-step("grid off", lambda: (app.review.v_grid.set(False), app.review._schedule_redraw(), pump(app,15), "off")[-1])
+step("lines on", lambda: (app.review.v_show_lines.set(True), app.review._schedule_redraw(), pump(app,15), "on")[-1])
+step("lines off", lambda: (app.review.v_show_lines.set(False), app.review._schedule_redraw(), pump(app,15), "off")[-1])
 
 print("== 6. clear back to empty ==")
 def _clear():
