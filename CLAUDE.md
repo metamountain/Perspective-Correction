@@ -59,7 +59,7 @@ left alone (see Done).
   | command | what it runs | measured 2026-09-20 |
   |---|---|---|
   | `python tests/run_tests.py` | fast — skips `test_gui`, `test_assets` | **283 tests, 0 failed, ~19 s** |
-  | `python tests/run_tests.py --full` (or `PC_FULL=1`) | everything, 23 modules | **326 tests, 0 failed, 2 skipped, ~63 s** |
+  | `python tests/run_tests.py --full` (or `PC_FULL=1`) | everything, 23 modules | **327 tests, 0 failed, 2 skipped, ~64 s** |
 
   The fast run says so on exit (`!! FAST RUN -- did NOT run: test_assets,
   test_gui`). **Green there does not mean green.** `-s` forces the old sequential
@@ -74,8 +74,9 @@ left alone (see Done).
   means, that line is what has to change.
 - `test_assets` samples **5 photographs**, not the pool (`MAX_ASSETS`,
   `tests/test_assets.py:63`). `_ALWAYS` (`:68`) force-keeps `*_upright.*`,
-  `*_skip.*` and the receding-row asset `39079116`, so a known failure cannot be
-  silently sampled away. **`PC_TEST_ASSETS=0` restores the whole pool and must be
+  `*_skip.*`, the receding-row asset `39079116` and the ultra-wide
+  `ultra-weitwinkel` facade, so a known-hard case cannot be silently sampled
+  away. **`PC_TEST_ASSETS=0` restores the whole pool and must be
   used before writing any pool-wide number into this file.**
 - A new `test_*.py` must be added to `MODULES` in `run_tests.py` or `_unlisted()`
   fails the run. There are **23** modules.
@@ -165,8 +166,8 @@ declared `mlsd` extra) is in the **system** interpreter, so
 
 ## Ledger — the only place status lives
 
-**Suite, measured 2026-09-20: `--full` = 326 tests, 0 failed, 2 skipped,
-63.1 s. The suite is green for the first time in this file's history.** Fast run
+**Suite, measured 2026-09-20 at `229a050`+: `--full` = 327 tests, 0 failed,
+2 skipped, 64.2 s. The suite is green for the first time in this file's history.** Fast run
 = 283 in ~19 s and is not the suite. **And the honest one:
 `PC_TEST_ASSETS=0 python tests/run_tests.py test_assets` over the whole
 photograph pool = 11 tests, 0 failed, 2 skipped, 133.7 s** — `--full` still
@@ -201,13 +202,36 @@ features ahead of everything else.*
 **B. Correctness and infrastructure.**
 
 5. **CI runs the fast suite only** (`.github/workflows/tests.yml:33`). It has
-   never executed `test_gui` or `test_assets`. Now that `--full` actually
-   completes in ~63 s, there is no longer a runtime argument against it. **Decide
-   deliberately**: either switch CI to `--full`, or write down here that CI is a
-   smoke test and green means less than it looks.
+   never executed `test_gui` or `test_assets`, so **"CI is green" has never been
+   a statement about the GUI or the photographs.** Now that `--full` completes in
+   ~64 s there is no longer a runtime argument against it, but the obvious change
+   is **not** safely blind:
+   - `test_gui` opens real Tk windows at `geometry("<WxH>-4000+0")` — off-screen
+     by design. Whether a runner's single virtual display tolerates a negative
+     off-screen origin is **unverified**, and cannot be verified from here.
+   - On Linux it additionally needs a display at all (`xvfb-run`), and the Linux
+     job is already failing for an unrelated and undiagnosed reason.
+   - A runner has 2 cores; the ~64 s here is on 32, and the runner would largely
+     serialise.
+   **The narrow, defensible version is a windows-only `--full` job**, since
+   Windows CI passes today and is where the GUI tests are developed. Do not
+   record it as done without a green run — a CI change cannot be tested locally,
+   which is exactly why this one has to be made deliberately rather than
+   assumed.
 6. **CI Linux is failing** (ubuntu-latest, 3.9 and 3.12; Windows passing) —
-   recorded 2026-09-19, **not diagnosed**. Likely `opencv-python-headless` or a
-   missing system lib. Unverified; nobody has read the log yet.
+   recorded 2026-09-19. **`gh` is not installed on this box and the Actions logs
+   cannot be read from here**, so this is diagnosed only by elimination:
+   - **Python version is ruled out, definitively.** The repo parses clean against
+     the 3.9 grammar with no runtime-evaluated unions (64 files) — and the job
+     fails on 3.9 *and* 3.12 anyway, so a syntax floor was never a candidate.
+     Pinned by `test_the_source_parses_on_the_oldest_python_pyproject_promises`.
+   - Still open, in rough order of suspicion: a required package the doctor gate
+     (`python rectify.py --doctor`, step 2) finds on Windows and not on a bare
+     Linux runner; case-sensitivity on a path that Windows forgives; a
+     non-ASCII asset filename; a `cv2` call absent from `opencv-python-headless`.
+   **Whoever picks this up: read the log first.** Every hypothesis above is an
+   inference from the repo, and this project's own rule is that a document
+   claiming something is not evidence of it.
 7. **`gui.py` is 5217 lines** — 3.5× the next largest file (`review.py`, 1369).
    A 12-file composition split was proposed and **deprioritised by the user**. It
    stays deprioritised; recorded so it is not re-proposed as if new.
@@ -270,14 +294,18 @@ features ahead of everything else.*
   what ran before it.** Root-caused by subagent, verified by hand: the palettes
   do differ (`Minimal Black` `#101216` vs `Light` `#f6f7f8`). Fixed in the
   polluter's `finally`.
-- **The receding-row bug is gone.** `39079116-...-3Rec` used to fail round-trip at
-  3.71° against a 2.5° gate, at conf 0.73 — the only red the suite had, diagnosed
-  as a pitch/focal degeneracy and left open as "blocked on which of two routes".
-  It now passes, and it is still in the pool and still force-kept by `_ALWAYS`,
-  so this is not a sampling artifact. **No deliberate fix was made for it** — it
-  was carried by the yaw/warp rework (`594f244`, `3905fb7`, `5bfec7b`, `8aed6dc`
-  and the rest of that series). Recorded as an observation, not a claim of
-  understanding: nobody has explained *which* of those commits did it.
+- **The receding-row case is inside the gate now — but only just, and it is not
+  "fixed".** `39079116-...-3Rec` used to fail round-trip at **3.71°** against a
+  2.5° gate; **measured today it is 2.251°** — 90 % of the gate, still by far the
+  worst in the pool, and one tuning change away from red again. It is still in
+  the pool and still force-kept by `_ALWAYS`, so this is not a sampling artifact.
+  **No deliberate fix was made** — it was carried by the yaw/warp rework
+  (`594f244`, `3905fb7`, `5bfec7b`, `8aed6dc` and that series), and nobody has
+  explained *which* commit did it. The diagnosis therefore stands unchanged: a
+  receding row puts the horizontals on many differently-angled planes, the focal
+  length is derived geometrically from that mixed evidence, and a wrong f buys a
+  wrong pitch that fits the lines just as well. **The suite is green on this by a
+  margin of 0.25°. Treat it as a live limitation, not a closed item.**
 - **The plausible-bounds test now bounds what is *applied*, not the raw
   estimate — a deliberate narrowing, flagged for review.** Over the whole pool
   one of the user's new photographs,
@@ -292,9 +320,19 @@ features ahead of everything else.*
   narrower than what stood before** (it permits wild-but-refused), which is why
   it is written down here rather than quietly changed — if the wider claim is
   wanted back, the asset is the argument to have it against.
-  **The asset is also a live test case for distortion Stage 1**: an ultra-wide
-  facade is exactly the barrel-distortion failure the roadmap predicts, and it
-  is now in the pool.
+  **Checked in both paths, because manual review is the product and review
+  relaxes gates elsewhere:** `ReviewSession.would_skip()` (`review.py:980`) tests
+  the same `min_confidence`, and `current_angles()` opens the sliders at
+  **pitch +30.00° — the cap, not the estimate.** So the +50.4° never reaches a
+  user in either path.
+  **This retires an earlier measurement.** The 09-14 sweep recorded
+  `max_pitch_deg = 30` as *inert on this pool, 0 refusals*, and warned "the cap
+  is idle, not generous, and one steeper photograph would make it live."
+  **That photograph has arrived.** The cap is now load-bearing, so re-deciding it
+  is no longer an argument without evidence — this asset is the evidence.
+  **It is also a live test case for distortion Stage 1**: an ultra-wide facade is
+  exactly the barrel-distortion failure the roadmap predicts, and `_ALWAYS` now
+  force-keeps it so the 5-asset sampler cannot drop it.
 - **The worker harness is back, and the worker can see** (`d1ffe96`).
   `tools/worker_agent.py` and `tools/worker_bench.py` had been swept into
   `Trashcan/` by the dead-code pass (`1c2afe6`); the harness is not dead code, it
@@ -311,6 +349,30 @@ features ahead of everything else.*
   `.knowledge_before_slim.bak`. All three were untracked. `analysis/` was
   recreated with its README — `tools/shoot.py` and `tools/worker_bench.py` still
   write there and `.gitignore` still describes it.
+- **The worker's 27 skills are in git now** (`229a050`). `.qwen/skills/` held
+  ~200 KB of markdown the worker extracted while working here — several of them
+  recording lessons this repo paid for twice (the `_build` rebuild trap, canvas
+  coordinate spaces, runtime theme switching) — and `.gitignore` hid the whole
+  `.qwen/` directory. `.qwen/*` is ignored with `!.qwen/skills/` excepted, so
+  `settings.json` and `tmp/` stay local. **Knowledge that lives on one disk and
+  is invisible to every reader is knowledge the next session re-derives.**
+- **The 3.9 promise is now checked** (`229a050`).
+  `test_the_source_parses_on_the_oldest_python_pyproject_promises` reads
+  `requires-python` out of pyproject — raise the floor and the test relaxes by
+  itself — and checks two failures that happen at different times: a `match`
+  statement is a grammar error, while a PEP 604 `X | Y` annotation is legal
+  syntax at every version but is **evaluated at import** before 3.10, so it
+  needs `from __future__ import annotations`. Grammar alone misses the second.
+  **Measured: 64 files, 0 grammar errors, 0 runtime unions — the repo is
+  3.9-clean**, which rules Python version out as the cause of the Linux CI
+  failure (it fails on 3.9 *and* 3.12 while Windows passes both). All three
+  detectors were verified to fire on synthetic input first; a test that cannot
+  fail is not a test.
+- **The photograph pool is committed as the user curated it** (`eebdb6a`) — 13
+  assets out, 15 in, 3 cached SAM2 masks. `tests/assets/Synthetic/` is **not**
+  committed: 15 MB of rendered output from `tools/render_synth.py`, and
+  `test_assets._files()` globs `assets/*` and `assets/Horizontal/*` only, so no
+  test reads it. The generator is tracked; its output is reproducible.
 - **This file rewritten from measurement** — see the header.
 
 **2026-09-19 → 20 (from `QWEN.md`, verified against the code)**
