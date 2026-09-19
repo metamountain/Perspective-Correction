@@ -51,6 +51,12 @@ class _Skip(Exception):
     pass
 
 
+try:
+    from _pytest.outcomes import Skipped as _PytestSkip
+except Exception:          # pytest not installed
+    _PytestSkip = ()
+
+
 # At top level on purpose: worker processes re-import this file before running
 # a module, and the test modules name SkipTest bare.
 import builtins  # noqa: E402
@@ -91,7 +97,7 @@ def _run_module(name):
         try:
             getattr(mod, t)()
             out.append((t, "ok", time.time() - t1, None))
-        except _Skip as exc:
+        except (_Skip, _PytestSkip) as exc:
             out.append((t, "skip", time.time() - t1, str(exc)))
         except Exception:
             out.append((t, "fail", time.time() - t1, traceback.format_exc()))

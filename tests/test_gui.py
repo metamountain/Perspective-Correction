@@ -1020,6 +1020,17 @@ def test_phosphor_lays_a_graded_ground_and_takes_it_away_again():
             assert not c.find_withtag("ground"), (
                 f"{name} still has a graded ground after switching to Light")
     finally:
+        # INK is a module-level dict that `_switch_theme` mutates in place
+        # (gui.py: `INK.update(new)`), so a theme left switched here outlives
+        # this App and lands in the next test in the same worker process.
+        # Alphabetically this test runs BEFORE
+        # test_theme_switch_retints_canvas_backgrounds, which starts by
+        # asserting its two palettes differ -- and failed for exactly this
+        # reason, in a test that had nothing wrong with it.
+        try:
+            app._switch_theme("Minimal Black")
+        except Exception:
+            pass
         app.destroy()
 
 
