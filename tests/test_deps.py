@@ -196,3 +196,80 @@ def test_birefnet_requirements_come_from_the_architecture_source():
         assert mod in BN.ARCH_REQUIRES, f"{mod} dropped from ARCH_REQUIRES"
     # the boolean and the list must not drift apart
     assert BN.transformers_available() == (not BN.arch_missing())
+
+
+def test_the_source_parses_on_the_oldest_python_pyproject_promises():
+    """`requires-python` is a promise, and nothing here was checking it.
+
+    The whole project is developed on 3.12, so syntax that a 3.9 interpreter
+    rejects -- a `match` statement, or a PEP 604 `X | Y` in a file without
+    `from __future__ import annotations` -- is invisible locally and only
+    surfaces in CI, on a job nobody reads until something else breaks.
+
+    The floor is read from pyproject rather than written here, so the test
+    follows the promise instead of duplicating it: raise `requires-python`
+    and this relaxes by itself.
+
+    Two distinct failures are checked, because they fail at different times.
+    A `match` statement is a *syntax* error, caught by parsing against the
+    older grammar. A PEP 604 union in an annotation is valid syntax at every
+    version but is *evaluated* at import time -- and `str | None` only became
+    a runtime expression in 3.10 -- so it raises TypeError on import unless
+    the module carries the future import that turns annotations into strings.
+    Grammar alone would miss the second one entirely.
+    """
+    import ast
+    import os
+    import re
+
+    floor = _pyproject()["project"]["requires-python"]
+    m = re.search(r"(\d+)\.(\d+)", floor)
+    assert m, f"cannot read a version out of requires-python = {floor!r}"
+    version = (int(m.group(1)), int(m.group(2)))
+
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    paths = []
+    for sub in ("src", "tests", "tools"):
+        for dirpath, dirnames, filenames in os.walk(os.path.join(root, sub)):
+            # a vendored third-party checkout is not ours to keep compatible
+            dirnames[:] = [d for d in dirnames
+                           if d not in ("__pycache__", "DeepLSD")]
+            paths += [os.path.join(dirpath, f)
+                      for f in filenames if f.endswith(".py")]
+    assert len(paths) > 40, f"only found {len(paths)} source files -- walk is wrong"
+
+    bad_syntax, runtime_union = [], []
+    for path in paths:
+        rel = os.path.relpath(path, root).replace(os.sep, "/")
+        with open(path, encoding="utf-8") as fh:
+            src = fh.read()
+        try:
+            tree = ast.parse(src, filename=rel, feature_version=version)
+        except SyntaxError as exc:
+            bad_syntax.append(f"{rel}:{exc.lineno}: {exc.msg}")
+            continue
+        if any(isinstance(n, ast.ImportFrom) and n.module == "__future__"
+               and any(a.name == "annotations" for a in n.names) for n in tree.body):
+            continue                      # annotations are strings; never evaluated
+        def _flag(node, where):
+            for sub in ast.walk(node):
+                if isinstance(sub, ast.BinOp) and isinstance(sub.op, ast.BitOr):
+                    runtime_union.append(f"{rel}:{sub.lineno}: {where}")
+        for node in ast.walk(tree):
+            if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                args = node.args
+                for a in list(args.args) + list(args.kwonlyargs) + list(args.posonlyargs):
+                    if a.annotation:
+                        _flag(a.annotation, f"annotation of argument {a.arg!r}")
+                if node.returns:
+                    _flag(node.returns, "return annotation")
+            elif isinstance(node, ast.AnnAssign) and node.annotation:
+                _flag(node.annotation, "variable annotation")
+
+    assert not bad_syntax, (
+        f"pyproject promises {floor}, but these do not parse on "
+        f"{version[0]}.{version[1]}:\n  " + "\n  ".join(bad_syntax))
+    assert not runtime_union, (
+        f"pyproject promises {floor}, and `X | Y` is evaluated at import time "
+        f"before 3.10. Add `from __future__ import annotations` to:\n  "
+        + "\n  ".join(runtime_union))
