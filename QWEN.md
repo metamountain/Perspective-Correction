@@ -1,8 +1,19 @@
-# QWEN.md — Agent instructions (this session)
+# QWEN.md — agent operating rules
 
-### Context window
+**This file holds no status.** It used to, and by 2026-09-20 it and `CLAUDE.md`
+described two different projects — the exact "two lists that must agree will
+not" failure both files warn about. **Status lives in `CLAUDE.md`'s Ledger, and
+nowhere else.** What is left here is the part that is genuinely about *how an
+agent works in this repo*: the two coordinate rules that have been broken more
+than any other thing in the project, how to verify visual work, and what the
+tools are.
 
-- **262k tokens** configured (user raised from default on 2026-07-15).
+- **Read `CLAUDE.md` first.** It has the hard rules, how to run the tests, and
+  what is open.
+- **Findings go in `debug.md`.** It is 1383 lines — ask a subagent about it
+  rather than reading it into context.
+
+---
 
 ## GUI coordinate scaling (CRITICAL — never mix spaces)
 
@@ -30,84 +41,38 @@ hit = self.session.pick_planar_corner(fx, fy, display_scale=self._before_scale)
 ```
 
 **Rules:**
-1. **NEVER store `event.x - offset` directly into a session array.** Always divide by `_before_scale` first. The session stores full-resolution pixels; the canvas is a scaled-down preview.
-2. **NEVER draw a stored point without multiplying by `_before_scale`.** A full-res coordinate drawn at 1:1 on a 0.4× canvas lands at 40% of its intended position.
-3. **Hit-tests take `display_scale`** so the grab radius is in screen pixels, not image pixels.
-4. **When adding any new click-to-place tool**, follow the `_click_rect` pattern: convert on input, convert on draw, pass scale to hit-test.
-5. **Marker projection (H-Marker / control lines):** The projected marker position on the canvas is `canvas_x = offset + full_res_x * _before_scale`. If a refit/recompute changes the stored full-res point, the canvas redraw MUST re-apply `_before_scale`. A "correct" full-res value drawn without scale looks like the marker jumped to a wrong position. This has been broken and re-fixed 10+ times (2026-09-18: "projektion marker wurde zerstört").
+1. **NEVER store `event.x - offset` directly into a session array.** Always
+   divide by `_before_scale` first. The session stores full-resolution pixels;
+   the canvas is a scaled-down preview.
+2. **NEVER draw a stored point without multiplying by `_before_scale`.** A
+   full-res coordinate drawn 1:1 on a 0.4× canvas lands at 40 % of its intended
+   position.
+3. **Hit-tests take `display_scale`** so the grab radius is in screen pixels, not
+   image pixels.
+4. **Any new click-to-place tool follows the `_click_rect` pattern**: convert on
+   input, convert on draw, pass scale to hit-test.
+5. **Marker projection (H-Marker / control lines):** the projected marker
+   position is `canvas_x = offset + full_res_x * _before_scale`. If a refit
+   changes the stored full-res point, the redraw MUST re-apply `_before_scale`.
+   A *correct* full-res value drawn without scale looks like the marker jumped.
+   **This has been broken and re-fixed 10+ times** (2026-09-18: "projektion
+   marker wurde zerstört").
 
-**Checklist before committing ANY change that touches stored geometry or its display:**
+**Checklist before committing ANY change touching stored geometry or its display:**
 - [ ] Every `session.set_*` / array write is in full-res pixels (divided by scale)
 - [ ] Every canvas draw of a stored point multiplies by `_before_scale`
 - [ ] Every hit-test passes `display_scale=self._before_scale`
-- [ ] After a refit that changes the model, the overlay redraw uses the SAME scale chain as initial load
-- [ ] Visual check: open GUI, place a marker, confirm it stays where you clicked
+- [ ] After a refit, the overlay redraw uses the SAME scale chain as initial load
+- [ ] Visual check: open the GUI, place a marker, confirm it stays where you clicked
 
-This rule was violated in the PC Rectangle implementation (2026-09-17), causing corners to land at wrong positions. The fix is always the same: `x / _before_scale` before storing, `px * _before_scale` when drawing.
+Violated in the PC Rectangle implementation (2026-09-17), which put corners at
+wrong positions. The fix is always the same: `x / _before_scale` before storing,
+`px * _before_scale` when drawing.
 
-## Visual debugging (agent has vision, 2026-09-17)
+## SCALING RULE (global — the preview pipeline has exactly one chain)
 
-The agent can see images. Use this to **offload the user** — they should not
-have to open the GUI, take a screenshot, and paste it back just so the agent
-can check something.
-
-### When to use visual debugging proactively
-
-- **After any GUI change** (layout, overlay, marker, crop, guide): launch the
-  GUI with a test image, capture a screenshot, inspect it before reporting
-  "done". Do not ask the user to verify what you can see yourself.
-- **When diagnosing an offset/scale bug**: take a screenshot of the affected
-  pane, measure pixel positions in the image, compare against expected values
-  from the code. This replaces the old "user eyeballs it → reports back" loop.
-- **When testing correction output**: run `render_after` (or the full pipeline)
-  on a test asset, save the result as PNG, read it back and check: are walls
-  vertical? Are horizontals level? Is the crop sensible?
-- **When verifying theme/colour changes**: screenshot the panel, confirm the
-  palette is applied (no OS-default black menus, correct INK colours).
-
-### How to capture GUI screenshots
-
-```python
-# Headless-friendly: render offscreen and save
-import tkinter as tk
-root = tk.Tk()
-root.withdraw()  # don't show
-# ... build the panel, call _redraw(), then:
-panel.update_idletasks()
-# For a specific canvas widget:
-canvas.postscript(file="shot.eps", colormode="color")  # vector
-# Or PIL-based pixel grab of the whole window:
-import subprocess
-subprocess.run(["powershell", "-c",
-    "Add-Type -AssemblyName System.Windows.Forms; "
-    "$b = New-Object System.Drawing.Bitmap([System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Width, [System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Height); "
-    "$g = [System.Drawing.Graphics]::FromImage($b); "
-    "$g.CopyFromScreen([System.Windows.Forms.Screen]::PrimaryScreen.Bounds.Location, [System.Drawing.Point]::Empty, $b.Size); "
-    "$b.Save('shot.png')"])
-```
-
-Prefer the **offscreen render** path (call `_redraw` on a hidden root, grab
-canvas items programmatically) over full-screen grabs — they are deterministic
-and don't depend on window position.
-
-### Rules
-
-1. **Verify before reporting.** If you changed something visual, you must have
-   seen the result (screenshot or rendered array) before telling the user it's
-   fixed. "The code looks correct" is not sufficient for GUI work.
-2. **Don't ask the user to screenshot** unless the bug is only reproducible in
-   a live interactive session (e.g. a drag gesture that requires real mouse
-   input). For static states (initial load, after a button press, overlay
-   rendering) you can reproduce headlessly.
-3. **Save test screenshots** to `.qwen/tmp/` so they don't pollute the repo.
-4. **Use `zoom_image`** on screenshots when you need to inspect fine details
-   (marker positions, pixel-level offsets, colour values).
-
-## SCALING RULE (global, do not break)
-
-The preview pipeline has exactly **one** scale chain. Every overlay, marker,
-ruler, or guide that is drawn onto the `render_after` output must use this
-chain — never invent a second one:
+Every overlay, marker, ruler or guide drawn onto the `render_after` output uses
+this chain. Never invent a second one:
 
 ```
 original image (self.w × self.h)
@@ -119,184 +84,89 @@ preview space (sw × sh)          ← H_total maps FROM here
 final output (ow × oh)           ← this IS the array that _fit returns
 ```
 
-**Rules:**
-1. To project a point from the original image onto the `render_after` output:
-   multiply by `s`, then apply `H_total` via `cv2.perspectiveTransform`.
-   **Do NOT** multiply by any additional scale factor afterwards — `H_total`
-   already lands in final-output pixel coordinates.
-2. `_fit()` at the end of `render_after` resizes the array to fit `max_edge`.
-   Because `W.plan` already accounts for this (the output dimensions `ow, oh`
-   are post-fit), the perspectiveTransform result is directly drawable on the
-   final array. No extra `fit_s` factor.
-3. In the GUI (`_redraw`), the before/after photos are fitted to their canvas
-   boxes by `_to_photo()`. The scale from original→canvas is:
-   `canvas_scale = photo_width / self.session.w` (for before) or
-   `photo_width / out_w` (for after). Use these for any canvas-space overlay.
-4. **Never** mix the two coordinate systems. A point in "original pixels" must
-   be converted to exactly one target space before drawing.
+1. To project a point from the original image onto `render_after`: multiply by
+   `s`, then apply `H_total` via `cv2.perspectiveTransform`. **Do NOT** multiply
+   by any additional factor afterwards — `H_total` already lands in final-output
+   pixels.
+2. `_fit()` resizes the array to `max_edge`, and `W.plan` already accounts for
+   it (`ow, oh` are post-fit), so the transform result is directly drawable. No
+   extra `fit_s`.
+3. In `_redraw`, before/after photos are fitted to their canvas boxes by
+   `_to_photo()`. Original→canvas is `photo_width / self.session.w` (before) or
+   `photo_width / out_w` (after). Use these for canvas-space overlays.
+4. **Never** mix the two systems. A point in original pixels is converted to
+   exactly one target space before drawing.
 
-This rule was violated ~50 times during the H-Marker session (2026-09-17),
-each time causing offset/scale bugs in Q2 marker projection. The fix is always
+Violated ~50 times during the H-Marker session (2026-09-17). The fix is always
 the same: scale by `s`, warp by `H_total`, done.
 
-## Session changes (2026-09-17, committed)
+## Visual debugging — you have vision, use it
 
-### Loupe precision
-- **Alt-damping:** Hold Alt while dragging → loupe crop centre follows cursor at `1/LOUPE_MAG` rate. Crosshair turns cyan while active. `_loupe_center` tracks the damped point; reset on show/hide/rebuild.
-- **Instant press render:** `_loupe_move(event)` called immediately after `_loupe_show()` in both press paths (new mark + endpoint drag). No more empty glass until first motion.
-- **Alt state forwarding:** `event_generate` in `_forward` now passes `state=getattr(event, "state", 0)` so Alt survives when the pointer is over the glass (which overlaps c_before).
+The agent can see images, and since 2026-09-20 so can the **local worker**:
+`tools/worker_agent.py` exposes `view_image(path, max_edge)`, which downscales
+and attaches the picture as its own user turn. Before that the harness had no
+way to hand the worker a picture, so every question about a rendered frame was
+answered by reasoning from source — which is how most of the scaling bugs above
+survived as long as they did.
 
-### Mark delete handle
-- X-cross instead of plus in `_draw_delete_handle` (plus reads as "add"; this removes).
+**Use this to offload the user.** They should not have to open the GUI, take a
+screenshot and paste it back just so an agent can check something.
 
-### Status label (F3)
-- `_set_status` / `_set_status_extra` now write to a real `lbl_status` ttk.Label (Dim style, below the static hint, above the action row). All ~20 interaction hint texts are visible.
+**When to look, proactively:**
+- **After any GUI change** (layout, overlay, marker, crop, guide): render it,
+  look at it, *then* report done.
+- **When diagnosing an offset/scale bug**: capture the pane, measure pixel
+  positions in the image, compare against what the code says they should be.
+- **When testing correction output**: run `render_after` on a test asset, save a
+  PNG, read it back — are walls vertical, horizontals level, the crop sensible?
+- **When verifying theme/colour work**: screenshot the panel and confirm the INK
+  palette actually landed (no OS-default black menus).
 
-### SAM2 box fix
-- `_on_sam_release` stores both `_sam_box` (normalised, for drawing) and `_sam_box_px` (pixel ints, for SAM2). `_on_sam_apply` sends `box_px` to `run_subprocess`. SAM2 expects pixel coords `[x0,y0,x1,y1]`; normalised 0-1 values were interpreted as sub-pixel → whole-frame selection.
+**Rules:**
+1. **Verify before reporting.** If you changed something visual you must have
+   seen the result. "The code looks correct" is not sufficient for GUI work.
+2. **Don't ask the user to screenshot** unless the bug needs a live drag gesture.
+   Static states reproduce headlessly.
+3. **Save test screenshots to `.qwen/tmp/`** so they never reach the repo.
+4. Prefer the **offscreen render** (build on a hidden root, call `_redraw`, grab
+   the canvas) over a full-screen grab — deterministic, and independent of where
+   the window happens to sit.
 
-### Horizontal auto (yaw)
-- `min_horizontal_support`: 0.3 → **0.15** (config.py)
-- `n_hypotheses` for horizontal VP search: 3 → **6** (model.py)
-- `_plausible_horizontal_rows` angle filter: 45° → **70°** (vanishing.py)
-- Yaw activates when `correct_horizontal=True` AND `len(horiz) >= 2` AND dominant VP support ≥ 0.15.
-
-### Mask overlay controls (Q1 top-right)
-- Colour swatch button + opacity slider in the before-pane overlay bar (`_ovbar`).
-- Custom 4×4 colour picker (16 vivid presets, square Canvas swatches, opens directly below the swatch). Tkinter `colorchooser` is broken on Windows.
-- `session.mask_color` (BGR tuple) read by `render_before` → `tint_mask`.
-- Default mask alpha: 0.28 → **0.60**.
-- Mask brush default width: 10 → **60px**.
-
-### Q2 crop dimensions
-- `_after_dims` label (Dim style, top-right of after pane) shows live pixel dimensions of the crop rect. Updated on every `_refresh_crop` and initial load.
-
-### Menu theming
-- `TMenu` ttk.Style configured with theme palette (`panel`/`text`/`line`) instead of OS default black.
-
-## Prior task: read-only debug pass (complete)
-
-The read-only debug pass is **complete**. All 27 source files in `src/pc` plus
-entry points were reviewed. Findings are in `debug.md` (1124 lines). Several
-findings have since been implemented; the remainder are open proposals awaiting
-the user's decision on scope and priority.
-
-### Completed: Guide system rewrite (2026-09-16)
-
-The guide system in `gui.py` was rewritten to match the reference implementation
-(`Perspective-Correction - Kopie`). All changes verified by 31 GUI tests passing:
-
-- **Cross-pull creation:** `_on_cross_press` sets `_cross_pull` kind; drag shows
-  dashed preview (`_cross_preview`); drop over image commits via `_after_pos`,
-  discards if pointer not over image.
-- **Canvas-based guide interaction:** `_after_guide_at(x, y, iw, ih)` with 15 px
-  grab distance; `_guide_drag = (kind, idx)` tuple; no clamp during drag;
-  clamp-or-delete on release with 20 px margin.
-- **Border-zone creation from Q2:** clicking in the 15 px border zone of the
-  after-canvas creates a new guide (v if left/right zone, h if top/bottom).
-- **Crop handle dominance:** `_grab_handle` is checked **first** in
-  `_on_crop_press`, before any guide interaction. All **8** handles (4 corners +
-  4 mid-edges) take priority over guides.
-- **Cursor swap:** v-guides → `sb_h_double_arrow`, h-guides →
-  `sb_v_double_arrow` (user preference).
-- **Tag & colour:** `"after_guide"` tag, `GUIDE_GREY = "#9aa0a8"`.
-
-### Implementation status (verified against code, 2026-09-20)
-
-| ID | Description | Status |
-|---|---|---|
-| F1 | `fill_max_share` raise → warn + note | **Done** — `inpaint.py:673` returns `(bgr, note)` |
-| F2 | Auto-crop threshold too tight for review | **Done** — `review.py:74` uses `auto_crop_threshold = max(crop_max_loss, 0.30)` |
-| F3 | Size warning when output > 1.5× input | **Done** — `gui.py:953` real `lbl_status`; `_set_status` writes to it (28 call sites) |
-| F4 | Collapse three crop gates to one | **Done** — single `crop_max_loss` in config; review bumps to 30% locally |
-| F5 | Save button never disabled by warnings | **Done** — `_save()` has no state-gate; test at `test_gui.py:487` |
-| P1 | Yaw-only clamp warns instead of refusing | **Done** — `pipeline.py:208-218` pure-yaw breach warns + applies capped |
-| P2 | Surface support-gate decision in diagnostics | **Done** — `model.py:432-435` sets `diag["yaw_skipped"]` |
-| P3 | Display multiple horizontal VPs as markers | **Not done** |
-| P4 | Two-facade warning in status area | **Not done** |
-| P5 | Document + test manual-yaw bypass | **Done** — docstring at `review.py:925`; test at `test_review.py:995` |
-| gui split | 12-file composition split of gui.py (5040 lines) | **Not done** — deprioritised by user |
-| Shootout | 20-image benchmark suite | **Not done** — no `tests/shootout/` directory |
-| cli MED | `isatty()` gate blocks piped double-click | **Not done** — `cli.py:651` unchanged |
-
-### Session changes (2026-09-19 → 20)
-
-#### Dead code cleanup (committed `1c2afe6`)
-- Removed broken/one-off tools: `audit_all.py`, `check_citations.py`, `probe_gdino_birefnet.py`, `probe_gdino_sam.py`, `check_synth_jpgs.py` → `Trashcan/`
-- Moved entire `analysis/` directory (one-off outputs, scratch probes, worker settings) → `Trashcan/analysis_old`
-- Removed stale `QWEN_CC.md` (duplicate of QWEN.md with outdated info)
-- Removed unused imports: `MANUAL` (gui.py), `Optional/Tuple` (review.py)
-- `.gitignore`: added `Trashcan/`, `verworfen/`, `hpc_save/`
-
-#### M-LSD second pass in check-lines diagnostic (committed `21848b5`)
-- When primary detector ≠ mlsd, the "Check lines" overlay runs an additional M-LSD pass and draws its lines in **cyan/yellow** alongside the primary (green/orange).
-- Lets you compare both detectors' line quality on the corrected image directly.
-
-#### PC Rectangle squeeze fix (committed `8aed6dc`)
-- `planar.target_size()` now scales up (never down) so the output canvas ≥ source quad bounding box. Previously, apparent edge lengths (foreshortened by perspective) set the output size → pixel compression. Now the warp **adds** pixels for expansion, never deletes.
-- Removed disabled "pc rect (auto)" checkbox + `_on_autofacade_toggle` handler from Q4 (unreliable on multi-facade views; manual 4-corner click remains).
-
-#### H-Marker / per-facade correction model (user-confirmed)
-- **H-Marker is a per-facade tool.** It gives an exact yaw for ONE facade. On corner views with opposing VPs, the single-rotation model cannot straighten both facades simultaneously — this is expected, not a bug.
-- "horizontal auto (yaw)" (VP-based) and "horizontal marker (manuell)" are mutually exclusive in Q4.
-- PC Rectangle (manual 4-corner) is the proper tool when you need full planar control of one surface.
-
-#### CI status (2026-09-19)
-- Windows (3.9, 3.12): **passing**
-- Linux (3.9, 3.12): **failing** — pre-existing platform issue, unrelated to recent changes. Needs investigation (likely `opencv-python-headless` build or missing system libs).
-
-### Per-file findings (LOW severity, unaddressed)
-
-These are in `debug.md` under each `## src/pc/<file>` section. Highlights:
-
-- `geometry.normalize_vp` — zero-norm fallback points down, not up (harmless)
-- `model.focal_from_horizon` — dead no-op line with misleading comment
-- `lines.prepare()` — empty `masked_out` has shape `(0,)` not `(0,4)` (MED)
-- `review.py` reaches into `preview._draw_lines` private API
-- `gui.py` — ~15 inline hex literals bypass the INK theme dict
-- `gui.py` — `cb_comfy_models` initialised twice (line 3832 dead; line 4082 authoritative)
-- Colour systems in `preview.py` and `scheme.py` diverge (same semantic, different BGR values)
-
-### Write permissions (strict)
+## Write permissions (strict)
 
 | File | Permission |
 |---|---|
 | `debug.md` | **WRITE** — findings list + proposals |
-| `QWEN.md` | **WRITE** — this plan/instructions file |
-| everything else | **READ-ONLY** unless the user explicitly requests a change |
+| `QWEN.md` | **WRITE** — these operating rules |
+| `CLAUDE.md` | **WRITE** — the Ledger, after a change lands |
+| everything else | **READ-ONLY** unless the user explicitly asks for a change |
 
-### What a finding is
+## What a finding is
 
-A finding names **file + symbol/line**, states the problem, and gives a suggested
-fix. Severity: **HIGH** = likely wrong behaviour, **MED** = latent risk,
-**LOW** = style/clarity/minor. A finding is a pointer, not a verdict.
+A finding names **file + symbol/line**, states the problem, and suggests a fix.
+Severity: **HIGH** = likely wrong behaviour, **MED** = latent risk, **LOW** =
+style/clarity.
 
-### External tools / MCP servers
+**A finding is a pointer, not a verdict.** Measured 2026-09-15: of six findings
+that came back with citations, severities and copy-paste patches, **five were
+wrong**, and both HIGHs would have broken working code. Severity in a report is
+the reporter's confidence, not the defect's. Grep the names, run the arithmetic,
+*then* read the patch — the wrong ones pass the suite too.
 
-Available via `tool_search` (call with `select:<name>` or keyword query):
+## External tools / MCP servers
+
+Available via `tool_search` (`select:<name>` or a keyword query):
 
 | Server | Key tools | Use for |
 |--------|-----------|---------|
-| **context7** | `resolve-library-id`, `query-docs` | Up-to-date library/framework docs (OpenCV, Tkinter, numpy, torch). Prefer over training data for API syntax. |
-| **firecrawl** | `firecrawl_search`, `firecrawl_scrape`, `firecrawl_developer_search` | Web research when `web_fetch` gets 403/404. `developer_search` with `categories: ["developer"]` finds GitHub repos, issues, PRs, docs. |
-| **github** | `search_code`, `search_issues`, `get_file_contents`, `list_commits`, `create_pull_request` | Search code across repos, read files from remote repos, check upstream for bug reports/fixes. |
-| **playwright** | `browser_navigate`, `browser_snapshot`, `browser_click`, `browser_take_screenshot` | Browser automation: test web UIs, scrape pages that need JS, verify rendered output. |
-| **tavily** | `tavily_search`, `tavily_extract`, `tavily_research` | Web search with structured results; `research` for multi-source deep dives. |
+| **context7** | `resolve-library-id`, `query-docs` | Current library docs (OpenCV, Tkinter, numpy, torch). Prefer over training data for API syntax. |
+| **firecrawl** | `firecrawl_search`, `firecrawl_scrape`, `firecrawl_developer_search` | Web research when `web_fetch` gets 403/404. `developer_search` finds repos, issues, PRs. |
+| **github** | `search_code`, `search_issues`, `get_file_contents`, `list_commits` | Read files from remote repos, check upstream for bug reports. |
+| **playwright** | `browser_navigate`, `browser_snapshot`, `browser_take_screenshot` | Browser automation; verify rendered output. |
+| **tavily** | `tavily_search`, `tavily_extract`, `tavily_research` | Structured web search; `research` for multi-source dives. |
 
-**When to use which:**
-- "How do I call cv2.ximgproc.fldLineDetector?" → **context7** (library docs)
-- "Is there a known bug in OpenCV 4.10 LSD on Windows?" → **firecrawl** `developer_search` or **github** `search_issues`
-- "What does the reference implementation do for X?" → **github** `get_file_contents` / `search_code`
-- "Verify the rendered HTML/PDF looks right" → **playwright** screenshot
-- "Find recent papers on single-image perspective correction" → **tavily_research** or **firecrawl** with `categories: ["research"]`
-
-### Next steps (user to decide)
-
-All F1-F5 and P1/P2/P5 are **done**. Remaining:
-
-1. **CI Linux fix** — ubuntu-latest jobs failing (3.9 + 3.12); Windows passing. Investigate `opencv-python-headless` build or missing system libs.
-2. **P4** — two-facade warning in status area (small, diagnostic)
-3. **P3** — multi-VP markers in GUI (cosmetic)
-4. **Shootout suite** — 9–10 h effort; independent
-5. **cli MED** — `isatty()` gate (minor)
-6. **gui.py split** — deprioritised by user (last)
+**Which one:**
+- "How do I call `cv2.ximgproc.fldLineDetector`?" → **context7**
+- "Known bug in OpenCV 4.10 LSD on Windows?" → **firecrawl** `developer_search` / **github** `search_issues`
+- "What does the reference implementation do for X?" → **github** `get_file_contents`
+- "Find recent papers on single-image perspective correction" → **tavily_research**

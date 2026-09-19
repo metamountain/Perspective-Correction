@@ -99,12 +99,33 @@ def test_every_asset_is_processed_without_error():
 
 
 def test_corrections_stay_within_plausible_bounds():
-    """Whatever it decides, it must not propose an angle no photographer
-    would have produced, and must not throw the frame away."""
+    """A wild angle must never be one the tool would actually apply.
+
+    The bound belongs on what gets *applied*, not on the raw estimate.
+    Measured 2026-09-20 over the whole pool (`PC_TEST_ASSETS=0`):
+    `ultra-weitwinkelfassade-...webp` estimates pitch +50.4 deg -- and the
+    product is right about it, because confidence collapses to 0.07 and
+    `process()` returns SKIPPED with "low confidence (conf=0.07 < 0.40;
+    weakest: stability 0.15)". The photograph is left alone. Asserting the
+    raw number there fails a case the tool handles correctly.
+
+    So the claim is the conditional one, which is also the only one a
+    regression would break: an angle no photographer would have produced may
+    be *estimated*, but it may never arrive with enough confidence to be
+    applied. A future estimator that goes wild AND stays confident fails
+    here, which is exactly the accident worth catching.
+    """
+    gate = Settings().min_confidence
     for f in _require():
         m = _analyse_default(f)
-        assert abs(math.degrees(m.roll)) < 25.0, os.path.basename(f)
-        assert abs(math.degrees(m.pitch)) < 35.0, os.path.basename(f)
+        roll = abs(math.degrees(m.roll))
+        pitch = abs(math.degrees(m.pitch))
+        if roll < 25.0 and pitch < 35.0:
+            continue
+        assert m.confidence < gate, (
+            f"{os.path.basename(f)}: proposes roll={roll:.1f} pitch={pitch:.1f} "
+            f"at confidence {m.confidence:.2f} >= {gate:.2f} -- an implausible "
+            "angle that would actually be applied")
 
 
 def test_results_are_repeatable_on_real_files():
