@@ -107,6 +107,46 @@ def run_tests(full: bool = False) -> str:
     return summary[-1] + ("\n" + "\n".join(fails[-6:]) if fails else "")
 
 
+# Images the worker asked to look at, queued for the next user turn.  A
+# `role: "tool"` message carries text only, so an image cannot be returned the
+# way a grep result is -- it has to arrive as a user message right after.
+_PENDING_IMAGES: list[str] = []
+_MAX_IMAGES_PER_TURN = 2
+
+
+def view_image(path: str, max_edge: int = 1024) -> str:
+    """Attach a repo image to the next turn so the worker can actually see it.
+
+    The model has vision (confirmed 2026-09-20 against the running server), but
+    this harness had no way to hand it a picture, so every GUI question came
+    back reasoned from source alone.  Downscaled first: a 6000 px photograph
+    spends the context window on detail no layout question needs.
+    """
+    import base64
+    p = _safe(path)
+    if not p.is_file():
+        return f"ERROR: no such file: {path}"
+    if len(_PENDING_IMAGES) >= _MAX_IMAGES_PER_TURN:
+        return (f"ERROR: only {_MAX_IMAGES_PER_TURN} images per turn. "
+                "Look at these first, then ask for the next.")
+    try:
+        from PIL import Image
+        im = Image.open(p)
+        im = im.convert("RGB") if im.mode not in ("RGB", "L") else im
+        w, h = im.size
+        if max(w, h) > max_edge:
+            k = max_edge / max(w, h)
+            im = im.resize((max(1, int(w * k)), max(1, int(h * k))), Image.LANCZOS)
+        buf = io.BytesIO()
+        im.save(buf, format="PNG")
+        raw = buf.getvalue()
+    except Exception as e:
+        return f"ERROR: cannot read {path} as an image: {type(e).__name__}: {e}"
+    _PENDING_IMAGES.append("data:image/png;base64," + base64.b64encode(raw).decode())
+    return (f"OK: {path} ({w}x{h}, shown at max {max_edge}px) is attached to the "
+            "next message. Look at it and say what you actually see.")
+
+
 _TOOLS = [
     ("read_file", "Read a repo file with line numbers.",
      {"path": {"type": "string"}, "start": {"type": "integer"}, "end": {"type": "integer"}}, ["path"]),
@@ -118,13 +158,18 @@ _TOOLS = [
      ["path", "old", "new"]),
     ("run_tests", "Run the suite. full=true runs every module (~55 s).",
      {"full": {"type": "boolean"}}, []),
+    ("view_image", "LOOK at a repo image (screenshot, rendered output, test "
+                   "asset). You have vision: use this instead of reasoning "
+                   "about pixels from source. Max 2 per turn.",
+     {"path": {"type": "string"}, "max_edge": {"type": "integer"}}, ["path"]),
 ]
 SPEC = [{"type": "function",
          "function": {"name": n, "description": d,
                       "parameters": {"type": "object", "properties": p, "required": r}}}
         for n, d, p, r in _TOOLS]
 IMPL = {"read_file": read_file, "grep": grep,
-        "str_replace": str_replace, "run_tests": run_tests}
+        "str_replace": str_replace, "run_tests": run_tests,
+        "view_image": view_image}
 
 
 def _key() -> str | None:
@@ -237,6 +282,15 @@ def run(package: str) -> str:
             head = (out.splitlines() or [""])[0][:120]
             print(f"[{turn}] {name}({json.dumps(args)[:100]}) -> {head}")
             msgs.append({"role": "tool", "tool_call_id": c["id"], "content": out[:6000]})
+        if _PENDING_IMAGES:
+            # The picture cannot ride in the tool result, so it follows as its
+            # own user turn -- which is also why it lands after every tool
+            # result for this assistant message, never between them.
+            msgs.append({"role": "user", "content":
+                         [{"type": "text", "text": "The image(s) you asked to view:"}]
+                         + [{"type": "image_url", "image_url": {"url": u}}
+                            for u in _PENDING_IMAGES]})
+            _PENDING_IMAGES.clear()
     # Turns ran out, not room: the evidence stays.
     return _finish(msgs, f"the turn budget ({MAX_TURNS}) is spent", elide=False)
 
