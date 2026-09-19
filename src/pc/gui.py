@@ -480,6 +480,19 @@ def _icon_pil(codepoint, size, colour, emoji=False, mono=False):
         # the one coloured sticker on the bar.  Measured readable: 27x25 of ink
         # at 39 % coverage, a silhouette rather than a blob.
         ImageDraw.Draw(scratch).text((pad, pad), ch, font=font, fill=_hex_rgba(colour))
+    return _fit_ink(scratch, size)
+
+
+def _fit_ink(scratch, size):
+    """Crop *scratch* to the pixels actually drawn and centre those in a box.
+
+    Factored out of ``_icon_pil`` on 2026-09-20 so the hand-drawn keys get the
+    identical treatment. That difference was the measurable half of why the
+    palette read as two sets: a font glyph fills its box because this step
+    crops it to its ink, while the drawn ones kept whatever margin the drawing
+    code happened to leave -- 0.69 and 0.77 of the box against 1.00, which is
+    simply a smaller icon in an identical key.
+    """
     ink = scratch.getbbox()
     if ink is None:
         return None
@@ -489,6 +502,120 @@ def _icon_pil(codepoint, size, colour, emoji=False, mono=False):
         glyph.thumbnail((size, size))
     out.paste(glyph, ((size - glyph.width) // 2, (size - glyph.height) // 2), glyph)
     return out
+
+
+_DRAWN_GLYPHS = ("mark", "rect", "brush", "sam", "strike", "strip")
+
+
+def _glyph_pil(name, size, colour):
+    """One hand-drawn tool mark, in the palette's single visual language.
+
+    Why drawn at all, when ``_icon_pil`` argues for stock icons: because the
+    stock set does not contain this vocabulary. Measured on 2026-09-20, the
+    seven keys were in four languages -- two flat line diagrams, one solid
+    disc, a monochromed dinosaur emoji, and two *pictorial* font icons that
+    were also saying the wrong thing: SAM, which box-selects a building, wore
+    an eyedropper, and "strike slanted lines" wore Segoe's debug beetle. A
+    shipped icon set is consistent with itself; it is not automatically
+    consistent with the six concepts this window actually has.
+
+    So: one language for all of them. Straight strokes at
+    ``layout.glyph_stroke()``, no tapers, no highlights, no perspective on
+    anything except the one glyph whose meaning IS perspective, and every mark
+    cropped to its ink by ``_fit_ink`` so they share a footprint.
+
+    Two deliberate exceptions, both recorded rather than quietly made:
+      * ``brush`` stays a filled disc, and stays inverted. It is the one key
+        that is a swatch rather than a diagram -- the mark stands for the paint
+        it lays down (user, 2026-09-15).
+      * the Grounding DINO key keeps its dinosaur. It is a pun the user put
+        there on purpose; a previous session already traded colour for
+        coherence and stopped short of replacing it, which is the right place
+        to stop.
+    """
+    from PIL import ImageDraw
+    d_size = size * 4                       # draw large, downsample: clean edges
+    img = Image.new("RGBA", (d_size, d_size), (0, 0, 0, 0))
+    dr = ImageDraw.Draw(img)
+    ink = _hex_rgba(colour)
+    w = max(2, layout.glyph_stroke(size) * 4)
+
+    def P(fx, fy):
+        return (fx * d_size, fy * d_size)
+
+    def line(a, b):
+        dr.line([P(*a), P(*b)], fill=ink, width=w)
+
+    def dot(fx, fy, fr):
+        r = fr * d_size
+        x, y = P(fx, fy)
+        dr.ellipse([x - r, y - r, x + r, y + r], fill=ink)
+
+    if name == "mark":
+        # A drawn edge with a grip at each end: exactly the gesture, and it
+        # says which way the line leans, which the old "#" grid never did.
+        line((0.14, 0.86), (0.86, 0.14))
+        for fx, fy in ((0.14, 0.86), (0.86, 0.14)):
+            h = 0.10 * d_size
+            x, y = P(fx, fy)
+            dr.rectangle([x - h, y - h, x + h, y + h], fill=ink)
+    elif name == "rect":
+        # The one glyph allowed perspective, because perspective is its
+        # meaning: four clicked corners of a facade seen at an angle. A square
+        # here would be indistinguishable from a crop tool.
+        quad = [(0.10, 0.14), (0.90, 0.26), (0.86, 0.90), (0.14, 0.78)]
+        for i in range(4):
+            line(quad[i], quad[(i + 1) % 4])
+        for fx, fy in quad:
+            dot(fx, fy, 0.085)
+    elif name == "strike":
+        # Two leaning lines, struck through. The old beetle was Segoe's debug
+        # icon and said nothing about slanted evidence.
+        line((0.16, 0.88), (0.44, 0.12))
+        line((0.56, 0.88), (0.84, 0.12))
+        line((0.04, 0.50), (0.96, 0.50))
+    elif name == "strip":
+        # Two rulers and the span between them: the facade strip restricts
+        # which horizontals count, and the old three solid bars read as a
+        # barcode rather than as a measurement.
+        line((0.16, 0.06), (0.16, 0.94))
+        line((0.84, 0.06), (0.84, 0.94))
+        line((0.16, 0.50), (0.84, 0.50))
+        # Big enough to be an arrow. At 0.09 they disappeared at 1:1 and the
+        # glyph read as a capital H -- two rulers and a bar is a letter, two
+        # rulers and a span is a measurement, and the difference is entirely
+        # in whether the heads survive the downsample.
+        for fx, dx in ((0.16, 1), (0.84, -1)):
+            x, y = P(fx, 0.50)
+            a = 0.15 * d_size
+            dr.polygon([(x, y), (x + dx * a * 1.5, y - a), (x + dx * a * 1.5, y + a)],
+                       fill=ink)
+    elif name == "sam":
+        # Drag a box, get the subject: a marquee with a pointer inside it.
+        # Dashes drawn by hand because PIL has no dash pattern, and a marquee
+        # without them is just a rectangle.
+        x0, y0, x1, y1 = 0.06, 0.06, 0.74, 0.74
+        span = x1 - x0
+        # Three dashes a side with a real gap between them. Four at 0.16 with a
+        # 0.17 step was the first try and it rendered as a closed rectangle --
+        # a marquee whose dashes touch is just a box, and the one thing this
+        # glyph has to say is "drag a selection".
+        for i in range(3):
+            t0 = i * 0.36
+            seg = 0.20
+            line((x0 + span * t0, y0), (x0 + span * (t0 + seg), y0))
+            line((x0 + span * t0, y1), (x0 + span * (t0 + seg), y1))
+            line((x0, y0 + span * t0), (x0, y0 + span * (t0 + seg)))
+            line((x1, y0 + span * t0), (x1, y0 + span * (t0 + seg)))
+        dr.polygon([P(0.44, 0.40), P(0.44, 0.96), P(0.60, 0.80), P(0.80, 0.80)],
+                   fill=ink)
+    elif name == "brush":
+        # A swatch, not a diagram -- see the docstring.
+        dot(0.5, 0.5, 0.47)
+    else:
+        return None
+    img = img.resize((size, size), Image.LANCZOS)
+    return _fit_ink(img, size)
 
 
 def _beholder_pil(size=64):
@@ -3242,7 +3369,21 @@ class ReviewPanel(tk.Frame):
             self._palette_blank = tk.PhotoImage(width=1, height=1)
         side, gap = layout.tool_key()
 
-        def tool(codepoint, var, command, tip, invert=False, lead=False,
+        # Every key in this column is built here, and that is the point. Until
+        # 2026-09-20 three of them were assembled by hand beside this function
+        # and drifted in three ways at once, none of which is about taste:
+        #   * `highlightthickness=2` made those keys 4 px larger than the rest,
+        #     in a vertical column where the misalignment is the first thing
+        #     the eye finds;
+        #   * they lit up in INK["accent"] when held while the others lit up in
+        #     INK["line"], so "which tool am I holding" -- the single most
+        #     important state here -- had two different answers;
+        #   * their glyphs were drawn with pixel arithmetic inline
+        #     (`gs // 10`, `gs // 4`), which the hard rules forbid for exactly
+        #     this outcome: a size tuned in the window is a size no test sees.
+        # The accent won, because that is what an accent is for and two keys
+        # already used it.
+        def tool(glyph, var, command, tip, invert=False, lead=False,
                  emoji=False):
             # Inverted is for the mask brush ALONE (2026-09-15, user): it is the
             # one tool whose glyph stands for the thing it paints, so a dark
@@ -3250,8 +3391,17 @@ class ReviewPanel(tk.Frame):
             # the whole palette instead made every tool shout equally, which is
             # no emphasis at all.
             fg = INK["field"] if invert else INK["dim"]
-            img = _icon_pil(codepoint, layout.tool_glyph(), fg,
-                            emoji=emoji, mono=emoji)
+            # A name draws; a hex codepoint quotes the icon font. The font is
+            # still right for anything it says well -- the dinosaur is a pun
+            # the user put there and it stays -- but the six tool marks are
+            # drawn, because the stock set has no vocabulary for them and
+            # borrowing the nearest picture is what put an eyedropper on a
+            # building selector.
+            if _DRAWN_GLYPHS and glyph in _DRAWN_GLYPHS:
+                img = _glyph_pil(glyph, layout.tool_glyph(), fg)
+            else:
+                img = _icon_pil(glyph, layout.tool_glyph(), fg,
+                                emoji=emoji, mono=emoji)
             if img is not None:
                 self._palette_imgs.append(ImageTk.PhotoImage(img))
             b = tk.Checkbutton(bar, variable=var, command=command,
@@ -3265,7 +3415,7 @@ class ReviewPanel(tk.Frame):
                                foreground=fg,
                                activebackground=INK["dim"] if invert else INK["line"],
                                activeforeground=fg if invert else INK["text"],
-                               selectcolor=INK["dim"] if invert else INK["line"])
+                               selectcolor=INK["dim"] if invert else INK["accent"])
             # A double gap above the first tool: the load group and the tool
             # group are different kinds of thing, and one skipped pitch says so
             # without a separator line.
@@ -3274,59 +3424,14 @@ class ReviewPanel(tk.Frame):
             self._palette_btns.append(b)
             return b
 
-        # Mark: "#" glyph -- two straight lines crossed, the tool's promise.
-        from PIL import ImageDraw as _ID
-        gs = layout.tool_glyph()
-        _mk_img = Image.new("RGBA", (gs, gs), (0, 0, 0, 0))
-        _md = _ID.Draw(_mk_img)
-        fg_hex = INK["dim"] + "ff" if len(INK["dim"]) == 7 else INK["dim"]
-        lw = max(2, gs // 10)
-        m = gs // 4
-        # two verticals
-        _md.line([(m, 2), (m, gs - 2)], fill=fg_hex, width=lw)
-        _md.line([(gs - m, 2), (gs - m, gs - 2)], fill=fg_hex, width=lw)
-        # two horizontals
-        _md.line([(2, m), (gs - 2, m)], fill=fg_hex, width=lw)
-        _md.line([(2, gs - m), (gs - 2, gs - m)], fill=fg_hex, width=lw)
-        self._palette_imgs.append(ImageTk.PhotoImage(_mk_img))
-        _mk_btn = tk.Checkbutton(bar, variable=self.v_mark,
-                                 command=self._on_mark_toggle,
-                                 image=self._palette_imgs[-1],
-                                 text="", compound="center", indicatoron=False,
-                                 width=side, height=side, padx=0, pady=0,
-                                 highlightthickness=2,
-                                 highlightbackground=INK["field"],
-                                 bd=0, relief="flat",
-                                 cursor="hand2", background=INK["field"],
-                                 activebackground=INK["line"],
-                                 selectcolor=INK["accent"])
-        _mk_btn.pack(side="top", pady=(gap * 2, 0))
-        _attach_tooltip(_mk_btn, "Mark a straight edge by hand -- which way it leans\n"
-                                  "decides whether it counts as vertical or horizontal")
-        self._palette_btns.append(_mk_btn)
-        # Facade rect: four corners → perspective transform.  The icon is a
-        # simple rectangle outline, placed directly under the # mark icon.
-        _pr_img = Image.new("RGBA", (gs, gs), (0, 0, 0, 0))
-        _prd = _ID.Draw(_pr_img)
-        _prd.rectangle([m // 2, m // 2, gs - m // 2, gs - m // 2],
-                       outline=fg_hex, width=lw)
-        self._palette_imgs.append(ImageTk.PhotoImage(_pr_img))
-        _pr_btn = tk.Checkbutton(bar, variable=self.v_rect,
-                                 command=self._on_rect_toggle,
-                                 image=self._palette_imgs[-1],
-                                 text="", compound="center", indicatoron=False,
-                                 width=side, height=side, padx=0, pady=0,
-                                 highlightthickness=2,
-                                 highlightbackground=INK["field"],
-                                 bd=0, relief="flat",
-                                 cursor="hand2", background=INK["field"],
-                                 activebackground=INK["line"],
-                                 selectcolor=INK["accent"])
-        _pr_btn.pack(side="top", pady=(gap, 0))
-        _attach_tooltip(_pr_btn, "PC Rectangle: click 4 corners of a facade\n"
-                                  "(TL, TR, BR, BL) to rectify it.\n"
-                                  "Drag corners to adjust. 5th click clears.")
-        self._palette_btns.append(_pr_btn)
+        _mk_btn = tool("mark", self.v_mark, self._on_mark_toggle,
+                       "Mark a straight edge by hand -- which way it leans\n"
+                       "decides whether it counts as vertical or horizontal",
+                       lead=True)
+        _pr_btn = tool("rect", self.v_rect, self._on_rect_toggle,
+                       "PC Rectangle: click 4 corners of a facade\n"
+                       "(TL, TR, BR, BL) to rectify it.\n"
+                       "Drag corners to adjust. 5th click clears.")
         # Brush and box-select joined Mark here (2026-09-15, user: "either the
         # toolbar or the marker, I would prefer only the tool").  They were
         # text controls in the lower-left field while Mark was in both places,
@@ -3344,7 +3449,7 @@ class ReviewPanel(tk.Frame):
         # Picked by measurement, not by name -- "CircleRingBadge" sounds wrong
         # and renders as a perfectly symmetric hollow circle, while the one
         # actually called StatusCircleOuter is lopsided with a filled centre.
-        self._brush_chk = tool("E91F", self.v_stroke, self._on_stroke_toggle,
+        self._brush_chk = tool("brush", self.v_stroke, self._on_stroke_toggle,
                                "Paint a mask over regions to exclude from line "
                                "detection. Right-click or Alt+click to erase.",
                                invert=True)
@@ -3364,13 +3469,13 @@ class ReviewPanel(tk.Frame):
             "else.\nRight-click to say what to look for.",
             emoji=True)
         self._gdino_btn.bind("<Button-3>", lambda _e: self._ask_gdino_prompt())
-        self._sam_btn = tool("EF3C", self.v_sam, self._on_sam_toggle,
+        self._sam_btn = tool("sam", self.v_sam, self._on_sam_toggle,
                              "Box-select the subject with SAM; right-click "
                              "clears the prompt")
         # Strike slanted moved here from Q3 (2026-09-15, user): a one-shot
         # action on the before image's line evidence, so it belongs with the
         # other tools that act on the original.
-        self._strike_btn = tool("E9A8", None, self._strike_slanted,
+        self._strike_btn = tool("strike", None, self._strike_slanted,
                                 "Remove all lines that are neither vertical nor horizontal")
         # ROI / Facade strip: dark-light-dark vertical stripes.  Click opens a
         # popup with the two % spinboxes; the rulers on the before pane are the
@@ -3379,31 +3484,12 @@ class ReviewPanel(tk.Frame):
             self.v_roi = tk.BooleanVar(value=False)
             self.v_roi_x0 = tk.DoubleVar(value=20.0)
             self.v_roi_x1 = tk.DoubleVar(value=80.0)
-        from PIL import ImageDraw
-        _roi_img = Image.new("RGBA", (layout.tool_glyph(),) * 2, (0, 0, 0, 0))
-        _d = ImageDraw.Draw(_roi_img)
-        gs = layout.tool_glyph()
-        # three vertical stripes: text-field-text (inverted: light-dark-light)
-        sw = gs // 3
-        _dark = INK["field"] + "ff" if len(INK["field"]) == 7 else INK["field"]
-        _light = INK["text"] + "ff" if len(INK["text"]) == 7 else INK["text"]
-        _d.rectangle([0, 2, sw, gs - 2], fill=_light)
-        _d.rectangle([sw, 2, sw * 2, gs - 2], fill=_dark)
-        _d.rectangle([sw * 2, 2, gs, gs - 2], fill=_light)
-        self._palette_imgs.append(ImageTk.PhotoImage(_roi_img))
-        _roi_btn = tk.Checkbutton(bar, variable=self.v_roi,
-                                  command=self._on_roi_icon_click,
-                                  image=self._palette_imgs[-1],
-                                  text="", compound="center", indicatoron=False,
-                                  width=side, height=side, padx=0, pady=0,
-                                  highlightthickness=0, bd=0, relief="flat",
-                                  cursor="hand2", background=INK["field"],
-                                  activebackground=INK["line"],
-                                  selectcolor=INK["dim"])
-        _roi_btn.pack(side="top", pady=(gap, 0))
-        _attach_tooltip(_roi_btn, "Facade strip (ROI): restrict horizontal\n"
-                                  "evidence to one facade on corner views.")
-        self._palette_btns.append(_roi_btn)
+        # It was three solid bars, light-dark-light, which read as a barcode
+        # and said nothing about measuring. Two rulers with the span between
+        # them is the actual idea, and it is now in the same pen as the rest.
+        _roi_btn = tool("strip", self.v_roi, self._on_roi_icon_click,
+                        "Facade strip (ROI): restrict horizontal\n"
+                        "evidence to one facade on corner views.")
         # Planar left the palette (2026-09-14, "less is more"). The quad was
         # being asked to do two unrelated jobs -- rectify a flat face, and state
         # which plane the lines belong to -- and the second is answered better,

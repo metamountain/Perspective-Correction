@@ -361,6 +361,56 @@ def tool_glyph(unit=GRID):
                            # the window's own line weights
 
 
+def glyph_stroke(glyph_px=None):
+    """Pen width in px for a hand-drawn tool glyph of ``glyph_px``.
+
+    Chosen by eye, after the measurement disagreed with it -- which is the
+    part worth writing down.
+
+    A run-length median over the rendered alpha says the three icon-font keys
+    at the top of this same column (add, folder, paste) stroke at **1.0 px**
+    inside a 24 px box, and the first version of this function believed that
+    number: it was written claiming 2 px on the strength of measuring the
+    palette's two *pictorial* font glyphs, which are heavier than the rest of
+    the set and were never representative.
+
+    Drawn at 1 px against those icons, the marks vanish -- the diagonal, the
+    quad and the struck lines all read as a fainter pen (rendered both ways
+    and compared side by side at 3x, 2026-09-20). Drawn at 2 px they match.
+    The metric is not wrong so much as blind: font glyphs are antialiased, so
+    a stroke whose opaque core is one pixel carries soft shoulders either side
+    and *looks* wider, while a hard-edged drawn stroke measures exactly what
+    it is. Optical weight is what the eye matches, and no run-length median
+    reports it.
+
+    So: one number for every drawn glyph, for the same reason ``tool_glyph``
+    is one number for every key -- a 2 px mark next to a 3 px mark reads as
+    two hands, however well each is drawn -- and that number is settled by
+    looking, with the measurement recorded here as the thing that misled.
+
+    It lives here rather than in ``gui.py`` because the three hand-drawn keys
+    that drifted out of the set computed ``gs // 10`` and ``gs // 4`` inline --
+    pixel arithmetic in the window, which the hard rules forbid precisely
+    because no test can see it. This one is tested.
+    """
+    glyph_px = tool_glyph() if glyph_px is None else glyph_px
+    return max(2, int(round(glyph_px / 12.0)))
+
+
+def glyph_box(glyph_px=None):
+    """The square a glyph is drawn into before it is cropped back to its ink.
+
+    Drawing happens at this size and the result is then cropped to the pixels
+    actually drawn and re-centred on them, which is what the icon font's path
+    already does. That step is the whole reason the sets did not match: a font
+    glyph fills its box because it was cropped to its ink, while a hand-drawn
+    one kept whatever margin its author left -- measured 2026-09-20, the two
+    drawn keys spanned 0.69 and 0.77 of the box against the font's 1.00, so
+    they simply looked smaller in an identical key.
+    """
+    return tool_glyph() if glyph_px is None else glyph_px
+
+
 def mark_line_width(short_edge):
     """Screen-pixel width of a hand-drawn control line for an image shown with
     ``short_edge`` px on its short side.

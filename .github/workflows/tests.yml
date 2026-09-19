@@ -31,3 +31,34 @@ jobs:
         run: python rectify.py --doctor
       - name: run tests
         run: python tests/run_tests.py -v
+
+  # The job above runs `run_tests.py -v` with no flag, which is the FAST run —
+  # see tests/run_tests.py's own SLOW list. It deliberately skips test_gui and
+  # test_assets (real Tk windows, real photograph sweeps), which means CI has
+  # never actually executed either. "CI is green" has therefore never been a
+  # statement about the GUI or about the asset pool; this job exists so that it
+  # finally is. Windows-only and single-version, on purpose: ubuntu-latest is
+  # currently failing here for reasons that are not yet diagnosed, and this job
+  # is not the place to chase that; and test_gui opens real windows, which is a
+  # Windows-developed behaviour first. It does not gate `test` — no `needs:`,
+  # so a failure here never blocks the fast job above, and vice versa.
+  # One thing this cannot tell us in advance: whether a GitHub-hosted runner's
+  # single virtual display tolerates test_gui's off-screen
+  # geometry("<WxH>-4000+0") placement the way a real desktop does. That is
+  # unverified and cannot be verified locally — the first run of this job is
+  # the experiment, not a formality before one.
+  full-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: install
+        # requirements.txt, not a hand-written list: the two drift otherwise,
+        # and the markers there are what pick headless OpenCV off Windows.
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: run full suite
+        run: python tests/run_tests.py --full

@@ -347,3 +347,28 @@ def test_the_mark_line_thins_out_on_small_photographs():
     assert widths == [1, 1, 1, 1, 2, 2, 3, 3]
     for s in (100, 250, 500, 750, 1000, 4096):
         assert 1 <= L.mark_line_width(s) <= 3
+
+
+def test_the_drawn_glyph_pen_is_one_number_and_follows_the_glyph_size():
+    """One pen for every drawn tool mark, scaling with the key.
+
+    The palette drifted into four visual languages because three keys drew
+    themselves with pixel arithmetic inline in `gui.py` -- `gs // 10` here,
+    `gs // 4` there -- which is the thing the hard rules forbid, and the
+    reason they give is exactly what happened: a size tuned in the window is
+    a size no test can see. This is that test.
+    """
+    base = L.tool_glyph()
+    assert L.glyph_stroke() == L.glyph_stroke(base), (
+        "the default must be the tool glyph size, or the palette and the "
+        "pen can disagree without anything saying so")
+    # Never hairline: measured 2026-09-20, a 1 px mark disappears beside the
+    # antialiased icon-font keys in the same column.
+    assert L.glyph_stroke(base) >= 2
+    # Scales with the glyph, so a larger key does not get a thinner-looking
+    # mark. Not a fixed constant: that is what "one pen" has to survive.
+    assert L.glyph_stroke(base * 2) > L.glyph_stroke(base)
+    for size in (16, 24, 32, 48, 64):
+        assert L.glyph_stroke(size) >= 2, size
+        assert L.glyph_stroke(size) <= size // 4, (
+            f"a {L.glyph_stroke(size)} px pen in a {size} px glyph is a blob")
