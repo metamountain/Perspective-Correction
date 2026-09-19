@@ -373,6 +373,27 @@ features ahead of everything else.*
   committed: 15 MB of rendered output from `tools/render_synth.py`, and
   `test_assets._files()` globs `assets/*` and `assets/Horizontal/*` only, so no
   test reads it. The generator is tracked; its output is reproducible.
+- **`tools/debug_ui.py` was failing against a feature that no longer exists.**
+  It probed `app.review.v_grid` — measured: that name matches **only
+  `debug_ui.py` itself**, nowhere in `src/`. The grid overlay was retired with
+  the ruler-to-guides rewrite and the diagnostic was never updated, so the
+  documented check reported three failures and made a healthy window look
+  broken. Now probes `v_show_lines` (`gui.py:839`), the live before-pane
+  toggle. **`FAILURES: none`, `pc_errors.log` clean** — the first clean run of
+  the check this file requires. Second drift in this one file (it also watched
+  `bpc_errors.log`, a name nothing has written since the rename): **a
+  diagnostic that cries wolf is worse than none.** Delegated to the worker as a
+  spec with every name supplied; it made the edits and folded the comment
+  sensibly, and the architect ran it.
+- **`view_image` compiled and did not run** — it used `io.BytesIO` with no
+  `import io`, so it died with `NameError` at first use, and the commit adding
+  it was "verified" with `py_compile`, which cannot see that. Found by running
+  it. **A green compile is not evidence that a code path runs.** Worth
+  recording: under the broken tool the worker reported `NO IMAGE RECEIVED`
+  rather than describing the building from the filename. After the fix, on
+  `Platte.jpg` it named a Plattenbau with mosaic murals, said the verticals
+  converge going up, said the camera looks up, and spotted the silver
+  Volkswagen lower right — checked against the photograph, all four correct.
 - **This file rewritten from measurement** — see the header.
 
 **2026-09-19 → 20 (from `QWEN.md`, verified against the code)**
