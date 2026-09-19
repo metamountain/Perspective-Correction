@@ -65,7 +65,7 @@ MAX_ASSETS = int(os.environ.get("PC_TEST_ASSETS", "5"))
 # Names that must survive the cap whatever the sample says, because a dedicated
 # test is about them. Dropping one would turn its test into a silent skip -- or
 # worse, would take a *known failure* out of the suite and read as a fix.
-_ALWAYS = ("_upright.", "_skip.", "39079116")
+_ALWAYS = ("_upright.", "_skip.", "39079116", "ultra-weitwinkel")
 
 
 def _sample(files):
@@ -108,6 +108,15 @@ def test_corrections_stay_within_plausible_bounds():
     `process()` returns SKIPPED with "low confidence (conf=0.07 < 0.40;
     weakest: stability 0.15)". The photograph is left alone. Asserting the
     raw number there fails a case the tool handles correctly.
+
+    Checked in BOTH paths, because manual review is the product and review
+    relaxes other gates deliberately (`review.py:74` bumps the crop
+    threshold; P5 documents a manual-yaw bypass), so "the batch refuses it"
+    would not have been enough on its own:
+      - batch: `process()` returns SKIPPED on confidence.
+      - review: `ReviewSession.would_skip()` (review.py:980) tests the same
+        `min_confidence`, and `current_angles()` opens the sliders at
+        pitch +30.00 -- the cap, not the +50.4 estimate.
 
     So the claim is the conditional one, which is also the only one a
     regression would break: an angle no photographer would have produced may
