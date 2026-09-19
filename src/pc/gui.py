@@ -3500,6 +3500,23 @@ class ReviewPanel(tk.Frame):
                 colour = "#39ff7a" if abs(dy) <= 1.5 else "#ffb03a"
             self.c_after.create_line(ox + x0, oy + y0, ox + x1, oy + y1,
                                      fill=colour, width=1, tags="after_lines")
+        # Second pass: M-LSD in a distinct colour (cyan) so both detectors
+        # are visible for comparison.  Only when the primary is not already mlsd.
+        if self.session.settings.detector != "mlsd":
+            try:
+                seg_m, _ = _L.detect_segments(gray, min_len, "mlsd",
+                                              small, self.session.settings)
+            except Exception:
+                seg_m = None
+            if seg_m is not None and len(seg_m):
+                for x0, y0, x1, y1 in seg_m:
+                    dx, dy = x1 - x0, y1 - y0
+                    if abs(dy) >= abs(dx):
+                        colour = "#00e5ff" if abs(dx) <= 1.5 else "#76ff03"
+                    else:
+                        colour = "#00e5ff" if abs(dy) <= 1.5 else "#ffff00"
+                    self.c_after.create_line(ox + x0, oy + y0, ox + x1, oy + y1,
+                                             fill=colour, width=1, tags="after_lines")
 
     def _cross_orientation(self, event):
         """Guide kind from pointer position: 'h' or 'v'.
