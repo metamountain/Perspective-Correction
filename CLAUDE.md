@@ -84,7 +84,10 @@ left alone (see Done).
   `geometry("<WxH>-4000+0")`, pump with `update()` + `sleep(0.02)`, then
   `destroy()`. `invalid command name ..._pump` on teardown is harmless Tk noise.
 - `python tools/debug_ui.py` sweeps the window lifecycle; must end
-  `FAILURES: none` with `pc_errors.log` clean.
+  `FAILURES: none` with `pc_errors.log` clean. **It does, as of 2026-09-20** —
+  re-run after the mask-row change. Before that it had been failing on a Tk
+  variable that no longer exists; see the Ledger, and do not trust a green from
+  a diagnostic you have not checked is still pointed at something real.
 
 ## Hard rules (the ones that bite)
 
@@ -527,17 +530,22 @@ detector removed · M-LSD unblocked in the GUI interpreter.
 
 ### Repo note (measured 2026-09-20)
 
-- `D:\Coding\Perspective-Correction` is the live checkout. **`main` and
-  `origin/main` are identical** — 0 ahead, 0 behind. Everything is pushed. The
-  old note here claimed 5 unpushed commits and "a full day of work on one disk";
-  that is no longer true and was the kind of stale alarm that wastes a session.
-- Working tree carries an **uncommitted asset-pool change**: 13 tracked files
-  deleted (12 photographs plus `camden-gfx100s-16mm.jpg`) and ~15 new
-  photographs untracked in `tests/assets/Horizontal/`, plus
-  `tests/assets/Synthetic/`, `tools/render_synth.py` and three new
-  `tests/assets/sam2_masks/` PNGs. This is deliberate curation by the user, not
-  drift. **Any pool-wide number measured before it is committed is measured
-  against a different pool than any number recorded earlier in this file.**
+- `D:\Coding\Perspective-Correction` is the live checkout. It started
+  2026-09-20 level with `origin/main` and is **ahead and unpushed** by that
+  whole session's work. **Pushing was deliberately not done**: it publishes, and
+  it was never asked for. One command clears it:
+
+      git push origin main
+
+  The count is deliberately not written here. It was, for one commit, and the
+  commit that wrote "10" made it 11 — a number in a file is stale the moment
+  the file is saved. Ask git:
+
+      git log --oneline origin/main..HEAD
+- **The working tree is clean.** The asset-pool curation that was sitting in it
+  — 13 tracked photographs out, 15 in, 3 cached SAM2 masks — is committed
+  (`eebdb6a`). **Every pool-wide number in this file was measured after that**,
+  so it is a claim about the current pool and not an earlier one.
 - `Trashcan/`, `hpc_save/`, `verworfen/` and `analysis/*` are gitignored. Nothing
   is ever hard-deleted here — things move to `Trashcan/`, which is why the
   `worker_agent.py` mistake was recoverable.
