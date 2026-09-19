@@ -58,3 +58,10 @@ models/*.tar
 Trashcan/
 verworfen/
 hpc_save/
+
+# Rendered synthetic scenes: `tools/render_synth.py` writes them here for
+# visual inspection, and `test_assets._files()` does not glob this directory
+# (it takes `assets/*` and `assets/Horizontal/*` only), so nothing in the
+# suite reads them. 15 MB of output reproducible from one command does not
+# belong in history -- run the generator instead.
+tests/assets/Synthetic/
