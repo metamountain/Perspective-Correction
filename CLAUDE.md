@@ -59,7 +59,7 @@ left alone (see Done).
   | command | what it runs | measured 2026-09-20 |
   |---|---|---|
   | `python tests/run_tests.py` | fast — skips `test_gui`, `test_assets` | **283 tests, 0 failed, ~19 s** |
-  | `python tests/run_tests.py --full` (or `PC_FULL=1`) | everything, 23 modules | **327 tests, 0 failed, 2 skipped, ~64 s** |
+  | `python tests/run_tests.py --full` (or `PC_FULL=1`) | everything, 23 modules | **328 tests, 0 failed, 2 skipped, ~65 s** |
 
   The fast run says so on exit (`!! FAST RUN -- did NOT run: test_assets,
   test_gui`). **Green there does not mean green.** `-s` forces the old sequential
@@ -166,8 +166,8 @@ declared `mlsd` extra) is in the **system** interpreter, so
 
 ## Ledger — the only place status lives
 
-**Suite, measured 2026-09-20 at `229a050`+: `--full` = 327 tests, 0 failed,
-2 skipped, 64.2 s. The suite is green for the first time in this file's history.** Fast run
+**Suite, measured 2026-09-20 at `fa88c86`+: `--full` = 328 tests, 0 failed,
+2 skipped, 65.4 s. The suite is green for the first time in this file's history.** Fast run
 = 283 in ~19 s and is not the suite. **And the honest one:
 `PC_TEST_ASSETS=0 python tests/run_tests.py test_assets` over the whole
 photograph pool = 11 tests, 0 failed, 2 skipped, 133.7 s** — `--full` still
@@ -225,10 +225,20 @@ features ahead of everything else.*
      the 3.9 grammar with no runtime-evaluated unions (64 files) — and the job
      fails on 3.9 *and* 3.12 anyway, so a syntax floor was never a candidate.
      Pinned by `test_the_source_parses_on_the_oldest_python_pyproject_promises`.
-   - Still open, in rough order of suspicion: a required package the doctor gate
-     (`python rectify.py --doctor`, step 2) finds on Windows and not on a bare
-     Linux runner; case-sensitivity on a path that Windows forgives; a
-     non-ASCII asset filename; a `cv2` call absent from `opencv-python-headless`.
+   - **Ranked by a read of every reachable path** (subagent, all claims cited):
+     **(1)** `requirements.txt:2-3` is the *only* line in the whole reachable
+     path where Linux and Windows install genuinely different packages -
+     `opencv-python-headless` vs `opencv-python` - and `cv2` is the one import
+     marked `hard=True` (`deps.py:45`), the only kind that makes
+     `rectify.py --doctor` exit 2 at CI step 2. Version-independent and
+     OS-specific: it fits the failure exactly. **(2)** the `ProcessPoolExecutor`
+     start method, now pinned to `spawn` (see Done) - one variable removed.
+   - **Ruled out with evidence**, so nobody repeats them: no fast-run module
+     imports tkinter or `pc.gui` (only `test_gui`/`test_assets` do, and both are
+     SLOW); no `cv2.imshow`/`namedWindow`/`waitKey` anywhere; no case-sensitivity
+     mismatch in any reachable import or path; the one non-ASCII asset lives
+     under `Horizontal/` and is read only by `test_assets`, which CI never runs;
+     every optional backend reports `[no]` without raising.
    **Whoever picks this up: read the log first.** Every hypothesis above is an
    inference from the repo, and this project's own rule is that a document
    claiming something is not evidence of it.
@@ -404,7 +414,50 @@ features ahead of everything else.*
   (`gui.py:3386`), and **h-marker** (`gui.py:1002`) was missing from the table
   entirely. **`docs/ui.png` still shows the retired grid** and wants re-taking —
   noted in the README itself rather than silently left wrong.
-- **This file rewritten from measurement** — see the header.
+- **[bug, found by looking] The mask row was clipped, and no test could see
+  it.** Eleven widgets sat in one `grid(row=0, ...)`; **measured at the
+  1920x1080 window floor the line asked for 1035 px of a 910 px field**, so
+  "Clear Mask" rendered as "Cle". It overflowed at 2560x1400 too. Found in a
+  screenshot, not by the suite - and the suite *could not* have found it:
+  `test_the_save_button_is_reachable_at_every_window_size` asserts every child
+  has `winfo_width() > 0`, which is the right question for a control that never
+  got packed and **the wrong one for a control that did**. Tk maps a child that
+  does not fit and reports its full requested width; only the container's
+  allocation tells the truth. Split into two packed sub-frames by meaning -
+  where the mask **comes from** above, what is **done to it** below - rather
+  than two grid rows, because grid columns are shared between rows and a 189 px
+  checkbutton in column 0 would widen the "mask" label's column with it. Now
+  506 px and 529 px in 910. Pinned by
+  `test_no_tools_field_row_asks_for_more_width_than_it_gets`, which asks the
+  container. **That test took three attempts to give teeth**, and the first two
+  were caught only by reverting the fix and watching them stay green: filtering
+  out containers whose children are not all at one y threw away the offending
+  frame, and grouping by `winfo_y()` split one grid row into one group per
+  widget, because `sticky="w"` centres children vertically. It groups by
+  `grid_info()["row"]` now. **A test that cannot fail is not a test, and the
+  only way to know is to run it against the bug.**
+- **`docs/ui.png` re-taken** - the committed one still showed the retired
+  measuring grid. Rendered the real window at 1920x1080 with an asset loaded and
+  grabbed it; it now shows the cross, the corner tool palette, the Lines/Mask
+  and Check-lines switches, the h-marker and yaw controls, and the
+  Review/Unattended bar as they actually are.
+- **The test runner's start method is pinned to `spawn`.** It was left to the
+  platform, and the platform does not agree: **Windows spawns, Linux forks.**
+  Forking inherits a live interpreter - imported C extensions, handles, threads
+  - while spawning re-imports clean, and it is the only start-method-sensitive
+  construct in the whole run. **This does not claim to be the cause of the
+  failing Linux job**; it removes one of the two places the platforms genuinely
+  differ, so the next person reading that log has one fewer variable. Suite
+  unchanged on Windows at 328/0/2, which is expected - Windows already spawned.
+- **[hazard, NOT changed - the user's own setting] The GUI writes into the
+  off-limits sibling checkout.** The remembered output folder is
+  `D:/Coding/Batch-Perspective-Correction/tests/assets/Horizontal`. That is the
+  stale duplicate this file tells everyone not to touch, and it is where every
+  **Save** in the review panel currently lands. It is a stored preference, not a
+  default in code (grepping `src/` for the path finds nothing), so it has not
+  been rewritten - silently changing where someone's work is saved is worse than
+  telling them. **Check it before the next review session.**
+- **This file rewritten from measurement** - see the header.
 
 **2026-09-19 → 20 (from `QWEN.md`, verified against the code)**
 
