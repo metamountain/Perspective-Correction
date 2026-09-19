@@ -18,6 +18,8 @@ suite is evidence, not permission.
 
 from __future__ import annotations
 
+import base64
+import io
 import json
 import os
 import pathlib
@@ -122,7 +124,6 @@ def view_image(path: str, max_edge: int = 1024) -> str:
     back reasoned from source alone.  Downscaled first: a 6000 px photograph
     spends the context window on detail no layout question needs.
     """
-    import base64
     p = _safe(path)
     if not p.is_file():
         return f"ERROR: no such file: {path}"
