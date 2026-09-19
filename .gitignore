@@ -49,7 +49,16 @@ models/*.tar
 
 .idea/
 .vscode/
-.qwen/
+
+# The worker's own directory stays local -- `settings.json` is machine state
+# and `tmp/` is where screenshots are told to land -- EXCEPT its skills, which
+# are project knowledge and were invisible to everyone because of this line.
+# 27 of them, ~200 KB of markdown, several recording lessons this repo paid
+# for twice (the `_build` rebuild trap, canvas coordinate spaces, runtime
+# theme switching). Scanned for secrets before un-ignoring; the API key lives
+# in ~/.qwen/settings.json, not here.
+.qwen/*
+!.qwen/skills/
 
 # local backups taken before a large doc edit; the content is in git history
 *.bak
