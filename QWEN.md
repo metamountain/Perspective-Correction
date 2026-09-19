@@ -139,7 +139,7 @@ This rule was violated ~50 times during the H-Marker session (2026-09-17),
 each time causing offset/scale bugs in Q2 marker projection. The fix is always
 the same: scale by `s`, warp by `H_total`, done.
 
-## Session changes (2026-09-17, uncommitted)
+## Session changes (2026-09-17, committed)
 
 ### Loupe precision
 - **Alt-damping:** Hold Alt while dragging → loupe crop centre follows cursor at `1/LOUPE_MAG` rate. Crosshair turns cyan while active. `_loupe_center` tracks the damped point; reset on show/hide/rebuild.
@@ -201,7 +201,7 @@ The guide system in `gui.py` was rewritten to match the reference implementation
   `sb_v_double_arrow` (user preference).
 - **Tag & colour:** `"after_guide"` tag, `GUIDE_GREY = "#9aa0a8"`.
 
-### Implementation status (verified against code, 2026-09-17)
+### Implementation status (verified against code, 2026-09-20)
 
 | ID | Description | Status |
 |---|---|---|
@@ -218,6 +218,32 @@ The guide system in `gui.py` was rewritten to match the reference implementation
 | gui split | 12-file composition split of gui.py (5040 lines) | **Not done** — deprioritised by user |
 | Shootout | 20-image benchmark suite | **Not done** — no `tests/shootout/` directory |
 | cli MED | `isatty()` gate blocks piped double-click | **Not done** — `cli.py:651` unchanged |
+
+### Session changes (2026-09-19 → 20)
+
+#### Dead code cleanup (committed `1c2afe6`)
+- Removed broken/one-off tools: `audit_all.py`, `check_citations.py`, `probe_gdino_birefnet.py`, `probe_gdino_sam.py`, `check_synth_jpgs.py` → `Trashcan/`
+- Moved entire `analysis/` directory (one-off outputs, scratch probes, worker settings) → `Trashcan/analysis_old`
+- Removed stale `QWEN_CC.md` (duplicate of QWEN.md with outdated info)
+- Removed unused imports: `MANUAL` (gui.py), `Optional/Tuple` (review.py)
+- `.gitignore`: added `Trashcan/`, `verworfen/`, `hpc_save/`
+
+#### M-LSD second pass in check-lines diagnostic (committed `21848b5`)
+- When primary detector ≠ mlsd, the "Check lines" overlay runs an additional M-LSD pass and draws its lines in **cyan/yellow** alongside the primary (green/orange).
+- Lets you compare both detectors' line quality on the corrected image directly.
+
+#### PC Rectangle squeeze fix (committed `8aed6dc`)
+- `planar.target_size()` now scales up (never down) so the output canvas ≥ source quad bounding box. Previously, apparent edge lengths (foreshortened by perspective) set the output size → pixel compression. Now the warp **adds** pixels for expansion, never deletes.
+- Removed disabled "pc rect (auto)" checkbox + `_on_autofacade_toggle` handler from Q4 (unreliable on multi-facade views; manual 4-corner click remains).
+
+#### H-Marker / per-facade correction model (user-confirmed)
+- **H-Marker is a per-facade tool.** It gives an exact yaw for ONE facade. On corner views with opposing VPs, the single-rotation model cannot straighten both facades simultaneously — this is expected, not a bug.
+- "horizontal auto (yaw)" (VP-based) and "horizontal marker (manuell)" are mutually exclusive in Q4.
+- PC Rectangle (manual 4-corner) is the proper tool when you need full planar control of one surface.
+
+#### CI status (2026-09-19)
+- Windows (3.9, 3.12): **passing**
+- Linux (3.9, 3.12): **failing** — pre-existing platform issue, unrelated to recent changes. Needs investigation (likely `opencv-python-headless` build or missing system libs).
 
 ### Per-file findings (LOW severity, unaddressed)
 
@@ -268,8 +294,9 @@ Available via `tool_search` (call with `select:<name>` or keyword query):
 
 All F1-F5 and P1/P2/P5 are **done**. Remaining:
 
-1. **P4** — two-facade warning in status area (small, diagnostic)
-2. **P3** — multi-VP markers in GUI (cosmetic)
-3. **Shootout suite** — 9–10 h effort; independent
-4. **cli MED** — `isatty()` gate (minor)
-5. **gui.py split** — deprioritised by user (last)
+1. **CI Linux fix** — ubuntu-latest jobs failing (3.9 + 3.12); Windows passing. Investigate `opencv-python-headless` build or missing system libs.
+2. **P4** — two-facade warning in status area (small, diagnostic)
+3. **P3** — multi-VP markers in GUI (cosmetic)
+4. **Shootout suite** — 9–10 h effort; independent
+5. **cli MED** — `isatty()` gate (minor)
+6. **gui.py split** — deprioritised by user (last)
