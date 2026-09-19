@@ -13,13 +13,16 @@ fire-and-forget run over a folder is still there, one button along, but it is no
 longer the default gesture: when a person is looking at every result, refusing a
 correction costs more than attempting one.
 
-![the review window: detected lines on the original, the corrected frame with a measuring grid, and the tools that change either](docs/ui.png)
+![the review window: detected lines on the original, the corrected frame, and the tools that change either](docs/ui.png)
 
 Left, the original with what the estimator sees — green verticals it used,
 yellow ones it rejected, blue horizontals, and the magenta horizon implied by the
-fit. Right, the result under a grid you can measure it against: a true vertical
-should run along a grid line. The tools that change either sit on the picture
-they act on.
+fit. Right, the result, with grey guides you drag out of the black cross and lay
+against an edge: a true vertical should run parallel to one. The tools that
+change either sit on the picture they act on.
+
+*(`docs/ui.png` predates the guides and still shows the retired measuring grid;
+it wants re-taking.)*
 
 Descended from [chsasank/Image-Rectification](https://github.com/chsasank/Image-Rectification),
 rewritten after measuring what that code actually does
@@ -30,7 +33,7 @@ taken from either.
 ## Install
 
     pip install -r requirements.txt        run it from this folder
-    pip install -e .                       or install it, and get the `bpc` command
+    pip install -e .                       or install it, and get the `pc` command
 
 Python 3.9+. numpy, OpenCV, Pillow, piexif -- and nothing else. The GUI
 additionally needs Tkinter, which ships with the python.org Windows installer
@@ -82,7 +85,7 @@ only a running ComfyUI and an API-format workflow. BiRefNet masking
     python rectify.py "D:\Fotos" -n -v               decide, write nothing, explain
     python rectify.py --gui                          graphical batch window
 
-or double-click `run_bpc_gui.bat` on Windows.
+or double-click `Perspective Correction.bat` on Windows.
 
 ### In the review window
 
@@ -93,9 +96,10 @@ Save. **Unattended** is the old fire-and-forget run, kept for when you want it.
 |---|---|
 | **Mask brush** | paint the region the fit should ignore — a stroke over the parked cars says "not the building" directly. Left drag paints, right drag erases, `Alt`+right drag sizes the pen |
 | **Mark vertical / horizontal** | draw a line you know is truly vertical (or horizontal) and let it steer the fit |
-| **Planar** | place four corners of a flat face to rectify that face instead |
-| **ROI x** | two draggable rulers limiting which horizontals feed the yaw, for corner views |
-| **Grid** / **Check lines** | on the corrected pane: a measuring grid, and a re-run of the detector *on the result* — green where a line came out truly vertical, red where it still leans |
+| **PC Rectangle** | click the four corners of a facade to rectify that surface instead |
+| **Facade strip (ROI)** | two draggable rulers limiting which horizontals feed the yaw, for corner views |
+| **Check lines** | on the corrected pane, a re-run of the detector *on the result* — green where a line came out truly vertical, red where it still leans. When the primary detector is not M-LSD, a second M-LSD pass is drawn in cyan/yellow beside it |
+| **h-marker** | draw one line along a facade's horizontal and take the yaw from it. Per-facade by design: on a corner view the single-rotation model cannot straighten both facades at once. Mutually exclusive with "horizontal auto (yaw)" |
 | **Lines** / **Mask** | what the detector saw on the original, and the ignored region |
 
 The settings under the panel are titled *defaults every photograph opens with* —

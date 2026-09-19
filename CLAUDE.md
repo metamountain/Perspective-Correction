@@ -394,6 +394,16 @@ features ahead of everything else.*
   `Platte.jpg` it named a Plattenbau with mosaic murals, said the verticals
   converge going up, said the camera looks up, and spotted the silver
   Volkswagen lower right — checked against the photograph, all four correct.
+- **`README.md` carried the same class of staleness** — it is user-facing, so it
+  matters more than this file does. Fixed against the code: the installed
+  command is **`pc`**, not `bpc` (`pyproject.toml:54`); the launcher is
+  **`Perspective Correction.bat`**, and `run_bpc_gui.bat` does not exist; the
+  **Grid** overlay it documented is gone (see the `debug_ui` entry above) and
+  the corrected pane now carries pull-out grey guides instead; **Planar** is
+  **PC Rectangle** (`gui.py:3308`), **ROI x** is **Facade strip (ROI)**
+  (`gui.py:3386`), and **h-marker** (`gui.py:1002`) was missing from the table
+  entirely. **`docs/ui.png` still shows the retired grid** and wants re-taking —
+  noted in the README itself rather than silently left wrong.
 - **This file rewritten from measurement** — see the header.
 
 **2026-09-19 → 20 (from `QWEN.md`, verified against the code)**
