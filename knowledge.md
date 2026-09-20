@@ -66,7 +66,8 @@ more robustly than partition-after-detect?
   ~~`v=0.94, h1=0.61, h2=0.36`~~ **`v=0.82, h1=0.60, h2=0.15`** (corrected
   2026-09-20 — the struck figures were measured at full resolution, which the
   estimator never uses; see below) — a double-planed frame, though less confidently
-  than the old numbers implied. On `lochfassade.jpg`
+  than the old numbers implied, and see below for why the two assets' `h2` figures do
+  not form a ratio worth quoting. On `lochfassade.jpg`
   (CLAUDE.md Ledger, 2026-09-13) the second plane's support was only `0.045` despite
   the corner being visually obvious — the automatic *post-hoc* split under-detects a
   narrow or steeply foreshortened second facade. That is the concrete evidence for
@@ -90,17 +91,31 @@ more robustly than partition-after-detect?
   Nothing drifted — it was never measured the way the estimator runs.
 
   **At the resolution the estimator actually uses, this asset's second plane has
-  support 0.147, not 0.36.** `lochfassade.jpg` is unaffected: it measures
-  `v=0.943, h1=0.933, h2=0.045` at BOTH resolutions, because it is already inside
-  `detect_max_edge` and never gets downscaled.
+  support 0.147, not 0.36.** `lochfassade.jpg` never meets `analysis_gray`'s resize
+  at all — 1010x568 is already inside `detect_max_edge`, so its `v=0.943, h1=0.933,
+  h2=0.045` is both its native and its production reading.
 
-  **So the paragraph above compares two different things**, and the comparison it
-  draws is weaker than it reads: 0.045 against 0.147 is a 3.3x gap, not the 8x that
-  0.045 against 0.36 suggests. The direction of the argument survives -- the post-hoc
-  split really does report far less support for `lochfassade`'s obvious second facade
-  than for `Alte_Scheune`'s -- but **anyone quantifying that gap must use 0.147**, and
-  the case for facade-outline-first rests on a narrower margin than §1 has been
-  claiming.
+  **So the paragraph above compares two different things — and a follow-up sweep says
+  the ratio between them is not a quantity worth quoting at all.** The obvious worry
+  was that `Alte_Scheune` is downscaled 0.40x on the production path and `lochfassade`
+  is not touched, so the two are not on equal footing. Measured against long edge:
+
+      Alte_Scheune (4032x3024)   4032: h2=0.358   2400: 0.184   1600: 0.147  <- production
+                                 1010: 0.249       800: 0.257    600: 0.173
+      lochfassade  (1010x568)    1010: 0.045  <- production
+                                  800: 0.088       600: 0.117
+
+  `h2` is **not monotonic in resolution and does not move in one direction**:
+  downscaling costs `Alte_Scheune` support down to 1600 and then hands some back,
+  while it *raises* `lochfassade`'s 2.6x. At a matched 1010 long edge the gap is 5.5x,
+  at production 3.3x, at 600 only 1.5x. **Every multiplier this file has ever quoted —
+  8x, and the 3.3x written here earlier today — is an artifact of which scale was
+  picked.** What survives is only the direction: `Alte_Scheune`'s second plane is
+  better supported than `lochfassade`'s at every resolution tested. **The support
+  ratio is not a stable measurement, so §1's case cannot be built on one**; if this
+  goal is ever taken up, the comparison has to be round-trip error before and after,
+  on the production path, not a support figure. `0.147` and `0.045` are what the
+  estimator sees and are the only two numbers here that mean anything.
 
   **The transferable lesson, which cost two agent passes to learn:** a support number
   measured on a full-resolution image is not a number about this estimator. Every
