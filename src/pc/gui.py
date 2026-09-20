@@ -1247,10 +1247,10 @@ class ReviewPanel(tk.Frame):
         # trace added there would stack up one more copy each time.  It is the
         # variable that is watched rather than the scale's `command`, because a
         # `ttk.Scale` fires that only when the widget itself is moved: a plain
-        # `v_pixel_ref.set(...)` moved the slider and left `settings` behind.
-        if getattr(self, "v_pixel_ref", None) is None:
-            self.v_pixel_ref = tk.DoubleVar(value=self.settings.pixel_reference_edge)
-            self.v_pixel_ref.trace_add("write", lambda *_a: self._apply_pixel_ref())
+        # `v_keep_px.set(...)` moved the slider and left `settings` behind.
+        if getattr(self, "v_keep_px", None) is None:
+            self.v_keep_px = tk.DoubleVar(value=self.settings.keep_pixels)
+            self.v_keep_px.trace_add("write", lambda *_a: self._apply_keep_px())
 
         # Row 0: horizontal marker (manuell) — yaw from hand-drawn lines.
         _hm = ttk.Checkbutton(ctl, text="h-marker",
@@ -1286,32 +1286,50 @@ class ReviewPanel(tk.Frame):
             self._yaw_scale.configure(state="disabled")
             self._yaw_spin.configure(state="disabled")
 
-        # Row 2: pixel reference -- which edge of a foreshortened facade keeps
-        # its sampling.  It only bites while a yaw is being applied, so it sits
-        # under the switch that decides that and follows its state.  Built by
-        # hand rather than through `_slider`, whose command is wired to
-        # `_on_slider` (angles only) and would never reach `settings`.  The
-        # write lives on the variable's trace, set up with the variable above.
-        ttk.Label(ctl, text="pixel reference", width=18).grid(row=2, column=0, sticky="w")
-        self._pixel_ref_scale = ttk.Scale(ctl, from_=0.0, to=1.0,
-                                          variable=self.v_pixel_ref,
-                                          orient="horizontal")
-        self._pixel_ref_scale.grid(row=2, column=1, sticky="ew", padx=6)
-        _attach_tooltip(
-            self._pixel_ref_scale,
-            "Which edge of a foreshortened facade keeps its pixels.\n"
-            "Left = the near edge keeps 1:1 (largest output, no detail lost).\n"
-            "Right = the far edge is the reference (smallest output, the near "
-            "edge loses resolution).\n"
-            "Applies whenever a yaw is being corrected -- from horizontal "
-            "auto, from the h-marker, or from the yaw slider by hand.")
+        # Row 2: how much resolution the yaw warp may throw away.  It only
+        # bites while a yaw is being applied, so it sits under the switch that
+        # decides that and follows its state.  Built by hand rather than through
+        # `_slider`, whose command is wired to `_on_slider` (angles only) and
+        # would never reach `settings`.  The write lives on the variable's
+        # trace, set up with the variable above.
+        ttk.Label(ctl, text="detail (px kept)", width=18).grid(
+            row=2, column=0, sticky="w")
+        self._keep_px_scale = ttk.Scale(ctl, from_=0.0, to=1.0,
+                                        variable=self.v_keep_px,
+                                        orient="horizontal")
+        self._keep_px_scale.grid(row=2, column=1, sticky="ew", padx=6)
+        # A readout in the spinbox column, because the number alone says
+        # nothing: the point of the control is which END you are near.
+        self._keep_px_read = ttk.Label(ctl, text="", width=7, anchor="e")
+        self._keep_px_read.grid(row=2, column=2, sticky="e", padx=(6, 0))
+        _help = (
+                 "How much detail the straightening keeps.\n"
+                 "\n"
+                 "1 = full detail. Nothing is thrown away; every part\n"
+                 "stays at least 1:1 with the original. Largest file.\n"
+                 "0 = smallest file. The near end of a slanted facade is\n"
+                 "shrunk, losing about 17% of its fine detail.\n"
+                 "\n"
+                 "Why it exists: squaring a facade that runs away from\n"
+                 "the camera stretches its far end five to seven times.\n"
+                 "Fitting that back down squeezes the NEAR end -- the\n"
+                 "half that was closest and holds the real detail.\n"
+                 "\n"
+                 "Size is the price, not the trade: turning it up costs\n"
+                 "a bigger file and buys back detail. It never crops.\n"
+                 "\n"
+                 "Does nothing until a yaw is active: horizontal auto\n"
+                 "(yaw), the h-marker, or the yaw slider by hand.")
+        _attach_tooltip(self._keep_px_scale, _help)
+        _attach_tooltip(self._keep_px_read, _help)
         if not self.settings.correct_horizontal:
-            self._pixel_ref_scale.configure(state="disabled")
+            self._keep_px_scale.configure(state="disabled")
+        self._update_keep_px_read()
         # The variable outlives the session; a fresh session starts at the
         # config default.  Push the shown value through so what the slider says
         # is what the save uses, on the second photograph as on the first.
         if self.session is not None:
-            self._apply_pixel_ref(redraw=False)
+            self._apply_keep_px(redraw=False)
 
         # Rows 3-5: roll, pitch, focal sliders.
         self._slider(ctl, 3, "roll (level)", self.v_roll, -20, 20, "deg", 0.1, "%.2f")
@@ -1851,7 +1869,16 @@ class ReviewPanel(tk.Frame):
             self.lbl_comfy.configure(text="")
         self._schedule_redraw()
 
-    def _apply_pixel_ref(self, redraw=True):
+    def _update_keep_px_read(self):
+        """Name the end you are near, because "0.50" on its own explains nothing."""
+        lbl = getattr(self, "_keep_px_read", None)
+        if lbl is None:
+            return
+        v = float(self.v_keep_px.get())
+        lbl.configure(text="max px" if v >= 0.995 else
+                           "min px" if v <= 0.005 else f"{v:.2f}")
+
+    def _apply_keep_px(self, redraw=True):
         """The session owns the settings the save reads, exactly as `_apply_fill`.
 
         Reached from the variable's trace, so it also runs with no photograph
@@ -1859,11 +1886,12 @@ class ReviewPanel(tk.Frame):
         the canvases have no size yet there, and a redraw that early only
         spends the starved-canvas retry budget.
         """
+        self._update_keep_px_read()
         s = self.session
         if s is None:
             return
         s.settings = s.settings.replace(
-            pixel_reference_edge=float(self.v_pixel_ref.get()))
+            keep_pixels=float(self.v_keep_px.get()))
         if redraw:
             self._schedule_redraw()
 
@@ -1916,9 +1944,9 @@ class ReviewPanel(tk.Frame):
         state = "normal" if on else "disabled"
         self._yaw_scale.configure(state=state)
         self._yaw_spin.configure(state=state)
-        # The pixel reference only has an effect while a yaw is applied, so it
-        # is greyed out with the yaw it belongs to rather than left live and inert.
-        self._pixel_ref_scale.configure(state=state)
+        # The detail dial only has an effect while a yaw is applied, so it is
+        # greyed out with the yaw it belongs to rather than left live and inert.
+        self._keep_px_scale.configure(state=state)
         if on and self.session.mode == AUTO:
             self.session.refit()
             self._sync_from_session()

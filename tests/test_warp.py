@@ -154,8 +154,8 @@ def test_max_inscribed_rect_of_a_degenerate_quad_is_none():
     assert W.max_inscribed_rect(quad, 1.5) is None
 
 
-def test_the_pixel_reference_dial_trades_canvas_for_detail_and_zero_loses_none():
-    """`pixel_reference_edge` is the one knob over that trade, and it must work.
+def test_the_keep_pixels_dial_trades_canvas_for_detail_and_one_loses_none():
+    """`keep_pixels` is the one knob over that trade, and it must work.
 
     ``H = K R K^-1`` at a large yaw inflates the receding edge five- to
     sevenfold, and the plan then scales the output back so the facade keeps
@@ -184,18 +184,18 @@ def test_the_pixel_reference_dial_trades_canvas_for_detail_and_zero_loses_none()
         H = W.build(w, h, f, np.radians(1.0), np.radians(6.0), yaw)
 
         seen = []
-        for dial in (0.0, 0.5, 1.0):
+        for dial in (1.0, 0.5, 0.0):        # most pixels -> fewest
             st = Settings(correct_horizontal=True)
-            st.pixel_reference_edge = dial
+            st.keep_pixels = dial
             plan = W.plan(w, h, H, st, yaw=yaw)
             assert plan is not None, f"no plan at yaw {yaw_deg}, dial {dial}"
             seen.append((W.min_magnification(plan[0], w, h, plan[1], plan[2]),
                          plan[1] * plan[2]))
 
         assert seen[0][0] >= 0.99, (
-            f"yaw {yaw_deg} deg at dial 0.0: the near edge is sampled at "
-            f"{seen[0][0]:.3f}. Dial 0 means the short edge is the pixel "
-            f"reference, so that is photographed detail being discarded")
+            f"yaw {yaw_deg} deg at keep_pixels=1.0: the near edge is sampled "
+            f"at {seen[0][0]:.3f}. keep_pixels=1 means keep every pixel, so "
+            f"that is photographed detail being discarded")
 
         if seen[2][0] < 0.99:          # this yaw actually exercises the trade
             bit = True
@@ -206,10 +206,10 @@ def test_the_pixel_reference_dial_trades_canvas_for_detail_and_zero_loses_none()
                 f"yaw {yaw_deg} deg: the canvas is not monotonic in the dial: "
                 f"{[b for _, b in seen]}")
             assert seen[0][1] > seen[2][1], (
-                f"yaw {yaw_deg} deg: dial 0 kept more detail than dial 1 "
+                f"yaw {yaw_deg} deg: keep_pixels=1 kept more detail than 0 "
                 f"without costing a single pixel of canvas, which cannot be true")
 
-    assert bit, ("no yaw in the sweep downsampled even at dial 1.0, so this test "
+    assert bit, ("no yaw in the sweep downsampled even at keep_pixels=0, so this "
                  "cannot fail and is not testing anything -- pick a harder case")
 
 

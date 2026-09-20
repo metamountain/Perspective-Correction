@@ -64,6 +64,37 @@ builtins.SkipTest = _Skip
 sys.modules[__name__].Skip = _Skip
 
 
+def _empty_modules():
+    """Modules ``MODULES`` names that contain no tests at all.
+
+    `_unlisted` catches a test file nobody runs.  This catches its twin, which
+    is worse because it is invisible: a module on the list that holds nothing
+    reads as coverage from every angle -- it is in the list, it "passes", and
+    the suite total simply does not mention it.  Found 2026-09-20:
+    ``tests/test_sam2seg.py`` has been **0 bytes since the SAM2 click-to-select
+    feature shipped** (`843a76b`, 09-14), so the whole segmentation path has
+    never had a test while looking as covered as anything else.
+
+    Reported rather than fatal: making it fail would turn a pre-existing gap
+    into a red suite, and a red suite that is red on purpose stops being a
+    signal.  It is printed where the FAST RUN banner is, which is the one place
+    in this output somebody actually reads.
+    """
+    import glob
+    import re
+    out = []
+    for m in MODULES:
+        f = os.path.join(HERE, m + ".py")
+        if not os.path.exists(f):
+            out.append((m, "missing"))
+            continue
+        with open(f, encoding="utf-8") as fh:
+            src = fh.read()
+        if not re.search(r"^def test_", src, re.M):
+            out.append((m, "0 bytes" if not src.strip() else "no test_ functions"))
+    return out
+
+
 def _unlisted():
     """Test files on disk that ``MODULES`` does not name.
 
@@ -183,6 +214,12 @@ def main(argv):
         print(f"\n{'=' * 70}\n{name}.{t}\n{'-' * 70}\n{tb}")
     print(f"\n{total} test(s), {failed} failed, {skipped} skipped, "
           f"{time.time() - t0:.1f}s")
+    hollow = _empty_modules()
+    if hollow:
+        print("!! LISTED BUT EMPTY -- these modules contribute no tests and the")
+        print("!! total above does not miss them, it never counted them:")
+        for name, why in hollow:
+            print(f"!!   {name} ({why})")
     if deferred:
         print("!! FAST RUN -- did NOT run: " + ", ".join(deferred))
         print("!! Green here does not mean green. Before claiming the suite passes:")
