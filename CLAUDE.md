@@ -533,10 +533,15 @@ features ahead of everything else.*
   `knowledge.md` §1, facade-outline-first.
   **Discrepancy found on the way — and since resolved, see the entry below.**
   `knowledge.md` §1 cited `Alte_Scheune` support as `h1=0.61, h2=0.36`; at the
-  resolution the estimator actually runs it is **`h1=0.596, h2=0.147`**. §1's
-  headline comparison is therefore 0.045 against **0.147**, a 3.3x gap and not
-  the 8x it reads as. The direction of its argument survives; the margin is
-  narrower than it has been claiming.
+  resolution the estimator actually runs it is **`h1=0.596, h2=0.147`**. A sweep
+  over long edge then killed the ratio as well: `h2` is not monotonic in
+  resolution (`Alte_Scheune` 0.358 at 4032, 0.147 at 1600, 0.249 at 1010) and
+  moves the *other* way on `lochfassade` (0.045 native, 0.117 at 600), so the gap
+  reads 5.5x at a matched size, 3.3x at production and 1.5x at 600. **§1's 8x,
+  and the 3.3x this ledger briefly replaced it with, are both artifacts of a
+  chosen scale.** Only the direction survives. This blocker is therefore still
+  blocked, and on a weaker foundation than it looked: if P4 is ever taken up the
+  comparison must be round-trip error on the production path, not support.
 - **[not a defect] The `cli.py` `isatty()` gate was a wrong finding, and is
   struck.** It had been carried as an open MED item — "blocks piped
   double-click". Measured: when stdin is not a tty the `else` branch prints
@@ -834,6 +839,12 @@ detector removed · M-LSD unblocked in the GUI interpreter.
   into `knowledge.md` in the first place and what made two agents disagree about
   it. **Every probe against `ArchitectureScheme`, `lines.prepare` or anything
   downstream starts with `analysis_gray`.**
+- **`git add -A` while an agent still owns a file commits a half-finished tree.**
+  The companion to the turn-limit lesson: a worker that stops mid-edit leaves a
+  file that compiles and is wrong, and a blanket stage sweeps it into the commit
+  under the architect's own message. **Either every agent is idle before staging,
+  or the paths are named explicitly.** No damage yet — recorded because it has
+  been relied on repeatedly and worked by luck.
 - **Deleting one function strands the next.** After any deletion, sweep every
   function in `src/pc` for references across src, tests and tools.
 
