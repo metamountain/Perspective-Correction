@@ -1241,6 +1241,16 @@ class ReviewPanel(tk.Frame):
         self.v_yaw = tk.DoubleVar(value=0.0)
         if getattr(self, "v_hmarker", None) is None:
             self.v_hmarker = tk.BooleanVar(value=False)
+        # Made once, like `v_hmarker`: this is a preference about output size,
+        # not a property of the photograph, so it should survive the next one.
+        # The trace goes on with it -- `_build` re-runs per photograph and a
+        # trace added there would stack up one more copy each time.  It is the
+        # variable that is watched rather than the scale's `command`, because a
+        # `ttk.Scale` fires that only when the widget itself is moved: a plain
+        # `v_pixel_ref.set(...)` moved the slider and left `settings` behind.
+        if getattr(self, "v_pixel_ref", None) is None:
+            self.v_pixel_ref = tk.DoubleVar(value=self.settings.pixel_reference_edge)
+            self.v_pixel_ref.trace_add("write", lambda *_a: self._apply_pixel_ref())
 
         # Row 0: horizontal marker (manuell) — yaw from hand-drawn lines.
         _hm = ttk.Checkbutton(ctl, text="h-marker",
@@ -1276,10 +1286,37 @@ class ReviewPanel(tk.Frame):
             self._yaw_scale.configure(state="disabled")
             self._yaw_spin.configure(state="disabled")
 
-        # Rows 2-4: roll, pitch, focal sliders.
-        self._slider(ctl, 2, "roll (level)", self.v_roll, -20, 20, "deg", 0.1, "%.2f")
-        self._slider(ctl, 3, "pitch (verticals)", self.v_pitch, -30, 30, "deg", 0.1, "%.2f")
-        self._slider(ctl, 4, "focal length", self.v_focal, 8, 200, "mm eq", 1, "%.0f")
+        # Row 2: pixel reference -- which edge of a foreshortened facade keeps
+        # its sampling.  It only bites while a yaw is being applied, so it sits
+        # under the switch that decides that and follows its state.  Built by
+        # hand rather than through `_slider`, whose command is wired to
+        # `_on_slider` (angles only) and would never reach `settings`.  The
+        # write lives on the variable's trace, set up with the variable above.
+        ttk.Label(ctl, text="pixel reference", width=18).grid(row=2, column=0, sticky="w")
+        self._pixel_ref_scale = ttk.Scale(ctl, from_=0.0, to=1.0,
+                                          variable=self.v_pixel_ref,
+                                          orient="horizontal")
+        self._pixel_ref_scale.grid(row=2, column=1, sticky="ew", padx=6)
+        _attach_tooltip(
+            self._pixel_ref_scale,
+            "Which edge of a foreshortened facade keeps its pixels.\n"
+            "Left = the near edge keeps 1:1 (largest output, no detail lost).\n"
+            "Right = the far edge is the reference (smallest output, the near "
+            "edge loses resolution).\n"
+            "Applies whenever a yaw is being corrected -- from horizontal "
+            "auto, from the h-marker, or from the yaw slider by hand.")
+        if not self.settings.correct_horizontal:
+            self._pixel_ref_scale.configure(state="disabled")
+        # The variable outlives the session; a fresh session starts at the
+        # config default.  Push the shown value through so what the slider says
+        # is what the save uses, on the second photograph as on the first.
+        if self.session is not None:
+            self._apply_pixel_ref(redraw=False)
+
+        # Rows 3-5: roll, pitch, focal sliders.
+        self._slider(ctl, 3, "roll (level)", self.v_roll, -20, 20, "deg", 0.1, "%.2f")
+        self._slider(ctl, 4, "pitch (verticals)", self.v_pitch, -30, 30, "deg", 0.1, "%.2f")
+        self._slider(ctl, 5, "focal length", self.v_focal, 8, 200, "mm eq", 1, "%.0f")
 
         # The line detector moved to the lower-left tools field with the rest of
         # the FIND controls (see `_build_tools`) -- beside the input image, where
@@ -1814,6 +1851,22 @@ class ReviewPanel(tk.Frame):
             self.lbl_comfy.configure(text="")
         self._schedule_redraw()
 
+    def _apply_pixel_ref(self, redraw=True):
+        """The session owns the settings the save reads, exactly as `_apply_fill`.
+
+        Reached from the variable's trace, so it also runs with no photograph
+        loaded and has to survive that.  `_build` calls it with *redraw* off:
+        the canvases have no size yet there, and a redraw that early only
+        spends the starved-canvas retry budget.
+        """
+        s = self.session
+        if s is None:
+            return
+        s.settings = s.settings.replace(
+            pixel_reference_edge=float(self.v_pixel_ref.get()))
+        if redraw:
+            self._schedule_redraw()
+
     def _toggle_mask(self):
         """Show the excluded region and the lines it removed.
 
@@ -1863,6 +1916,9 @@ class ReviewPanel(tk.Frame):
         state = "normal" if on else "disabled"
         self._yaw_scale.configure(state=state)
         self._yaw_spin.configure(state=state)
+        # The pixel reference only has an effect while a yaw is applied, so it
+        # is greyed out with the yaw it belongs to rather than left live and inert.
+        self._pixel_ref_scale.configure(state=state)
         if on and self.session.mode == AUTO:
             self.session.refit()
             self._sync_from_session()
