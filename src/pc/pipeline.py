@@ -67,9 +67,16 @@ def analyse(bgr, settings, exif_focal_px=None, image_path="", roi_x=None):
     ``(model, vert, horiz, scale, detector)`` with the focal length in
     full-resolution pixels.
 
-    ``roi_x`` is a vertical strip ``(x0, x1)`` in FULL-resolution pixels that
-    restricts the horizontal evidence to one facade (corner views); verticals
-    stay global.  A strip holding no horizontals falls back to the full frame."""
+    ``roi_x`` is a vertical strip ``(x0, x1)`` as FRACTIONS OF THE WIDTH, 0..1,
+    restricting the evidence to one facade on a corner view.  Fractions because
+    they are the only unit that still means the same thing at another analysis
+    resolution -- and the only one a caller outside this function can state,
+    since the analysis size depends on ``detect_max_edge``.
+
+    It restricts the VERTICALS TOO.  This said "verticals stay global" while the
+    body filtered both pools, and the CLI help said the same; a corner view has
+    two facades with different vertical clusters, and mixing them is what the
+    strip is for.  A strip holding no lines of a kind leaves that pool whole."""
     gray, scale = io.analysis_gray(bgr, settings.detect_max_edge)
     small = _match_scale(bgr, gray)
     ls, vert, horiz, detector, info = L.prepare(gray, settings, small, image_path)
@@ -89,17 +96,21 @@ def analyse(bgr, settings, exif_focal_px=None, image_path="", roi_x=None):
                 settings.horizontal_window_deg, settings.angular_softness)
         info["scheme"] = sc.summary()
     if roi_x is not None:
-        # roi_x is a vertical strip in analysis-image pixels (set by
-        # ReviewSession.set_roi_x, which clamps to the gray width).  Segs are
-        # already in gray pixels, so use the bounds directly — no conversion.
-        keep_h = L.in_xband(horiz.seg, roi_x[0], roi_x[1])
+        # Fractions in, analysis pixels out: the ONE place the conversion
+        # happens, because this is the one place that knows the analysis width.
+        # The bounds used to be taken as analysis pixels directly while both the
+        # docstring and --roi-x promised full-resolution ones, so a strip given
+        # from outside was wrong by the scale factor on every downsampled photo.
+        gwid = gray.shape[1]
+        rx0, rx1 = float(roi_x[0]) * gwid, float(roi_x[1]) * gwid
+        keep_h = L.in_xband(horiz.seg, rx0, rx1)
         if keep_h.any():
             horiz = horiz.subset(keep_h)
         # Verticals must ALSO be restricted to the ROI: a corner view has two
         # facades with different vertical VP clusters.  Without this filter the
         # pitch/roll fit mixes both facades and the yaw correction pulls the
         # wrong facade's verticals off-plumb.
-        keep_v = L.in_xband(vert.seg, roi_x[0], roi_x[1])
+        keep_v = L.in_xband(vert.seg, rx0, rx1)
         if keep_v.any():
             vert = vert.subset(keep_v)
     gh, gw = gray.shape[:2]

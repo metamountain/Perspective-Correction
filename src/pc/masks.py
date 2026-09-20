@@ -359,8 +359,13 @@ def credible(before: np.ndarray, after: np.ndarray, max_lost: float = MAX_EVIDEN
     return True, ""
 
 
-def touches(seg: np.ndarray, mask: np.ndarray) -> np.ndarray:
-    """Which segments touch the mask anywhere along their length.
+def untouched(seg: np.ndarray, mask: np.ndarray) -> np.ndarray:
+    """Which segments do NOT touch the mask anywhere along their length.
+
+    Named for what it RETURNS. It was `touches`, and it returned `~hit` -- the
+    survivors -- so the name and the first line of the docstring both said the
+    opposite of the value. Its one caller reads it as a keep-mask and is
+    correct; a second caller trusting the name would have inverted the mask.
 
     The simple rule (user, 2026-09-15): an annotator that touches the mask is
     not evidence.  Sampled rather than rasterised, because a segment is a line
