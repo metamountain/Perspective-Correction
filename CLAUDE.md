@@ -197,18 +197,94 @@ features ahead of everything else.*
 2. **More tools — only where a gesture is already being done the long way.**
    Not a wish for its own sake. Shortcuts are done (`m` mark, `b` brush,
    `p` planar, `s` SAM).
-3. **P4 — two-facade warning.** **The detection half was measured 2026-09-20 and
+3. **[measured 2026-09-20, user-directed] A second correction pass works — but
+   only if it is forbidden to make a large one.** User's hypothesis: with
+   horizontal auto on, the first warp leaves distortion a second analyse+correct
+   could clean up. Measured over **11 corner views, nothing excluded**
+   (`min_confidence=0`, `refuse_beyond_limit=False` — a refusal is a result, not
+   a missing datum), horizontal lean measured inside the hand-placed facade strip:
+
+   | pass 2 allowed | mean | gain | better/worse | worst case |
+   |---|---|---|---|---|
+   | uncapped | 5.386 | +0.045 | 6 / 5 | **-3.74** |
+   | **capped to 10 deg** | **4.847** | **+0.584** | **8 / 3** | -1.75 |
+   | capped to 5 deg | 4.992 | +0.439 | 7 / 4 | -1.75 |
+   | capped to 2 deg | 5.133 | +0.298 | 7 / 4 | -1.77 |
+
+   **Uncapped it is a coin flip with catastrophic tails**: on `39079116` pass 2
+   asks for **yaw -46.2 deg** and on `1070912stkzg` **+45.4 deg** — it re-estimates
+   a fresh full-range correction on an already-yaw-corrected frame instead of a
+   residual. Cap it and both are fixed (13.21 -> 9.15, 7.14 -> 5.28).
+   **Nothing was built.** Two things must be settled first: (1) the project's own
+   rule is **one resample, never two** (the distortion roadmap's Stage 5), so this
+   ships as `H2 @ H1` composed into a single `remap`, never as two warps — the
+   gain here is ~0.6 deg and a second resample costs sharpness that was not
+   measured; (2) 10 deg beat 5 and 2, which is suspicious for a *residual* cap and
+   suggests the number is doing something other than what it is named for.
+   **Order matters and was measured**: `crop="inside"` before pass 2 moved pass 1's
+   own lean 5.353 -> 4.969, and cropping to the strip +20% before pass 2 was worth
+   more than the second pass itself. The margin matters too — **20% beat 30% by 8x**
+   (+0.184 vs +0.023), which was the user's own correction to a first guess of 30.
+
+4. **[measured 2026-09-20] Placing the facade strip needs somebody to LOOK, and
+   the confidence gate then refuses the result.** Two findings, one experiment.
+   **(a)** A strip read off the photograph by eye beats the blanket 20-80% default
+   by **+0.364 deg against +0.131** on 11 corner views. A blanket strip is not an
+   application of the feature; on a corner view it straddles both walls, which is
+   what the feature exists to prevent. The strips are now recorded in
+   **`tests/assets/roi.json`**, each marked with how carefully it was read — and
+   the one entry checked at full size (`Platte`) was **wrong**, read off a 440px
+   thumbnail as 0.05-0.50 when the foreshortened left wall ends at 0.17. Assume
+   the same of every entry still marked `thumbnail`.
+   **(b) The narrow, correct strip is the one the tool refuses.** Placing it
+   properly drops **7 of 11 corner views from OK to SKIPPED**, confidence falling
+   e.g. 0.67 -> 0.20 (`35559_XXL`), 0.69 -> 0.34 (`39079116`), 0.40 -> 0.05
+   (`images-(1)`), weakest factor `stability` in 6 of 7. Confidence is
+   multiplicative and counts evidence, so restricting evidence to the right wall
+   reads as *less certainty* — **a deliberate, informed user action is scored as
+   weakness.** On `Platte` all three strips tried return essentially the same yaw
+   (-42.8 / -43.3 / -43.1 deg) while confidence runs 0.20 / 0.49 / 0.54: here the
+   strip moves the confidence and not the answer. This is the same mechanism
+   already recorded for verticals in the mask-registry entry (~0.11 of confidence
+   every time, buying nothing).
+   **(c) But the fix is not the gate — it is where the strip ends** (measured on
+   `Platte_1`, sweeping the right edge; the corner seam is at 0.33):
+
+   | strip | conf | yaw | lean in the left wing, 1 pass / +2nd pass |
+   |---|---|---|---|
+   | 0-32% (at the seam) | **0.33** refused | +45.24 | **4.99** / 6.56 |
+   | 0-48% | 0.57 | +45.31 | 5.14 / 5.51 |
+   | 0-55% | 0.54 | +45.17 | 5.24 / 5.49 |
+   | 0-62% | 0.52 | +45.83 | 5.22 / **4.88** |
+   | 0-68% | 0.59 | **-39.66** | 8.28 / 8.23 |
+   | none | 0.54 | -40.03 | 8.46 / 8.31 |
+
+   **A strip that stops exactly at the corner gives the best single correction and
+   is the one the gate refuses. Running it well PAST the seam keeps the same yaw
+   to within 0.7 deg and buys the confidence back** — 0.33 to 0.52-0.57. Past
+   roughly twice the seam the other facade wins the vote, the yaw flips sign, and
+   the wall it was aimed at comes out **worse than uncorrected** (8.28 against
+   6.91). So: wide of the seam, short of the flip. `Platte_1` is also the asset
+   that shows the strip changing the *answer* rather than only the confidence —
+   +45 deg for the left wing against -39 for the gable end, opposite rotations, as
+   two walls of a corner should be. On `Platte` all three strips agreed on the yaw
+   and moved only the confidence, so both behaviours are real and neither
+   generalises. **Blocked on a decision**: whether a hand-placed strip should enter
+   the confidence terms at all. Do not tune `min_confidence` before deciding —
+   this measurement says the strip's *extent* is the lever, not the threshold.
+
+5. **P4 — two-facade warning.** **The detection half was measured 2026-09-20 and
    does not work; nothing was built.** See the Ledger. It is now **blocked on
    `knowledge.md` §1 (facade-outline-first)**, not on effort: a threshold over
    `ArchitectureScheme`'s post-hoc split cannot represent the case, because the
    split itself under-detects the second plane.
-4. **P3 — show the multiple horizontal VPs as markers.** Cosmetic, and it
+6. **P3 — show the multiple horizontal VPs as markers.** Cosmetic, and it
    overlaps the found-geometry overlay research goal below; decide which one is
    being built before building either.
 
 **B. Correctness and infrastructure.**
 
-5. **CI's `full-windows` job exists but has never run — watch its first run.**
+7. **CI's `full-windows` job exists but has never run — watch its first run.**
    Until 2026-09-20 CI ran only `run_tests.py -v`, the fast run, so it had
    **never executed `test_gui` or `test_assets`** and "CI is green" was never a
    statement about the GUI or the photographs. A sibling `full-windows` job now
@@ -224,7 +300,7 @@ features ahead of everything else.*
    read the log before touching the job: a red that says the display cannot
    place the window is a different answer from a red that says a GUI test
    genuinely fails, and only one of them is about this project's code.
-6. **CI Linux is failing** (ubuntu-latest, 3.9 and 3.12; Windows passing) —
+8. **CI Linux is failing** (ubuntu-latest, 3.9 and 3.12; Windows passing) —
    recorded 2026-09-19. **`gh` is not installed on this box and the Actions logs
    cannot be read from here**, so this is diagnosed only by elimination:
    - **Python version is ruled out, definitively.** The repo parses clean against
@@ -845,6 +921,23 @@ detector removed · M-LSD unblocked in the GUI interpreter.
   under the architect's own message. **Either every agent is idle before staging,
   or the paths are named explicitly.** No damage yet — recorded because it has
   been relied on repeatedly and worked by luck.
+- **Windows filenames are case-insensitive, so `x_c.png` and `x_C.png` are ONE
+  file.** Cost an entire measurement on 2026-09-20: a two-pass harness wrote its
+  cropped input to `_c.png` and its pass-2 output to `_C.png`, so the second pass
+  silently overwrote its own input and the comparison measured the same file
+  twice — reporting "+0.000 deg, unchanged on all 10" as a *finding*. It looked
+  like a clean null result and it was a filename collision. **A row of exact
+  zeros is a bug until proven otherwise**; real measurements are never that tidy.
+  The one file that escaped had an umlaut in its name, because `cv2.imwrite`
+  mangles it into a different name entirely — use
+  `cv2.imencode(...)[1].tofile(path)`.
+- **Do not drop the photographs that refuse.** (user, 2026-09-20: *"rausfallen
+  gibt's nicht"*.) A measurement that skips the assets the tool declined is
+  measuring the easy half and will report whatever the gate lets through. Set
+  `min_confidence=0` and `refuse_beyond_limit=False` for any comparison — a
+  refusal is a result to be recorded, not a missing datum. Doing this changed the
+  two-pass verdict: with the refusals restored the sample went from 3 usable
+  photographs to 11, and the conclusion with it.
 - **Deleting one function strands the next.** After any deletion, sweep every
   function in `src/pc` for references across src, tests and tools.
 
