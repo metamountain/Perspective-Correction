@@ -208,6 +208,27 @@ für sich gefunden hat. Das Fenster ist deshalb ±25 %; darüber hinaus steht di
 Voraussetzung selbst in Zweifel — die beiden Fluchtpunkte sind dann nicht
 senkrecht —, der alte Wert bleibt stehen und `ortho_focal_rejected` sagt es.
 
+## 3.2 Was `debug.md` dazu schon wusste
+
+Der Befund von heute stand in Teilen bereits im Review vom 17.09., Abschnitt
+„Horizontal (yaw) correction — failure modes". Beim Abräumen dieser Datei
+geprüft, Stand 20.09.:
+
+| | beschrieben als | Stand |
+|---|---|---|
+| **H1** zwei Fassaden, kein Streifen | „Dominant VP ist die Fassade mit mehr Horizontalen" | **heute gelöst** — ROI ist jetzt Voraussetzung, nicht Zubehör |
+| **H2** schwacher/kein horizontaler VP | „Silent: no message" | erledigt — `diag["yaw_skipped"]` |
+| **H3** Yaw über der Kappung → übersprungen | „a 70° corner shot is legitimate" | erledigt — reiner Yaw-Überlauf warnt (`yaw_clamped`) statt zu verweigern |
+| **H4** falscher horizontaler VP | „**Confidence does NOT catch this**" | **heute gelöst** — die Abstimmung hatte bei `Platte_1` die rechte Fassade gewählt |
+| **H5** Yaw-Pitch-Wechselwirkung | „correct to first order … residual tilt on strong corrections (>30° yaw + >15° pitch)", eingestuft **LOW** | **heute gelöst und die Einstufung war zu niedrig**: Platte_1 hat 47,9° Yaw und 9,7° Pitch und stand **4,83° aus dem Winkel** |
+| **H6** Stützgrenze zu eng | Review senkt sie bei ≥2 Kontrolllinien | erledigt |
+
+H5 ist die Lehre daraus. „Korrekt in erster Ordnung" klang nach einem
+Rundungsfehler und war eine sichtbare Scherung. Ein Schweregrad ist eine
+Meinung; gemessen wurde er nie.
+
+---
+
 ## 4. Offene Punkte
 
 - **Bildausschnitt.** Ein Yaw von 40° dehnt die Leinwand von 1320×742 auf
