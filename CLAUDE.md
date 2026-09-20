@@ -59,7 +59,7 @@ left alone (see Done).
   | command | what it runs | measured 2026-09-20 |
   |---|---|---|
   | `python tests/run_tests.py` | fast — skips `test_gui`, `test_assets` | **283 tests, 0 failed, ~19 s** |
-  | `python tests/run_tests.py --full` (or `PC_FULL=1`) | everything, 23 modules | **335 tests, 0 failed, 2 skipped, ~67 s** |
+  | `python tests/run_tests.py --full` (or `PC_FULL=1`) | everything, 23 modules | **337 tests, 0 failed, 2 skipped, ~67 s** |
 
   The fast run says so on exit (`!! FAST RUN -- did NOT run: test_assets,
   test_gui`). **Green there does not mean green.** `-s` forces the old sequential
@@ -169,8 +169,8 @@ declared `mlsd` extra) is in the **system** interpreter, so
 
 ## Ledger — the only place status lives
 
-**Suite, measured 2026-09-20 at `eecd1a1`+: `--full` = 335 tests, 0 failed,
-2 skipped, 66.9 s. The suite is green for the first time in this file's history.** Fast run
+**Suite, measured 2026-09-20 at `a6d1aaa`+: `--full` = 337 tests, 0 failed,
+2 skipped, 67.0 s. The suite is green for the first time in this file's history.** Fast run
 = 283 in ~19 s and is not the suite. **And the honest one:
 `PC_TEST_ASSETS=0 python tests/run_tests.py test_assets` over the whole
 photograph pool = 11 tests, 0 failed, 2 skipped, 133.7 s** — `--full` still
@@ -260,14 +260,12 @@ features ahead of everything else.*
      same passage reproduces exactly). **It wrote nothing.** `knowledge.md` is
      therefore still unaudited, and §1's h2 figure specifically must not be
      built on without re-measuring.
-   - **Non-GUI audit findings.** Five were handed over; **only one was
-     adjudicated** (`lines.masked_out` — not a defect, see Done). The other four
-     are untouched and still open: `geometry.normalize_vp`'s zero-norm fallback
-     direction, `model.focal_from_horizon`'s dead line and misleading comment,
-     `review.py` reaching into `preview._draw_lines`, and the diverging colour
-     tables in `preview.py` vs `scheme.py`. Given that **two of today's five
-     adjudicated findings turned out to be non-defects**, expect the same rate
-     here and run the arithmetic before applying anything.
+   - ~~**Non-GUI audit findings.**~~ **All five adjudicated by hand after the
+     agent was cut off — see Done.** Two were real and fixed, two were not
+     defects, and one was wrongly framed but had a real defect underneath.
+     **Of the six audit findings adjudicated today in total, three were not
+     defects** — which is the same rate the 2026-09-15 pass measured, and the
+     reason the hard rule about pointers and verdicts is a hard rule.
 7. **`gui.py` is 5217 lines** — 3.5× the next largest file (`review.py`, 1369).
    A 12-file composition split was proposed and **deprioritised by the user**. It
    stays deprioritised; recorded so it is not re-proposed as if new.
@@ -612,6 +610,51 @@ features ahead of everything else.*
   so a future edit cannot quietly drop it. **Second wrong finding struck
   today**, after the `cli.py` `isatty()` one — the hard rule about pointers and
   verdicts keeps paying.
+- **The remaining four audit findings, adjudicated. Two were wrong.** Running
+  the arithmetic before reading the proposal keeps being the whole method.
+  * **`model.focal_from_horizon` "dead no-op line with misleading comment" —
+    NOT PRESENT.** Checked mechanically with `ast`, not by eye: no bare no-op
+    expression, no local assigned and never read, nothing unreachable after a
+    return, anywhere in lines 114-211. Either the finding was wrong or it named
+    code the 09-19 dead-code sweep already removed. **Third non-defect today**,
+    after `cli.py`'s `isatty()` gate and `lines.masked_out`.
+  * **`geometry.normalize_vp` "zero-norm fallback points down, not up" — the
+    claim is wrong and there was a real defect underneath it.** The comment said
+    "up (negative y)" and the code returned `[0, -1, 0]`, which *is* negative y:
+    comment and code agreed. **What was actually broken** is that the fallback
+    was the only return skipping the sign fix two lines below, so the function
+    violated the invariant that fix exists for — its own comment says "so that
+    equal vanishing points compare equal", and `normalize_vp(0)` returned
+    `[0, -1, 0]` while `normalize_vp([0, -1, 0])` returned `[0, 1, 0]`. The path
+    is reachable: `intersect` normalises `cross(l1, l2)`, zero for two identical
+    lines. The careful "up" was moot anyway, because a vanishing point is a line
+    through the origin and not a ray, so direction is erased on every other
+    path. Now consistent, pinned by
+    `test_normalize_vp_signs_every_result_the_same_way_including_its_fallback`,
+    which asserts the **invariant** rather than the fallback's value — the
+    defect was a path escaping the rule, not a wrong constant.
+  * **`review.py` reaching into `preview._draw_lines` — REAL, fixed.** Four
+    call sites across a module boundary into an underscore-prefixed function.
+    **An underscore two modules ignore is not privacy, it is a note that went
+    unread**; it is `preview.draw_lines` now, which is what was true all along.
+  * **Diverging colour tables in `preview.py` and `scheme.py` — REAL, fixed.**
+    `scheme.draw_preview` wrote `(0, 200, 0)` for the lines that count and
+    `(96, 96, 96)` for the ones that do not, inline, while `preview.py` drew the
+    same two ideas as `GREEN (80, 220, 90)` and `GREY (130, 130, 130)` from a
+    named table. **Two renderings of the same geometry that did not agree on
+    what green means** — and the open found-geometry research goal is precisely
+    a choice between those two renderings, which is an awkward choice to make
+    from there. One table now, plus `VP_MARK` for the vanishing-point ring.
+    Pinned by `test_the_two_renderings_of_found_geometry_agree_on_what_green_means`,
+    which **renders and reads pixels** rather than grepping the source, so a
+    constant imported but never used still fails.
+    **The two lines need different assertions, and the reason is worth keeping**:
+    the 2 px relevant line has solid core pixels and matches exactly, while the
+    1 px ignored line is antialiased and peaks at **118**, not 130 — an exact
+    match is the wrong question there. What makes the weaker assertion sound is
+    that **antialiasing can only darken**, so a peak of 118 cannot have come
+    from a source of 96, and measuring above the old value proves it is gone
+    without needing to know the coverage.
 - **This file rewritten from measurement** - see the header.
 
 **2026-09-19 → 20 (from `QWEN.md`, verified against the code)**

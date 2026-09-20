@@ -12,9 +12,26 @@ BLUE = (235, 170, 60)      # horizontal lines
 MAGENTA = (200, 80, 220)   # the implied horizon
 GREY = (130, 130, 130)     # struck out by hand
 RED = (70, 70, 235)        # removed by the region mask
+VP_MARK = (0, 128, 255)    # a vanishing point itself, as a ring
+
+# These names are the single source for every rendering of "what the estimator
+# saw", including `scheme.ArchitectureScheme.draw_preview`, which used to write
+# its own (0, 200, 0) and (96, 96, 96) inline. Same meaning, different colour:
+# two views of one thing that did not look like one thing -- and the open
+# research goal about a found-geometry overlay is precisely a choice between
+# those two renderings, which is hard to make when they disagree on what green
+# means. BGR, because OpenCV.
 
 
-def _draw_lines(canvas, seg, colour, thickness=2):
+def draw_lines(canvas, seg, colour, thickness=2):
+    """Draw ``seg`` (N, 4) on ``canvas``.
+
+    Public, and the underscore is gone on purpose: `review.py` has been
+    calling this across the module boundary for a long time, and an underscore
+    that two modules ignore is not privacy, it is a note that went unread. The
+    name now says what is true -- this is the shared primitive both renderers
+    of "what the estimator saw" are built on.
+    """
     for x0, y0, x1, y1 in seg:
         cv2.line(canvas, (int(round(x0)), int(round(y0))), (int(round(x1)), int(round(y1))),
                  colour, thickness, cv2.LINE_AA)
@@ -71,18 +88,18 @@ def overlay(bgr, vert, horiz, model, scale=1.0, result_text="", info=None):
     tint_mask(canvas, info.get("mask"))
     dropped = info.get("masked_out")
     if dropped is not None and len(dropped):
-        _draw_lines(canvas, dropped * inv, RED, max(1, int(round(inv))))
+        draw_lines(canvas, dropped * inv, RED, max(1, int(round(inv))))
 
     if len(horiz):
-        _draw_lines(canvas, horiz.seg * inv, BLUE, max(1, int(round(inv))))
+        draw_lines(canvas, horiz.seg * inv, BLUE, max(1, int(round(inv))))
     if len(vert):
         inl = model.vert_inliers if model is not None and model.vert_inliers is not None \
             else np.zeros(len(vert), bool)
         if len(inl) == len(vert):
-            _draw_lines(canvas, vert.seg[~inl] * inv, YELLOW, max(1, int(round(inv))))
-            _draw_lines(canvas, vert.seg[inl] * inv, GREEN, max(2, int(round(inv * 2))))
+            draw_lines(canvas, vert.seg[~inl] * inv, YELLOW, max(1, int(round(inv))))
+            draw_lines(canvas, vert.seg[inl] * inv, GREEN, max(2, int(round(inv * 2))))
         else:
-            _draw_lines(canvas, vert.seg * inv, GREEN, max(2, int(round(inv * 2))))
+            draw_lines(canvas, vert.seg * inv, GREEN, max(2, int(round(inv * 2))))
 
     if model is not None and model.f:
         h, w = canvas.shape[:2]

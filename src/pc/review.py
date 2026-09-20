@@ -1009,13 +1009,13 @@ class ReviewSession:
             m = self.model
             dropped = info.get("masked_out")
             if dropped is not None and len(dropped):
-                PV._draw_lines(canvas, dropped * inv, PV.RED, 1)
+                PV.draw_lines(canvas, dropped * inv, PV.RED, 1)
             if len(self.horiz):
-                PV._draw_lines(canvas, self.horiz.seg * inv, PV.BLUE, 1)
+                PV.draw_lines(canvas, self.horiz.seg * inv, PV.BLUE, 1)
             if len(used):
                 inl = m.vert_inliers[self.enabled] if m is not None else np.zeros(len(used), bool)
-                PV._draw_lines(canvas, used.seg[~inl] * inv, PV.YELLOW, 1)
-                PV._draw_lines(canvas, used.seg[inl] * inv, PV.GREEN, 2)
+                PV.draw_lines(canvas, used.seg[~inl] * inv, PV.YELLOW, 1)
+                PV.draw_lines(canvas, used.seg[inl] * inv, PV.GREEN, 2)
             if m is not None and m.f:
                 K = G.intrinsics(m.f, self.w / 2.0, self.h / 2.0)
                 PV._draw_infinite_line(canvas, G.horizon_line(m.up, K), PV.MAGENTA, 2)

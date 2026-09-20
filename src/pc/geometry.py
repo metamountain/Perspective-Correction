@@ -52,9 +52,21 @@ def normalize_vp(v: np.ndarray) -> np.ndarray:
     v = np.asarray(v, dtype=float)
     n = np.linalg.norm(v)
     if n < 1e-12:
-        # no direction to preserve; fall back to "up" (negative y in the
-        # image's y-down convention), not down
-        return np.array([0.0, -1.0, 0.0])
+        # Reachable: `intersect` calls this on `cross(l1, l2)`, which is the
+        # zero vector when the two lines are the same line -- a duplicate
+        # segment surviving the merge is enough.
+        #
+        # It used to return [0, -1, 0] with a comment explaining that this is
+        # "up" in the image's y-down convention, "not down". That reasoning was
+        # moot and the value was inconsistent. Moot, because the sign fix two
+        # lines below ERASES direction on every other path: a vanishing point
+        # is a line through the origin, not a ray, so normalize_vp([0, -1, 0])
+        # already comes back [0, 1, 0]. Inconsistent, because the fallback was
+        # the only return that skipped that fix, so the function broke the very
+        # invariant the fix exists for -- its own comment says "so that equal
+        # vanishing points compare equal", and normalize_vp(0) did not compare
+        # equal to normalize_vp(anything pointing the same way).
+        return np.array([0.0, 1.0, 0.0])
     v = v / n
     # fix the sign so that equal vanishing points compare equal
     k = int(np.argmax(np.abs(v)))
