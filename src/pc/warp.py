@@ -395,24 +395,22 @@ def _keep_near_edge(H_total, out_w, out_h, img_w, img_h, settings, yaw):
     worst = min_magnification(H_total, img_w, img_h, out_w, out_h)
     if worst >= 0.999:
         return H_total, out_w, out_h
-    # WHICH EDGE IS THE PIXEL REFERENCE (user, 2026-09-20).  Growing the canvas
-    # is normal when a facade is foreshortened, but how far to grow it is a
-    # taste, so it is a dial rather than a rule:
+    # HOW MANY PIXELS TO KEEP (user, 2026-09-20).  Growing the canvas is normal
+    # when a facade is foreshortened; how far to grow it is a taste, so it is a
+    # dial rather than a rule:
     #
-    #   pixel_reference_edge = 0.0  the SHORT (compressed, near) edge is the
-    #                               reference -- scale up until nothing is
-    #                               sampled below 1:1.  Biggest file, no
-    #                               photographed detail discarded.
-    #   pixel_reference_edge = 1.0  the LONG (stretched, far) edge is the
-    #                               reference -- no scaling at all.  Smallest
-    #                               file, the near edge loses resolution.
+    #   keep_pixels = 1.0  maximum pixels -- scale up until nothing is sampled
+    #                      below 1:1.  Biggest file, no photographed detail
+    #                      discarded.
+    #   keep_pixels = 0.0  minimum pixels -- no scaling at all.  Smallest file,
+    #                      the near edge loses resolution.
     #
-    # Interpolated geometrically, because these are scale factors and the
-    # halfway point between 1x and 1.4x should be 1.18x, not 1.20x.
-    t = float(getattr(settings, "pixel_reference_edge", 0.25))
-    t = min(1.0, max(0.0, t))
+    # Interpolated geometrically, because these are scale factors: the halfway
+    # point between 1x and 1.4x is 1.18x, not 1.20x.
+    k = float(getattr(settings, "keep_pixels", 0.5))
+    k = min(1.0, max(0.0, k))
     full = 1.0 / worst
-    scale_wanted = full ** (1.0 - t)
+    scale_wanted = full ** k
     if scale_wanted <= 1.0 + 1e-9:
         return H_total, out_w, out_h
 

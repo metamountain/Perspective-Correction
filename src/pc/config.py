@@ -122,28 +122,38 @@ class Settings:
 
     # ---- gating ----
     min_confidence: float = 0.40
-    preserve_near_edge: bool = True     # apply the pixel-reference dial when yaw is corrected
-    # Which edge of a foreshortened facade is the pixel reference, when a yaw is
-    # being corrected.  0 = the SHORT (near, compressed) edge keeps 1:1, so no
-    # photographed detail is discarded and the canvas grows most; 1 = the LONG
-    # (far, stretched) edge is the reference, no growth, the near edge loses
-    # resolution.  Measured over 8 corner views 2026-09-20:
+    preserve_near_edge: bool = True     # apply `keep_pixels` when a yaw is corrected
+    # How many pixels a yaw correction is allowed to keep.  **1 = maximum
+    # pixels, 0 = minimum pixels** (user, 2026-09-20).
     #
-    #   dial   min sampling   canvas vs source   linear detail lost
-    #   0.00       1.08            6.44x               0.0%
-    #   0.25       1.03            5.75x               4.8%
-    #   0.50       0.98            5.16x               9.2%
-    #   0.75       0.94            4.65x              13.4%
-    #   1.00       0.90            4.22x              17.3%
+    # `H = K R K^-1` at a large yaw inflates the receding edge of a facade five-
+    # to sevenfold, and the plan scales the whole output back so the facade
+    # keeps *about* its source pixel count.  On average that is right; at the
+    # NEAR edge it is a loss, because the average is dragged up by the edge that
+    # was inflated -- and the near edge is where the real detail is.  This knob
+    # says how far to scale back up against that.
     #
-    # The user proposed 0.75 as the compromise.  The measurement says otherwise
-    # and that is why it is written here rather than quietly changed: the two
-    # axes are not the same length.  The whole range only moves the canvas from
-    # 6.44x to 4.22x -- a third -- while detail loss runs 0 to 17.3%.  At 0.75
-    # you give up 13.4% of the near edge, which cannot be got back, to save 28%
-    # of a file size, which is cheap.  0.25 costs 4.8% -- under what anyone sees
-    # -- and saves 11%.  Override with a number, not an argument.
-    pixel_reference_edge: float = 0.25
+    #   1.0  keep every pixel: nothing in the frame is ever sampled below 1:1,
+    #        so no photographed detail is discarded.  Largest file.
+    #   0.0  keep the fewest: no scaling at all, the near edge is downsampled.
+    #        Smallest file.
+    #
+    # Measured over 8 corner views, 2026-09-20:
+    #
+    #   keep_pixels   min sampling   canvas vs source   linear detail lost
+    #      1.00           1.08            6.44x                0.0%
+    #      0.75           1.03            5.75x                4.8%
+    #      0.50           0.98            5.16x                9.2%   <- default
+    #      0.25           0.94            4.65x               13.4%
+    #      0.00           0.90            4.22x               17.3%
+    #
+    # 0.5 is the user's call and the honest one.  The arithmetic alone argues
+    # for more (the whole range moves the canvas by only a third while detail
+    # loss runs 0 to 17.3%), but rendered side by side at equal magnification
+    # the two ends are indistinguishable on this pool -- every photograph in it
+    # is downscaled to ~1800 px and has no fine detail left to lose.  Neither
+    # end is defensible over the middle on the evidence that exists.
+    keep_pixels: float = 0.5
     max_area_ratio: float = 9.0         # crop canvas to this × source area (trim fill zones)
 
     # ---- distortion correction (Stage 0) ----

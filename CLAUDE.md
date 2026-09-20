@@ -210,25 +210,37 @@ features ahead of everything else.*
    **`max_area_ratio` deliberately does not bound it** — its own comment says it
    is for trimming fill zones, and letting it clamp left two assets at 0.84 and
    0.98 when the whole point is 1.0.
-   **How far to go is taste, so it is a dial, measured over 8 corner views:**
+   **How far to go is taste, so it is a dial — `keep_pixels`, 1 = MAX px,
+   0 = MIN px** (user's own framing, 2026-09-20). Measured over 8 corner views:
 
-   | dial | min sampling | canvas vs source | linear detail lost |
+   | `keep_pixels` | min sampling | canvas vs source | linear detail lost |
    |---|---|---|---|
-   | 0.00 short/near edge | 1.08 | 6.44x | 0.0% |
-   | 0.25 (shipped) | 1.03 | 5.75x | 4.8% |
-   | 0.50 | 0.98 | 5.16x | 9.2% |
-   | 0.75 | 0.94 | 4.65x | 13.4% |
-   | 1.00 long/far edge | 0.90 | 4.22x | 17.3% |
+   | 1.00 max px | 1.08 | 6.44x | 0.0% |
+   | 0.75 | 1.03 | 5.75x | 4.8% |
+   | **0.50 (shipped)** | 0.98 | 5.16x | 9.2% |
+   | 0.25 | 0.94 | 4.65x | 13.4% |
+   | 0.00 min px | 0.90 | 4.22x | 17.3% |
 
-   The user proposed 0.75; the default is **0.25** because the two axes are not
-   the same length — the whole range moves the canvas by a third while detail
-   loss runs 0 to 17.3%. **But the visual check does not back that up and it is
-   written down rather than buried**: rendered side by side at equal
-   magnification, 0.00 and 1.00 are indistinguishable on this pool, whose
-   photographs are all downscaled to ~1800 px and have no fine detail left to
-   lose. On that evidence 0.5 is equally defensible. Override with a number.
-   **GUI**: a `ttk.Scale` under the horizontal-auto checkbox, greyed out while
-   no yaw is in play. Built by a subagent to spec; the architect read the diff
+   **The default is 0.5, the user's call, and it is the honest one.** The
+   arithmetic alone argues for keeping more — the whole range moves the canvas
+   by only a third while detail loss runs 0 to 17.3% — but rendered side by side
+   at equal magnification **the two ends are indistinguishable on this pool**,
+   every photograph in which is downscaled to ~1800 px and has no fine detail
+   left to lose. Neither end is defensible over the middle on the evidence that
+   exists. Measured at the shipped 0.5: mean worst sampling **0.999**, i.e.
+   almost exactly the point where nothing is discarded. The name was inverted
+   from an earlier `pixel_reference_edge` (0 = keep most), which read backwards.
+   **GUI**: a `ttk.Scale` labelled **"detail (px kept)"** under the
+   horizontal-auto checkbox, greyed out while no yaw is in play, with a readout
+   that says `max px` / `min px` at the ends because "0.50" alone explains
+   nothing. **The wording was drafted by the local Qwen worker and then
+   corrected** — its help text was better than the architect's and is mostly
+   kept, but its recommended label, "size vs detail", is wrong and so was its
+   reason for it: it claimed keeping more pixels keeps *less of the frame*,
+   which `keep_pixels` never touches (cropping is `plan`'s job), and there is no
+   "vs" here at all — size is the price, detail is the benefit, and they move
+   together. The same confusion was in its opening help line. **Fourth time a
+   confident worker recommendation has not survived being checked.** Built by a subagent to spec; the architect read the diff
    and re-ran every check. Two things it got right that the spec had wrong —
    worth keeping: a `ttk.Scale`'s `command` fires only when the **widget** moves,
    so `v.set(...)` left `settings` behind (the "tested is not reachable" trap
@@ -424,12 +436,26 @@ features ahead of everything else.*
 
 **C. Decide, do not necessarily fix.**
 
-10. **Shootout suite** — a 20-image benchmark. Estimated 9–10 h, independent of
+10. **[found 2026-09-20] SAM2 click-to-select has no tests, and the suite made
+    that invisible.** `tests/test_sam2seg.py` is **0 bytes** and has been since
+    the feature shipped (`843a76b`, 09-14). It is listed in `MODULES`, so
+    `_unlisted()` is satisfied, it "passes", and the total simply never counted
+    it — coverage from every angle except the one that matters. This is the
+    twin of the failure `_unlisted` was written for, and the runner now prints
+    a **LISTED BUT EMPTY** banner beside the FAST RUN one (reported, not fatal:
+    turning a pre-existing gap into a red suite makes the red stop meaning
+    anything). **Writing those tests is the open item.** The segmentation path
+    is not small — `sam2seg.run_subprocess` shells into `python_embeded` and
+    hands a PNG back, `load_mask_png` inverts selection-white to ignore, and
+    `apply_sam_mask` converts file-resolution to analysis-resolution, which is
+    exactly the coordinate-space rule this file warns about twice.
+
+11. **Shootout suite** — a 20-image benchmark. Estimated 9–10 h, independent of
    everything else, no `tests/shootout/` exists.
 
 **D. Research — measurement passes, explicitly not implementation packages.**
 
-11. **Distortion Stages 1–3.** Stage 0 (`lensfunpy`, EXIF-driven) shipped
+12. **Distortion Stages 1–3.** Stage 0 (`lensfunpy`, EXIF-driven) shipped
     2026-09-14: `src/pc/distortion.py`, `warp.apply_undistorted()`,
     `--undistort lensfun`, 7 tests. No EXIF = graceful skip. Stages 1–3
     (AnyCalib blind fit, GeoCalib gravity prior, cross-check gate) remain, each
@@ -443,7 +469,7 @@ features ahead of everything else.*
     to read. Aulendorf, the one known wide-angle asset, scored 0.04 — near the
     bottom, below ordinary facades. A real trigger would group by proximity and
     continuity and measure residual curvature. Different mechanism, unmeasured.
-12. **Four research goals in `knowledge.md`** — read that file before picking any
+13. **Four research goals in `knowledge.md`** — read that file before picking any
     of them up. Each needs its own measured comparison first; if the measurement
     says no, write that down and stop. (1) facade-outline-first vs.
     partition-after-detect; (2) a dominant-edge hierarchy in the detector;

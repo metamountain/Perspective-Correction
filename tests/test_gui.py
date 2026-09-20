@@ -1692,10 +1692,10 @@ def test_no_colour_is_typed_into_a_widget_below_the_palette_tables():
         "or a constant instead:\n  " + "\n  ".join(offenders))
 
 
-def test_the_pixel_reference_slider_is_greyed_out_unless_horizontal_auto_is_on():
+def test_the_detail_slider_is_greyed_out_unless_a_yaw_is_being_corrected():
     """It only bites while a yaw is applied, so it is dead while one is not.
 
-    `pixel_reference_edge` chooses which edge of a foreshortened facade keeps
+    `keep_pixels` chooses which edge of a foreshortened facade keeps
     its sampling, and `warp._keep_near_edge` returns untouched when the yaw is
     zero.  A live control that changes nothing is worse than a greyed-out one:
     it invites the user to move it and then says nothing back.
@@ -1713,7 +1713,7 @@ def test_the_pixel_reference_slider_is_greyed_out_unless_horizontal_auto_is_on()
     try:
         _loaded(app, 1920, 1080)
         r = app.review
-        scale = r._pixel_ref_scale
+        scale = r._keep_px_scale
 
         assert str(scale.cget("state")) == "disabled", (
             "horizontal auto is off at build, so the pixel reference must be "
@@ -1725,9 +1725,9 @@ def test_the_pixel_reference_slider_is_greyed_out_unless_horizontal_auto_is_on()
         assert str(scale.cget("state")) == "normal", (
             "the slider must follow the checkbox it is gated on")
 
-        r.v_pixel_ref.set(0.8)
+        r.v_keep_px.set(0.8)
         _settle(app, 5)
-        assert abs(r.session.settings.pixel_reference_edge - 0.8) < 1e-9, (
+        assert abs(r.session.settings.keep_pixels - 0.8) < 1e-9, (
             "moving the control must reach the settings the save reads -- the "
             "'tested is not reachable' failure, where SAM drew an outline for "
             "weeks and never touched the estimator")
@@ -1741,18 +1741,18 @@ def test_the_pixel_reference_slider_is_greyed_out_unless_horizontal_auto_is_on()
         app._add([ASSET])                      # second load: rebuilds the panel
         _settle(app)
         r = app.review
-        assert abs(r.v_pixel_ref.get() - 0.8) < 1e-9, (
+        assert abs(r.v_keep_px.get() - 0.8) < 1e-9, (
             "this is a preference about output size, not a property of the "
             "photograph; it must survive the next one")
-        assert abs(r.session.settings.pixel_reference_edge - 0.8) < 1e-9, (
+        assert abs(r.session.settings.keep_pixels - 0.8) < 1e-9, (
             "a fresh session starts at the config default, so the shown value "
             "must be pushed through or the widget lies about what will be saved")
         r.v_correct_horizontal.set(True)
         r._on_horizontal_toggle()
         _settle(app, 5)
-        r.v_pixel_ref.set(0.3)
+        r.v_keep_px.set(0.3)
         _settle(app, 5)
-        assert abs(r.session.settings.pixel_reference_edge - 0.3) < 1e-9, (
+        assert abs(r.session.settings.keep_pixels - 0.3) < 1e-9, (
             "the control died on the second photograph -- the `_build` rebuild "
             "trap, met for the fourth time")
     finally:
