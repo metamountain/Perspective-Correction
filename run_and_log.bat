@@ -51,7 +51,7 @@ set /p FOCAL=35mm-equivalent focal length, blank to let it estimate:
 if not "%FOCAL%"=="" set "FOCALARG=--focal-35mm %FOCAL%"
 
 rem --- environment first, so even a failed run leaves something diagnosable ---
-echo === bpc run %DATE% %TIME% > "%LOG%"
+echo === pc run %DATE% %TIME% > "%LOG%"
 echo === interpreter: %PY% >> "%LOG%"
 echo === photos: %PHOTOS% >> "%LOG%"
 echo. >> "%LOG%"
