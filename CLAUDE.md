@@ -194,10 +194,59 @@ features ahead of everything else.*
    measured and deliberately left alone** — see the Ledger for why, because
    "we chose not to" is a different answer from "nobody got to it" and the
    entry should not be re-opened as if it were the second one.
-2. **More tools — only where a gesture is already being done the long way.**
+2. **[landed 2026-09-20] `pixel_reference_edge`: a dial over how much
+   resolution a yaw correction may throw away, with a GUI control.**
+   **The defect first**, because it was invisible in the output size: with
+   horizontal auto on, the canvas grew to **2.3-7x the source area while the
+   near edge was still being sampled at 0.71-0.95** — real photographed detail
+   discarded. `H = K R K^-1` at a large yaw inflates the receding edge five- to
+   sevenfold and `_whole_frame` then scales the whole output back so the facade
+   keeps *about* its source pixel count; on average that is right, and at the
+   near edge — where the detail actually is — the average is dragged up by the
+   edge that was inflated. **The same bug class was fixed once already** for PC
+   Rectangle (`8aed6dc`, "scales up, never down"); the yaw path never got it.
+   Now `warp.min_magnification` measures the worst sampling still visible and
+   `_keep_near_edge` scales up against it, bounded by `NEAR_EDGE_MAX_SCALE = 3`.
+   **`max_area_ratio` deliberately does not bound it** — its own comment says it
+   is for trimming fill zones, and letting it clamp left two assets at 0.84 and
+   0.98 when the whole point is 1.0.
+   **How far to go is taste, so it is a dial, measured over 8 corner views:**
+
+   | dial | min sampling | canvas vs source | linear detail lost |
+   |---|---|---|---|
+   | 0.00 short/near edge | 1.08 | 6.44x | 0.0% |
+   | 0.25 (shipped) | 1.03 | 5.75x | 4.8% |
+   | 0.50 | 0.98 | 5.16x | 9.2% |
+   | 0.75 | 0.94 | 4.65x | 13.4% |
+   | 1.00 long/far edge | 0.90 | 4.22x | 17.3% |
+
+   The user proposed 0.75; the default is **0.25** because the two axes are not
+   the same length — the whole range moves the canvas by a third while detail
+   loss runs 0 to 17.3%. **But the visual check does not back that up and it is
+   written down rather than buried**: rendered side by side at equal
+   magnification, 0.00 and 1.00 are indistinguishable on this pool, whose
+   photographs are all downscaled to ~1800 px and have no fine detail left to
+   lose. On that evidence 0.5 is equally defensible. Override with a number.
+   **GUI**: a `ttk.Scale` under the horizontal-auto checkbox, greyed out while
+   no yaw is in play. Built by a subagent to spec; the architect read the diff
+   and re-ran every check. Two things it got right that the spec had wrong —
+   worth keeping: a `ttk.Scale`'s `command` fires only when the **widget** moves,
+   so `v.set(...)` left `settings` behind (the "tested is not reachable" trap
+   inverted), hence a `trace_add` on the variable; and the once-only variable
+   outlives the session, so a fresh session needed the shown value pushed
+   through or the widget would lie on photograph two. Pinned by
+   `test_the_pixel_reference_slider_is_greyed_out_unless_horizontal_auto_is_on`,
+   verified red by sabotage.
+   **Checked, NOT a bug**: the slider stays live when the h-marker is on and
+   `correct_horizontal` is off. `review.current_yaw()` returns `_hmarker_yaw`
+   regardless of that flag, so a yaw really is applied and the dial really does
+   bite — the tooltip was the thing that was wrong and now names all three yaw
+   sources.
+
+3. **More tools — only where a gesture is already being done the long way.**
    Not a wish for its own sake. Shortcuts are done (`m` mark, `b` brush,
    `p` planar, `s` SAM).
-3. **[measured 2026-09-20, user-directed] A second correction pass works — but
+4. **[measured 2026-09-20, user-directed] A second correction pass works — but
    only if it is forbidden to make a large one.** User's hypothesis: with
    horizontal auto on, the first warp leaves distortion a second analyse+correct
    could clean up. Measured over **11 corner views, nothing excluded**
@@ -226,7 +275,7 @@ features ahead of everything else.*
    more than the second pass itself. The margin matters too — **20% beat 30% by 8x**
    (+0.184 vs +0.023), which was the user's own correction to a first guess of 30.
 
-4. **[measured 2026-09-20] Placing the facade strip needs somebody to LOOK, and
+5. **[measured 2026-09-20] Placing the facade strip needs somebody to LOOK, and
    the confidence gate then refuses the result.** Two findings, one experiment.
    **(a)** A strip read off the photograph by eye beats the blanket 20-80% default
    by **+0.364 deg against +0.131** on 11 corner views. A blanket strip is not an
@@ -305,12 +354,12 @@ features ahead of everything else.*
    raises `min_confidence` to 0.95 now, so the gate is engaged by construction
    rather than by hope.
 
-5. **P4 — two-facade warning.** **The detection half was measured 2026-09-20 and
+6. **P4 — two-facade warning.** **The detection half was measured 2026-09-20 and
    does not work; nothing was built.** See the Ledger. It is now **blocked on
    `knowledge.md` §1 (facade-outline-first)**, not on effort: a threshold over
    `ArchitectureScheme`'s post-hoc split cannot represent the case, because the
    split itself under-detects the second plane.
-6. **P3 — show the multiple horizontal VPs as markers.** Cosmetic, and it
+7. **P3 — show the multiple horizontal VPs as markers.** Cosmetic, and it
    overlaps the found-geometry overlay research goal below; decide which one is
    being built before building either.
 

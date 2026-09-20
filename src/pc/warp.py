@@ -409,7 +409,7 @@ def _keep_near_edge(H_total, out_w, out_h, img_w, img_h, settings, yaw):
     #
     # Interpolated geometrically, because these are scale factors and the
     # halfway point between 1x and 1.4x should be 1.18x, not 1.20x.
-    t = float(getattr(settings, "pixel_reference_edge", 0.75))
+    t = float(getattr(settings, "pixel_reference_edge", 0.25))
     t = min(1.0, max(0.0, t))
     full = 1.0 / worst
     scale_wanted = full ** (1.0 - t)
