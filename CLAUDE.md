@@ -247,6 +247,20 @@ features ahead of everything else.*
    strip moves the confidence and not the answer. This is the same mechanism
    already recorded for verticals in the mask-registry entry (~0.11 of confidence
    every time, buying nothing).
+   **(b2) CORRECTION, same day, and it matters: that collapse is NOT what a user
+   sees.** Those numbers come from `pipeline.analyse(roi_x=...)`, which restricts
+   the evidence *before* the vanishing-point search. The review panel's
+   `ReviewSession.set_roi_x` filters an already-detected pool instead, and across
+   the same 11 corner views it barely moves confidence at all: 0.59 -> 0.59
+   (`Platte`), 0.54 -> 0.54 (`Platte_1`), 0.67 -> **0.68** (`35559_XXL`),
+   0.40 -> 0.44 (`images-(1)`); the largest fall is 0.69 -> 0.57. **Not one of
+   the eleven crosses the gate in the review path.** So the same control, named
+   the same thing, does two different things depending on where it is set — and
+   the alarming half of this entry describes the batch path only. Found by
+   writing a test against the review path and watching it stay green with the
+   clause it was testing removed. **The inconsistency is itself the open item**:
+   two applications of "the facade strip" that disagree is a defect whichever one
+   is right, and nothing here establishes which.
    **(c) But the fix is not the gate — it is where the strip ends** (measured on
    `Platte_1`, sweeping the right edge; the corner seam is at 0.33):
 
@@ -272,6 +286,24 @@ features ahead of everything else.*
    generalises. **Blocked on a decision**: whether a hand-placed strip should enter
    the confidence terms at all. Do not tune `min_confidence` before deciding —
    this measurement says the strip's *extent* is the lever, not the threshold.
+   **(d) What was actually built, 2026-09-20.** The gate was first removed from
+   `pipeline.process` — the wrong path, and the user caught it by looking:
+   `Alte_Scheune` (conf 0.39, weakest term the focal length) then went through
+   with a **-26.5 deg yaw**, came out visibly sheared, and bought 0.5 deg of
+   verticality for it (lean 3.31 -> 2.81). *"leider sehr schief"*, and that was
+   right. **`process` is the unattended run** (`cli.py:375`, `gui.py:5359`):
+   nobody sees what it writes, so the batch-era reasoning holds there in full and
+   the veto is back. The rule the measurement argues for belongs in
+   `review.would_skip`, which already exempts control lines on exactly this
+   ground — *"refusing evidence because there is little of it is right when a
+   detector produced it and wrong when a person did"* — and a hand-drawn strip
+   now joins that list. Pinned by
+   `test_a_hand_placed_facade_strip_stands_the_review_gate_down_but_not_the_batch`,
+   which asserts **both** halves so loosening one cannot quietly loosen the
+   other, and which had to be rewritten once: its first version picked an asset
+   that sits below the gate by luck and stayed green with the clause deleted. It
+   raises `min_confidence` to 0.95 now, so the gate is engaged by construction
+   rather than by hope.
 
 5. **P4 — two-facade warning.** **The detection half was measured 2026-09-20 and
    does not work; nothing was built.** See the Ledger. It is now **blocked on
@@ -938,6 +970,19 @@ detector removed · M-LSD unblocked in the GUI interpreter.
   refusal is a result to be recorded, not a missing datum. Doing this changed the
   two-pass verdict: with the refusals restored the sample went from 3 usable
   photographs to 11, and the conclusion with it.
+- **Ask which PATH a gate is on before removing it.** A measurement about a
+  feature is not automatically a measurement about the code path you are editing.
+  The confidence gate was removed from `pipeline.process` on the strength of a
+  sound measurement — and `process` is the *unattended* run, so the change took
+  the safety off where nobody is watching, and a visibly sheared photograph came
+  straight out. The review panel does not call `process` at all. **Manual-first
+  loosens gates where a person is looking; it says nothing about the batch.**
+- **A test that passes for a reason it does not name is not passing.** Twice on
+  2026-09-20, both caught only by deliberately breaking the source and re-running:
+  a near-edge test that needed a `found_a_case` guard, and a review-gate test
+  whose asset happened to sit below the threshold, so the clause under test was
+  never exercised. **Sabotage the thing the test is about, watch it go red, put
+  it back.** It costs a minute and it is the only evidence that exists.
 - **Deleting one function strands the next.** After any deletion, sweep every
   function in `src/pc` for references across src, tests and tools.
 

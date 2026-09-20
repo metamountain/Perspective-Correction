@@ -1030,3 +1030,65 @@ def test_manual_yaw_never_clamped():
         s.manual_yaw = math.radians(deg)
         assert abs(s.current_yaw() - math.radians(deg)) < 1e-9, \
             f"yaw {deg} deg was clamped in MANUAL mode"
+
+
+def test_a_hand_placed_facade_strip_stands_the_review_gate_down_but_not_the_batch():
+    """Drawing the strip is a decision; the unattended run still refuses.
+
+    ``would_skip`` already exempts control lines, and its own docstring says
+    why: refusing evidence because there is little of it "is right when a
+    detector produced it and wrong when a person did".  A strip drawn by hand
+    is a person, so it joins that list.
+
+    **The gate is engaged deliberately here rather than hoped for.**  A first
+    version of this test used an asset that happens to sit below the shipped
+    0.40, and it stayed green with the clause removed -- the strip had nudged
+    that photograph's confidence *up* over the line by itself, so the test was
+    passing for a reason it did not name.  Raising ``min_confidence`` puts the
+    gate beyond doubt and makes the clause the only thing that can open it.
+
+    **The second half matters more.**  The gate was briefly taken off
+    ``pipeline.process`` for the same argument, and that was the wrong path:
+    nobody is looking at what the unattended run writes, and ``Alte_Scheune``
+    (conf 0.39) then went through with a -26.5 deg yaw and came out visibly
+    sheared for 0.5 deg of gain.  Both halves are asserted together so that
+    loosening one cannot quietly loosen the other.
+    """
+    import pc.pipeline as P
+    from pc.config import Settings
+    from pc.review import ReviewSession
+
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    src = os.path.join(root, "tests", "assets", "Alte_Scheune.jpg")
+    if not os.path.exists(src):
+        import pytest
+        pytest.skip("Alte_Scheune.jpg not in the pool")
+
+    st = Settings(correct_horizontal=True)
+    st.min_confidence = 0.95          # engage the gate, whatever this asset scores
+    s = ReviewSession(src, st)
+
+    before = s.would_skip()
+    assert before is not None and "conf" in before, (
+        f"the gate is meant to be engaged at min_confidence=0.95 (got {before!r})")
+
+    assert s.set_roi_x(int(s.w * 0.20), int(s.w * 0.80), display_scale=1.0)
+    assert s.model is not None and s.model.confidence < st.min_confidence, (
+        "premise: the strip must not have lifted this over the gate, or the "
+        "next assertion proves nothing")
+    assert s.would_skip() is None, (
+        "a strip the user drew by hand is a decision, and the review gate must "
+        "stand down for it the way it already does for control lines")
+
+    s.clear_roi_x()
+    assert s.would_skip() is not None, (
+        "clearing the strip removes the decision, so the gate comes back")
+
+    # ...and the unattended path is untouched by any of it.
+    w = s.w
+    batch = Settings(correct_horizontal=True)
+    assert P.process(src, "", batch, dry_run=True).status == P.SKIPPED
+    assert P.process(src, "", batch, dry_run=True,
+                     roi_x=(int(w * 0.20), int(w * 0.80))).status == P.SKIPPED, (
+        "pipeline.process is the unattended run -- a strip must NOT buy a "
+        "low-confidence correction there, because nobody sees the result")
