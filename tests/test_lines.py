@@ -1,8 +1,13 @@
 """Line front end."""
 import math
+import os
+import tempfile
 
+import cv2
 import numpy as np
 
+import synth
+from pc import imageio as IO
 from pc import lines as L
 from pc.config import Settings
 
@@ -51,3 +56,36 @@ def test_angular_prior_is_monotone_and_bounded():
     assert w[0] == 1.0
     assert np.all(np.diff(w) < 0)
     assert np.all(w > 0)
+
+
+def test_masked_out_stays_four_wide_when_nothing_was_dropped():
+    """An audit finding (carried in CLAUDE.md, rated MED) claimed the empty
+    ``masked_out`` array comes back shape ``(0,)`` instead of ``(0, 4)`` --
+    which would break any consumer doing ``dropped[:, 0]`` on it.  A mask that
+    ignores nothing is not a rare case, it is the common one (any clean
+    photograph with a working mask and no clutter to remove), so this path
+    runs constantly.
+
+    Checked against the actual code (`lines.py:352-415`): `masked_out` is
+    built as ``np.array([r for r in seg.tolist() if ...])``, which is
+    genuinely ``(0,)`` when the list comprehension is empty -- Python's list
+    literal carries no column count for numpy to infer.  But that is caught
+    two lines later: ``if len(masked_out) == 0: masked_out =
+    np.zeros((0, 4))``.  That guard has been in place since e3c997c
+    (2026-08-31), before this audit ran, so the finding is already fixed in
+    the code the audit read -- this pins it so a future edit can't quietly
+    drop the guard again.
+    """
+    sc = synth.Scene(w=900, h=600, pitch_deg=8, seed=10, clutter=10)
+    with tempfile.TemporaryDirectory() as d:
+        src = os.path.join(d, "s.jpg")
+        cv2.imwrite(src, sc.img)
+        blank = np.zeros((600, 900), np.uint8)   # 0 everywhere: nothing ignored
+        cv2.imwrite(os.path.join(d, "s.png"), blank)
+        st = Settings().replace(mask_mode="file", mask_file=d)
+        gray, _ = IO.analysis_gray(sc.img, st.detect_max_edge)
+        small = cv2.resize(sc.img, (gray.shape[1], gray.shape[0]),
+                           interpolation=cv2.INTER_AREA)
+        _, _, _, _, info = L.prepare(gray, st, small, src)
+        assert info["mask_refused"] is False   # a blank mask loses no evidence
+        assert info["masked_out"].shape == (0, 4)

@@ -67,7 +67,85 @@ DETECTORS = ("lsd", "fld", "mlsd", "hybrid", "union",
              "deeplsd", "deep-hybrid", "deep-union")
 
 RULER_MARGIN = 20
+# The two candidates for text sitting ON the accent colour. Not part of a
+# palette: they are the ink, and which one is used is decided per theme by
+# measuring contrast -- see `on_accent`.
+# The window/taskbar icon is drawn white on an opaque black plate, because a
+# taskbar's own colour is not knowable and a white-on-nothing glyph disappears
+# on half of them. Not themed for that reason, and named so it is visibly a
+# decision.
+ICON_WHITE = "#ffffff"
+
+# The mask-tint picker: sixteen vivid, saturated choices laid out 4x4. Fixed
+# on purpose -- they are read against a PHOTOGRAPH, so they must stay apart
+# from each other and from brick, sky and foliage in every theme. Tkinter's
+# own `colorchooser` is broken on Windows, which is why this grid exists.
+MASK_SWATCHES = (
+    "#ff3030", "#ff7030", "#ffb030", "#ffff30",
+    "#30ff50", "#30ffd0", "#3090ff", "#3030ff",
+    "#8030ff", "#d030ff", "#ff30c0", "#ff3060",
+    "#ffffff", "#b0b0b0", "#606060", "#202020",
+)
+
+INK_ON_ACCENT_DARK = "#0b1017"
+INK_ON_ACCENT_LIGHT = "#ffffff"
+
 GUIDE_GREY = "#9aa0a8"
+
+# Marks drawn ON a photograph, and deliberately NOT part of the theme.
+#
+# The hard rule is "every colour comes from INK", and for chrome it holds
+# without exception. These are the exception, and it is worth stating rather
+# than leaving twenty-odd bare hex literals scattered through the draw calls
+# looking like oversights -- which is what they were until 2026-09-20, and
+# why nobody could tell a deliberate colour from a forgotten one.
+#
+# They do not follow the theme because they are not read against the theme.
+# A green inlier line is read against whatever the photograph happens to be,
+# and it has to stay legible on brick, sky and shadow in every palette. Nine
+# of these duplicate an INK value by coincidence of taste; binding them to it
+# would mean that picking Amiga 500 -- whose `ok` is #008800 -- turns the SAM
+# selection outline into dark green on a dark facade. The palette is free to
+# move; these are not.
+#
+# Named, so the next reader can tell intent from accident.
+OVERLAY = {
+    # the crop rectangle on the corrected pane, and its handles
+    "crop":        "#4da3ff",
+    "crop_edge":   "#0b1017",
+    # small pixel-dimension labels burned over the image corners
+    "label":       "#ffffff",
+    # hand-placed marks: cyan/amber for verticals, magenta for horizontals,
+    # the paler tone being the one that is not currently selected
+    "mark_v":      "#00e5ff",
+    "mark_v_off":  "#ffb300",
+    "mark_h":      "#e040fb",
+    "mark_h_off":  "#ce93d8",
+    "mark_handle": "#9e9e9e",
+    # SAM: the selection, its dashed drag preview, and a negative point
+    "sam":         "#5ac37f",
+    "sam_neg":     "#ff5555",
+    # the facade-strip rulers on the original
+    "strip":       "#9fd8ff",
+    # what the mask brush lays down
+    "paint":       "#8b0f14",
+    # "Check lines" re-runs the detector on the RESULT: green where a line
+    # came out truly straight, red/amber where it still leans.
+    "check_ok":    "#39ff7a",
+    "check_v_off": "#ff5a5a",
+    "check_h_off": "#ffb03a",
+    # the second M-LSD pass, drawn beside the primary detector's colours and
+    # therefore in a different hue family so the two can be told apart
+    "mlsd_ok":     "#00e5ff",
+    "mlsd_v_off":  "#76ff03",
+    "mlsd_h_off":  "#ffff00",
+    # the loupe crosshair; cyan while Alt damps the tracking, so the damping
+    # is visible rather than only felt
+    "loupe":       "#000000",
+    "loupe_alt":   "#00e5ff",
+    # what the mask wash is tinted with until the user picks otherwise
+    "mask_default": "#dc4c3e",
+}
 # --------------------------------------------------------------------------
 # theme
 # --------------------------------------------------------------------------
@@ -180,6 +258,44 @@ def _shorten_middle(name, limit=28):
     return f"{name[:head]}\u2026{name[-tail:]}"
 
 
+def _relative_luminance(hex_colour):
+    """WCAG relative luminance of ``#rrggbb``, 0 (black) to 1 (white)."""
+    h = hex_colour.lstrip("#")
+    if len(h) == 3:
+        h = "".join(c * 2 for c in h)
+    srgb = [int(h[i:i + 2], 16) / 255.0 for i in (0, 2, 4)]
+    lin = [c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
+           for c in srgb]
+    return 0.2126 * lin[0] + 0.7152 * lin[1] + 0.0722 * lin[2]
+
+
+def contrast_ratio(a, b):
+    """WCAG contrast between two ``#rrggbb`` colours: 1.0 (same) to 21.0."""
+    la, lb = _relative_luminance(a), _relative_luminance(b)
+    hi, lo = max(la, lb), min(la, lb)
+    return (hi + 0.05) / (lo + 0.05)
+
+
+def on_accent(accent, dark=INK_ON_ACCENT_DARK, light=INK_ON_ACCENT_LIGHT):
+    """Text colour for a button painted in *accent*: whichever reads better.
+
+    It was the literal ``"#0b1017"`` -- one dark, hardcoded, for every theme.
+    That is fine while the accent stays bright, and five of the six palettes
+    here do. **Amiga 500 does not**: its accent is ``#0055BB``, and dark text
+    on it measures a contrast ratio of **2.74**, against the 4.5 that WCAG AA
+    asks for body text. The primary action button in that theme -- Save, the
+    one the whole review loop ends on -- was the least legible thing in the
+    window, and nothing said so because a hex literal in a widget option looks
+    like a decision somebody made.
+
+    Measured rather than switched on a luminance threshold, because a
+    threshold is another number to be wrong about: compute both ratios and
+    take the better one. Every palette in THEMES now clears 4.5, which
+    `test_every_theme_keeps_the_accent_button_readable` checks.
+    """
+    return dark if contrast_ratio(dark, accent) >= contrast_ratio(light, accent) else light
+
+
 def apply_theme(root, palette=None):
     """Apply a colour palette to all ttk styles.  Returns ``(ui_family, mono_family)``."""
     p = palette or INK
@@ -227,7 +343,8 @@ def apply_theme(root, palette=None):
     st.map("TButton",
            background=[("pressed", p["line"]), ("active", p["line"])],
            foreground=[("disabled", p["dim"])])
-    st.configure("Accent.TButton", background=p["accent"], foreground="#0b1017",
+    st.configure("Accent.TButton", background=p["accent"],
+                 foreground=on_accent(p["accent"]),
                  padding=(18, 10))
     st.map("Accent.TButton", background=[("active", p["accent"]),
                                          ("disabled", p["line"])])
@@ -396,7 +513,7 @@ def _draw_eye_pyramid(canvas):
     w = max(int(canvas.winfo_width()), 1)
     h = max(int(canvas.winfo_height()), 1)
     tri, eye_box, pupil_box = _beholder_points(w, h)
-    col = "#ffffff"
+    col = ICON_WHITE
     canvas.create_polygon(*tri, outline=col, width=2, fill="")
     canvas.create_oval(eye_box, outline=col, width=2, fill="")
     canvas.create_oval(pupil_box, outline=col, fill=col, width=1)
@@ -626,7 +743,7 @@ def _beholder_pil(size=64):
     """
     from PIL import ImageDraw
     img = Image.new("RGBA", (size, size), (0, 0, 0, 255))
-    mark = _logo_image(size, "#ffffff")
+    mark = _logo_image(size, ICON_WHITE)
     if mark is not None:
         img.alpha_composite(mark)
         return img
@@ -966,7 +1083,7 @@ class ReviewPanel(tk.Frame):
         if getattr(self, "v_show_lines", None) is None:
             self.v_show_lines = tk.BooleanVar(value=True)
             self.v_show_mask = tk.BooleanVar(value=True)
-            self.v_mask_color = tk.StringVar(value="#dc4c3e")
+            self.v_mask_color = tk.StringVar(value=OVERLAY["mask_default"])
             self.v_mask_alpha = tk.DoubleVar(value=0.60)
         ovbar = tk.Frame(self.c_before, bg=INK["field"])
         self._ovbar = ovbar
@@ -1521,13 +1638,7 @@ class ReviewPanel(tk.Frame):
                 win.geometry(f"+{x}+{y}")
             except tk.TclError:
                 pass
-        # 4×4 grid of vivid, saturated colours — easy to distinguish on any theme.
-        presets = [
-            "#ff3030", "#ff7030", "#ffb030", "#ffff30",
-            "#30ff50", "#30ffd0", "#3090ff", "#3030ff",
-            "#8030ff", "#d030ff", "#ff30c0", "#ff3060",
-            "#ffffff", "#b0b0b0", "#606060", "#202020",
-        ]
+        presets = list(MASK_SWATCHES)
         cur = self.v_mask_color.get()
 
         def pick(col):
@@ -2176,7 +2287,7 @@ class ReviewPanel(tk.Frame):
         arm = max(20, size // 6)
         # Cyan while Alt is held: the only way to see the damping is active,
         # since a half-speed glass is easy to mistake for a full-speed one.
-        cross = "#00e5ff" if alt else "#000000"
+        cross = OVERLAY["loupe_alt"] if alt else OVERLAY["loupe"]
         for x1, y1, x2, y2 in ((m - arm, m, m + arm, m), (m, m - arm, m, m + arm)):
             c.create_line(x1, y1, x2, y2, fill=cross, width=2)
         # Round, and it says "glass" rather than "a second window". Tk cannot
@@ -2484,7 +2595,7 @@ class ReviewPanel(tk.Frame):
         self.c_after.create_text(
             8, box[1] - 6, anchor="sw",
             text=f"{ow}×{oh}  {cw}×{ch}",
-            fill="#ffffff", font=("Segoe UI", 9))
+            fill=OVERLAY["label"], font=("Segoe UI", 9))
 
     def _draw_crop_outline(self, rx0, ry0, rx1, ry1):
         """The kept rectangle's border and handles on the after canvas.
@@ -2497,7 +2608,7 @@ class ReviewPanel(tk.Frame):
         x0, x1 = sorted((rx0, rx1))
         y0, y1 = sorted((ry0, ry1))
         self.c_after.delete(tag)
-        self.c_after.create_rectangle(x0, y0, x1, y1, outline="#4da3ff",
+        self.c_after.create_rectangle(x0, y0, x1, y1, outline=OVERLAY["crop"],
                                       width=2, tags=tag)
         # Handles: the four corners and the midpoints of the four edges.
         # Drawn because a grab region nobody can see is a feature nobody finds;
@@ -2517,7 +2628,7 @@ class ReviewPanel(tk.Frame):
             cx = min(max(hx, x0 + h), x1 - h) if x1 - x0 > 2 * h else hx
             cy = min(max(hy, y0 + h), y1 - h) if y1 - y0 > 2 * h else hy
             self.c_after.create_rectangle(cx - h, cy - h, cx + h, cy + h,
-                                          fill="#4da3ff", outline="#0b1017",
+                                          fill=OVERLAY["crop"], outline=OVERLAY["crop_edge"],
                                           width=1, tags=tag)
 
     def _on_click_before(self, event):
@@ -2634,9 +2745,9 @@ class ReviewPanel(tk.Frame):
         # Tinted by the plane this drag would land in, recomputed on every
         # motion: the classification is invisible otherwise until too late.
         dx, dy = (event.x - ox, event.y - oy)
-        col = ("#00e5ff"
+        col = (OVERLAY["mark_v"]
                if self._kind_for(x0, y0, dx, dy) == "v"
-               else "#e040fb")
+               else OVERLAY["mark_h"])
         self.c_before.create_line(ox + x0, oy + y0, ox + dx, oy + dy,
                                   fill=col, width=2, dash=(4, 3),
                                   tags="mark_rubber")
@@ -2848,12 +2959,12 @@ class ReviewPanel(tk.Frame):
                 s = self._before_scale
                 lx, ly = quad[-1]
                 self.c_before.create_line(ox + lx * s, oy + ly * s, event.x, event.y,
-                                          fill="#5ac37f", width=2, dash=(4, 4),
+                                          fill=OVERLAY["sam"], width=2, dash=(4, 4),
                                           tags="rect_rubber")
                 if len(quad) >= 3:
                     fx, fy = quad[0]
                     self.c_before.create_line(event.x, event.y, ox + fx * s, oy + fy * s,
-                                              fill="#5ac37f", width=2, dash=(4, 4),
+                                              fill=OVERLAY["sam"], width=2, dash=(4, 4),
                                               tags="rect_rubber")
             return
         if getattr(self, "_roi_drag", None) is not None:
@@ -2954,11 +3065,11 @@ class ReviewPanel(tk.Frame):
         self.c_before.create_rectangle(ox, oy, px0, oy + ih, **wash, tags="roi_ruler")
         self.c_before.create_rectangle(px1, oy, ox + iw, oy + ih, **wash, tags="roi_ruler")
         for pxf in (px0, px1):
-            self.c_before.create_line(pxf, oy, pxf, oy + ih, fill="#9fd8ff",
+            self.c_before.create_line(pxf, oy, pxf, oy + ih, fill=OVERLAY["strip"],
                                       width=2, tags="roi_ruler")
             cy = oy + ih // 2
             self.c_before.create_oval(pxf - 7, cy - 7, pxf + 7, cy + 7,
-                                      outline="#9fd8ff", width=2, fill=INK["field"],
+                                      outline=OVERLAY["strip"], width=2, fill=INK["field"],
                                       tags="roi_ruler")
 
     def _roi_ruler_at(self, x, y=None):
@@ -3188,11 +3299,11 @@ class ReviewPanel(tk.Frame):
             x, y = pts[0]
             self.c_before.create_oval(ox + x - r, oy + y - r,
                                       ox + x + r, oy + y + r,
-                                      outline="", fill="#8b0f14",
+                                      outline="", fill=OVERLAY["paint"],
                                       tags="stroke_preview")
             return
         flat = [c for p in pts for c in (ox + p[0], oy + p[1])]
-        self.c_before.create_line(flat, width=2 * r, fill="#8b0f14",
+        self.c_before.create_line(flat, width=2 * r, fill=OVERLAY["paint"],
                                   capstyle="round", joinstyle="round",
                                   tags="stroke_preview")
 
@@ -3323,7 +3434,7 @@ class ReviewPanel(tk.Frame):
             self.c_before.create_text(
                 8, box_b[1] - 6, anchor="sw",
                 text=f"{self.session.w}×{self.session.h}",
-                fill="#ffffff", font=("Segoe UI", 9))
+                fill=OVERLAY["label"], font=("Segoe UI", 9))
             # Rectangle quad LAST: drawn over everything (loupe, marks, guides)
             self._draw_rect_quad()
             self._show_after(self.session.crop_rect)
@@ -3532,9 +3643,9 @@ class ReviewPanel(tk.Frame):
         for x0, y0, x1, y1 in seg:
             dx, dy = x1 - x0, y1 - y0
             if abs(dy) >= abs(dx):     # vertical-ish: the ones being straightened
-                colour = "#39ff7a" if abs(dx) <= 1.5 else "#ff5a5a"
+                colour = OVERLAY["check_ok"] if abs(dx) <= 1.5 else OVERLAY["check_v_off"]
             else:
-                colour = "#39ff7a" if abs(dy) <= 1.5 else "#ffb03a"
+                colour = OVERLAY["check_ok"] if abs(dy) <= 1.5 else OVERLAY["check_h_off"]
             self.c_after.create_line(ox + x0, oy + y0, ox + x1, oy + y1,
                                      fill=colour, width=1, tags="after_lines")
         # Second pass: M-LSD in a distinct colour (cyan) so both detectors
@@ -3549,9 +3660,9 @@ class ReviewPanel(tk.Frame):
                 for x0, y0, x1, y1 in seg_m:
                     dx, dy = x1 - x0, y1 - y0
                     if abs(dy) >= abs(dx):
-                        colour = "#00e5ff" if abs(dx) <= 1.5 else "#76ff03"
+                        colour = OVERLAY["mlsd_ok"] if abs(dx) <= 1.5 else OVERLAY["mlsd_v_off"]
                     else:
-                        colour = "#00e5ff" if abs(dy) <= 1.5 else "#ffff00"
+                        colour = OVERLAY["mlsd_ok"] if abs(dy) <= 1.5 else OVERLAY["mlsd_h_off"]
                     self.c_after.create_line(ox + x0, oy + y0, ox + x1, oy + y1,
                                              fill=colour, width=1, tags="after_lines")
 
@@ -3746,7 +3857,7 @@ class ReviewPanel(tk.Frame):
         active_v = self.session.control_active
         for i, (x0, y0, x1, y1) in enumerate(
                 self.session.control_lines_for_display(self._before_scale)):
-            col = "#00e5ff" if active_v else "#ffb300"
+            col = OVERLAY["mark_v"] if active_v else OVERLAY["mark_v_off"]
             self.c_before.create_line(ox + x0, oy + y0, ox + x1, oy + y1,
                                       fill=col, width=lw)
             for ex, ey in ((x0, y0), (x1, y1)):
@@ -3760,7 +3871,7 @@ class ReviewPanel(tk.Frame):
         for i, (x0, y0, x1, y1) in enumerate(
                 self.session.control_lines_for_display(
                     self._before_scale, kind="h")):
-            col = "#e040fb" if active_h else "#ce93d8"
+            col = OVERLAY["mark_h"] if active_h else OVERLAY["mark_h_off"]
             self.c_before.create_line(ox + x0, oy + y0, ox + x1, oy + y1,
                                       fill=col, width=lw, arrow="both",
                                       arrowshape=(9, 11, 4))
@@ -3776,7 +3887,7 @@ class ReviewPanel(tk.Frame):
             px, py = ox + pend[0], oy + pend[1]
             # One point leans no way yet, so it wears neither plane colour.
             self.c_before.create_oval(px - 6, py - 6, px + 6, py + 6,
-                                       outline="#9e9e9e", width=2)
+                                       outline=OVERLAY["mark_handle"], width=2)
 
     def _draw_rect_quad(self):
         """Draw the four PC Rectangle corners and connecting edges on the before pane."""
@@ -3786,7 +3897,7 @@ class ReviewPanel(tk.Frame):
         ox, oy = self._before_off
         s = self._before_scale
         pts = [(ox + px * s, oy + py * s) for px, py in quad]
-        col = "#5ac37f"
+        col = OVERLAY["sam"]
         n = len(pts)
         for i in range(n - 1):
             self.c_before.create_line(pts[i][0], pts[i][1], pts[i + 1][0], pts[i + 1][1],
@@ -3895,7 +4006,7 @@ class ReviewPanel(tk.Frame):
         cx1, cy1 = max(x0, x1), max(y0, y1)
         self.c_before.create_rectangle(ox + cx0 * sc, oy + cy0 * sc,
                                        ox + cx1 * sc, oy + cy1 * sc,
-                                       outline="#5ac37f", width=2, tags="sam_prompts")
+                                       outline=OVERLAY["sam"], width=2, tags="sam_prompts")
 
     def _on_sam_release(self, event):
         if not self.v_sam.get() or not hasattr(self, '_sam_drag_start'):
@@ -3978,10 +4089,10 @@ class ReviewPanel(tk.Frame):
             x0, y0, x1, y1 = self._sam_box
             self.c_before.create_rectangle(ox + x0 * self.session.w * s, oy + y0 * self.session.h * s,
                                            ox + x1 * self.session.w * s, oy + y1 * self.session.h * s,
-                                           outline="#5ac37f", width=2, tags="sam_prompts")
+                                           outline=OVERLAY["sam"], width=2, tags="sam_prompts")
         # Points
         for px, py, pos in (getattr(self, '_sam_points', None) or []):
-            col = "#5ac37f" if pos else "#ff5555"
+            col = OVERLAY["sam"] if pos else OVERLAY["sam_neg"]
             self.c_before.create_oval(ox + px * s - 4, oy + py * s - 4,
                                       ox + px * s + 4, oy + py * s + 4,
                                       fill=col, outline="", tags="sam_prompts")
@@ -3991,7 +4102,7 @@ class ReviewPanel(tk.Frame):
             cw = self.c_before.winfo_width()
             ch = self.c_before.winfo_height()
             self.c_before.create_rectangle(2, 2, cw - 2, ch - 2,
-                                           outline="#5ac37f", width=3,
+                                           outline=OVERLAY["sam"], width=3,
                                            tags="sam_prompts")
 
     def _on_sam_right_click(self, event):
