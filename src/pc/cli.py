@@ -104,10 +104,12 @@ def build_parser():
     g.add_argument("--max-horizontal", type=float, default=Settings.max_horizontal_deg,
                     help="cap on the horizontal (yaw) correction, degrees")
     g.add_argument("--roi-x", type=float, nargs=2, metavar=("X0", "X1"), default=None,
-                   help="restrict the horizontal evidence to the vertical strip "
-                        "X0..X1 in full-resolution pixels (corner views: fit yaw on "
-                         "one facade); verticals stay global. A strip holding no "
-                         "horizontals falls back to the full frame")
+                   help="restrict the evidence to the vertical strip X0..X1, "
+                        "given as FRACTIONS of the image width (0..1) -- e.g. "
+                        "0.02 0.46 for the left facade of a corner view. Both "
+                        "pools are restricted, verticals included: the two faces "
+                        "of a corner have different vertical clusters. A strip "
+                        "holding no lines of a kind leaves that pool whole")
     g.add_argument("--scheme", action="store_true",
                    help="partition detected lines into the building's Manhattan "
                         "planes before the VP search (ArchitectureScheme); off by "

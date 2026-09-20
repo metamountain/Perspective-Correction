@@ -48,7 +48,7 @@ def _drop_touching(ls, mask):
     """
     if mask is None or ls is None or not len(ls.seg):
         return ls
-    keep = MK.touches(ls.seg, mask)
+    keep = MK.untouched(ls.seg, mask)
     if keep.all():
         return ls
     if not keep.any():
@@ -867,7 +867,11 @@ class ReviewSession:
 
     # -- current correction ----------------------------------------------
     def current_angles(self):
-        """``(roll, pitch, focal_px)`` actually in force, limits applied."""
+        """``(roll, pitch, focal_px, clamped)`` actually in force.
+
+        Four values, not the three this used to name -- the fourth says whether
+        `warp.limit` hit a cap. Every return path in the body has four.
+        """
         if len(self.control_lines):
             # The DRAWN LINE is the switch (2026-09-20, user-directed). There
             # used to be an "h-marker" checkbox in the control column that armed

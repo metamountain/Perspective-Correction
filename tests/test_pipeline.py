@@ -429,17 +429,19 @@ def test_use_scheme_partitions_lines_and_is_off_by_default():
         "the scheme only removes lines, it never invents them"
 
 
-def test_a_strip_thins_the_horizontals_and_leaves_the_verticals_bit_identical():
-    """The strip restricts horizontal evidence to one facade in a corner view.
-    Since the corner-view fix (2026-09), verticals are ALSO restricted to the
-    strip, because a mixed-facade pitch fit invalidates the yaw correction.
-    Both orientations must be thinned; the assertion is that the strip actually
-    removes lines from both pools."""
+def test_a_strip_thins_both_pools_not_just_the_horizontals():
+    """The strip restricts the evidence to one facade of a corner view -- BOTH
+    pools, verticals included, because the two faces have different vertical
+    clusters and a mixed-facade pitch fit invalidates the yaw.
+
+    Renamed: it used to be called `..._leaves_the_verticals_bit_identical`
+    while asserting the exact opposite two lines down. A test whose name
+    contradicts its own body teaches the wrong contract to everyone who greps
+    for it and never runs it."""
     _, v0, h0, _, _ = _roi_analyse()
-    # Band 0-300 (analysis-image pixels, ~25% of the 1200px frame): line
-    # midpoints are spread across the full width, so a quarter-width strip
-    # must drop lines from both pools.
-    _, v1, h1, _, _ = _roi_analyse(band=(0.0, 300.0))
+    # A quarter of the width, as a FRACTION: line midpoints are spread across
+    # the whole frame, so this must drop lines from both pools.
+    _, v1, h1, _, _ = _roi_analyse(band=(0.0, 0.25))
     assert len(h1) < len(h0), f"a strip over a quarter of the frame must drop horizontals ({len(h1)} vs {len(h0)})"
     assert len(v1) < len(v0), f"a strip must also drop verticals (corner-view fix) ({len(v1)} vs {len(v0)})"
 
@@ -504,22 +506,36 @@ def test_every_degenerate_strip_falls_back_except_a_reversed_one():
         _roi_summary(_roi_analyse(band=(300.0, 900.0))), "reversed bounds sort"
 
 
-def test_the_strip_is_given_in_full_pixels_and_rescaled_to_the_analysis_image():
-    """Analysis runs on a downscaled copy while the caller -- a CLI flag, a drag
-    on a full-size photograph -- speaks in full-resolution pixels. A missing
-    rescale would put the strip somewhere nobody pointed at, silently, and only
-    on images large enough to be downscaled, which is the worst kind of bug to
-    find in a batch. Both bounds are non-zero on purpose: with a band starting
-    at 0 a dropped factor on the low end multiplies to 0 either way, and the
-    test would see nothing."""
-    # Band 100-300 (analysis-image pixels): covers ~25% of the analysis width.
-    # Line midpoints are spread across the full frame, so this must restrict.
-    res = _roi_analyse(band=(100.0, 300.0), max_edge=600)
-    full = _roi_analyse(max_edge=600)
-    scale = res[3]
-    assert scale < 1.0, "the fixture must actually downscale, or this proves nothing"
-    assert len(res[2]) < len(full[2]), \
-        f"the band must be a real restriction: {len(res[2])} kept vs {len(full[2])} full"
+def test_the_strip_means_the_same_thing_at_two_analysis_resolutions():
+    """A strip given from outside must not move when the analysis size changes.
+
+    It used to be documented as full-resolution pixels and USED as analysis
+    pixels, so a caller's band landed somewhere nobody pointed at on every
+    photograph large enough to be downscaled -- and the test that was supposed
+    to catch that asserted only that the band restricted SOMETHING, never that
+    it was rescaled. Its own name said "full pixels", its comment inside said
+    "analysis-image pixels", and neither was checked.
+
+    Fractions of the width remove the question. This measures the answer: the
+    kept horizontals must fall inside the requested band at BOTH resolutions,
+    with the band read back as a fraction of each analysis width."""
+    import numpy as np
+
+    lo, hi = 0.30, 0.70
+    for max_edge in (600, 1100):
+        _, _v, h, _sc, _d = _roi_analyse(band=(lo, hi), max_edge=max_edge)
+        full = _roi_analyse(max_edge=max_edge)
+        assert len(h) < len(full[2]),             f"max_edge={max_edge}: the band must restrict ({len(h)} vs {len(full[2])})"
+        # Midpoints of what survived, as fractions of that analysis width.
+        mid = (h.seg[:, 0] + h.seg[:, 2]) / 2.0
+        span = float(mid.max() - mid.min())
+        width = float(np.max(full[2].seg[:, [0, 2]]))
+        frac_span = span / width
+        assert frac_span <= (hi - lo) + 0.08, (
+            f"max_edge={max_edge}: kept lines span {frac_span:.2f} of the width, "
+            f"wider than the {hi - lo:.2f} band asked for")
+
+
 
 
 def test_the_strip_round_trips_onto_the_result_and_into_the_log_line():

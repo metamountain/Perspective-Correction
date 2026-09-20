@@ -104,11 +104,10 @@ def build_record(result, before: dict, after: dict, version: str) -> dict:
             "focal_source": result.focal_source,
             "clamped": bool(result.clamped),
         },
-        # getattr on BOTH: a record builder must not require an attribute it
-        # can do without. Demanding out_size broke every caller that hands it a
-        # lighter stand-in, which is how the tests found it.
-        "strip": _strip_fractions(getattr(result, "roi_x", None),
-                                  (getattr(result, "out_size", None) or (0, 0))[0]),
+        # Already fractions on the Result -- that is the unit --roi-x takes
+        # and the unit this file stores, so there is nothing to convert.
+        "strip": ([float(v) for v in result.roi_x]
+                  if getattr(result, "roi_x", None) else None),
     }
 
 
