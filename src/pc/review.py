@@ -306,7 +306,9 @@ class ReviewSession:
         """
         gh, gw = self.gray.shape[:2]
         settings = self.settings
-        if len(self.control_lines) >= 2:
+        drew_v = len(self.control_lines) >= 2
+        drew_h = len(self.control_hlines) >= 2
+        if drew_v:
             vert = L.LineSet(self.control_lines)
             # two lines already determine a vanishing point, and the floor of
             # four exists to keep the detector from fitting noise -- which is
@@ -314,7 +316,7 @@ class ReviewSession:
             settings = settings.replace(min_vertical_lines=2)
         else:
             vert = self.vert.subset(self.enabled)
-        if len(self.control_hlines) >= 2:
+        if drew_h:
             # A person drew these; like the verticals they replace the detected
             # pool rather than joining it, and the detector's support floor is
             # dropped for them -- refusing a little hand-stated evidence because
@@ -328,13 +330,19 @@ class ReviewSession:
             # masking idea with its own mechanism and its own place in the
             # pipeline, which is exactly the chaos the registry removes.
             horiz = self.horiz
-        # The one rule, applied in the one place, to both pools and to hand
-        # drawn lines as well as detected ones: an annotator that TOUCHES the
-        # mask is not evidence.  Control lines are not exempt -- they replace
-        # the detected pool, so a marked edge running through a masked region
-        # would otherwise be the only thing left and unchallenged.
-        vert = _drop_touching(vert, self.ignore_mask("v"))
-        horiz = _drop_touching(horiz, self.ignore_mask("h"))
+        # An annotator that TOUCHES the mask is not evidence -- for the
+        # DETECTOR. The mask is aimed at what a detector finds and a person
+        # would not: sky, branches, parked cars. A hand-drawn control line is
+        # the opposite case. Somebody could see the mask while they drew across
+        # it and drew anyway, which is a statement, not an accident; dropping it
+        # discards the more reliable of the two. The same reasoning `would_skip`
+        # already applies to the confidence gate -- refusing evidence for being
+        # scarce is right for a detector and wrong for a person.
+        # (2026-09-20, user: "maske und marker sollten sich vertragen".)
+        if not drew_v:
+            vert = _drop_touching(vert, self.ignore_mask("v"))
+        if not drew_h:
+            horiz = _drop_touching(horiz, self.ignore_mask("h"))
         exif_px = IO.focal_px_from_exif(self.src, self.w, self.h) \
             if self.settings.use_exif_focal else None
         # A strip means one facade has been pointed at, which is the precondition
@@ -860,9 +868,15 @@ class ReviewSession:
     # -- current correction ----------------------------------------------
     def current_angles(self):
         """``(roll, pitch, focal_px)`` actually in force, limits applied."""
-        if getattr(self, "_hmarker_active", False):
-            # Manual marker mode: roll/pitch from the vertical mark's bearing,
-            # no VP, no model.  The marker IS the correction.
+        if len(self.control_lines):
+            # The DRAWN LINE is the switch (2026-09-20, user-directed). There
+            # used to be an "h-marker" checkbox in the control column that armed
+            # this, while the lines it consumed were drawn with a tool on the
+            # other side of the window -- a control whose precondition lived
+            # somewhere else, which could refuse a click and then untick itself.
+            # A line somebody drew is already the decision; nothing else has to
+            # be switched on to mean it.
+            # Roll/pitch from the vertical mark's bearing: no VP, no model.
             f = (self.model.f if self.model and self.model.f
                  else M.focal_px_from_35mm(self.settings.default_focal_35mm,
                                            self.w, self.h))
@@ -884,6 +898,55 @@ class ReviewSession:
                                              self.settings,
                                              focal_is_a_guess=guessed)
         return roll, pitch, self.model.f, clamped
+
+    def marker_yaw(self):
+        """Yaw from the horizontal control lines, or ``None`` when none exist.
+
+        Each drawn segment gives a direction in camera coordinates; un-rotating
+        it by the roll and pitch in force turns that into a world bearing, and
+        the yaw that sends the bearing onto the x-axis is its ``atan2``. Several
+        lines are averaged the wrap-aware way -- as vectors, because the mean of
+        179 and -179 degrees is not zero.
+
+        This lived in the GUI, computed once when a checkbox was ticked and
+        cached on the session. It is a property of the lines, so it is computed
+        from the lines, and a line added or deleted changes the answer without
+        anything having to remember to recompute it.
+        """
+        # len(), not truthiness: these pools are arrays, and the truth
+        # value of an empty array is a ValueError rather than False.
+        if len(self.control_hlines) == 0:
+            return None
+        f = (self.model.f if self.model and self.model.f
+             else M.focal_px_from_35mm(self.settings.default_focal_35mm,
+                                       self.w, self.h))
+        if len(self.control_lines):
+            roll, pitch = self._marker_roll_pitch(f)
+        elif self.model and self.model.f:
+            roll, pitch, _y, _c = W.limit(self.model.roll, self.model.pitch,
+                                          self.settings)
+        else:
+            roll, pitch = 0.0, 0.0
+        cx, cy = self.w / 2.0, self.h / 2.0
+        sin_sum = cos_sum = 0.0
+        n = 0
+        for seg in self.control_hlines:
+            x0, y0, x1, y1 = (float(seg[0]), float(seg[1]),
+                              float(seg[2]), float(seg[3]))
+            r0 = np.array([(x0 - cx) / f, (y0 - cy) / f, 1.0])
+            r1 = np.array([(x1 - cx) / f, (y1 - cy) / f, 1.0])
+            d3 = r1 - r0
+            dn = float(np.linalg.norm(d3))
+            if dn < 1e-9:
+                continue
+            w = G.rot_z(-roll) @ G.rot_x(-pitch) @ (d3 / dn)
+            a = math.atan2(float(w[2]), float(w[0]))
+            sin_sum += math.sin(a)
+            cos_sum += math.cos(a)
+            n += 1
+        if not n:
+            return None
+        return math.atan2(sin_sum, cos_sum)
 
     def _marker_roll_pitch(self, f: float):
         """Roll and pitch from vertical control line(s).
@@ -954,16 +1017,19 @@ class ReviewSession:
 
         In auto mode it is the model's yaw through the same limits, which is
         where ``correct_horizontal`` gates it to zero.  A hand-drawn horizontal
-        marker (``_hmarker_yaw``) overrides the model's yaw when set -- it is a
-        direct bearing constraint that does not need a vanishing point."""
-        if getattr(self, "_hmarker_active", False):
-            hm = getattr(self, "_hmarker_yaw", None)
-            return hm if hm is not None else 0.0
-        if self.mode == MANUAL:
-            return self.manual_yaw
-        hm = getattr(self, "_hmarker_yaw", None)
+        A hand-drawn horizontal overrides the model's yaw -- it is a direct
+        bearing constraint that needs no vanishing point, and drawing one IS
+        the instruction to use it.
+
+        The old version read the marker yaw TWICE: once behind the mode flag
+        and once after it, ungated. Only the first was meant; the second
+        overrode the model whenever a stale value was lying about, and it
+        survived because switching the mode off happened to clear it."""
+        hm = self.marker_yaw()
         if hm is not None:
             return hm
+        if self.mode == MANUAL:
+            return self.manual_yaw
         if self.model is None or not self.model.f:
             return 0.0
         guessed = self.model.f_source in ("default", "prior", "none", "refined")
