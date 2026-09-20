@@ -454,12 +454,17 @@ def estimate(vert, horiz, w: int, h: int, settings, exif_focal_px=None,
                 # because every consumer downstream still speaks in three.
                 f_orth = G.focal_from_orthogonal(hy.vp, dom.vp, cx, cy)
                 if f_orth:
-                    # The orthogonality constraint is not a foreign assumption
-                    # here: it agreed with the refined focal to 0.4% on the test
-                    # facade.  Where it disagrees wildly, the two vanishing
-                    # points are not perpendicular and the premise is false, so
-                    # keep what the vertical evidence gave.
-                    if 0.5 * f_use <= f_orth <= 2.0 * f_use:
+                    # The window and the rating it earns have to agree. This
+                    # accepted anything inside a factor of TWO and then rated it
+                    # 0.85 -- claiming the focal is well determined in exactly
+                    # the case where the two independent estimates contradict
+                    # each other by 80%. A closed-form constraint is only
+                    # CONFIRMED evidence while it lands near what the vertical
+                    # evidence found independently; outside that the premise
+                    # (the two vanishing points are perpendicular) is the thing
+                    # in doubt, and the honest move is to keep the old value
+                    # and say so.
+                    if 0.75 * f_use <= f_orth <= 1.33 * f_use:
                         f_use, f_src = f_orth, "orthogonal"
                     else:
                         diag["ortho_focal_rejected"] = round(f_orth, 1)
@@ -571,6 +576,15 @@ def _confidence(vert, hy, support, f_src, f_quality, roll, pitch, f, cx, cy,
     c_focal = {"exif": 1.0, "manual": 1.0, "horizon": 0.85 + 0.15 * f_quality,
                "geometric": 0.80 + 0.20 * f_quality,
                "blended": 0.75 + 0.20 * f_quality, "refined": 0.72,
+               # A focal from f^2 = -(v1-c).(v2-c), accepted only while it
+               # agrees with the independent estimate -- see estimate(). It was
+               # falling through to the 0.60 "unknown source" default, which is
+               # simply the wrong rating for a closed-form constraint that two
+               # measurements confirm. It is a RATING, not a gate release: the
+               # min_confidence veto in pipeline.process stands (see f9659fc --
+               # the unattended path is where nobody is watching), and in the
+               # review panel would_skip already exempts a hand-placed strip,
+               # so this moves a displayed number there and not a decision.
                "orthogonal": 0.85,
                "default": 0.60, "none": 0.40}.get(f_src, 0.6)
     d["focal_source"] = f_src

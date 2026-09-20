@@ -168,9 +168,24 @@ die Zerlegung **einer** Rotation — einen davon zu dämpfen schert das Ergebnis
 wieder aus dem Winkel. Gemessen: **13,63° schief mit Dämpfung, 0,07° ohne.**
 Sie bleibt für den alten Pfad aktiv.
 
-**Die Konfidenz-Buchhaltung.** Der ROI-Pfad hebelte sich selbst aus: die
-Einschränkung auf eine Fassade senkte die Konfidenz unter das Annahmetor, das
-Bild wurde übersprungen und gar nicht korrigiert.
+**Die Konfidenz-Buchhaltung — mit einer wichtigen Einschränkung.** Meine
+Messung lief über `P.process(roi_x=…)`, also über `pipeline.analyse`, das die
+Evidenz **vor** der Fluchtpunktsuche einschränkt. Dort fällt die Konfidenz
+unter das Annahmetor und das Bild wird unkorrigiert übersprungen.
+
+Das gilt **nicht** für die GUI. `ReviewSession.set_roi_x` filtert einen bereits
+detektierten Pool — ein anderer Eingriffspunkt — und bewegt die Konfidenz kaum
+(gemessen in `f9659fc` über 11 Eckansichten: 0,59→0,59, 0,54→0,54, 0,67→0,68,
+0,40→0,44, grösster Fall 0,69→0,57; keine überschreitet das Tor). Derselbe
+Regler, derselbe Name, zwei verschiedene Wirkungen je nach Ort — das ist dort
+als eigener offener Punkt vermerkt.
+
+Für die Entscheidung *überspringen oder nicht* ist der interaktive Pfad
+ausserdem bereits versorgt: `review.would_skip` nimmt einen handgezogenen
+Streifen vom Tor aus, aus demselben Grund, aus dem es Kontrolllinien ausnimmt —
+wenig Evidenz abzulehnen ist richtig, wenn ein Detektor sie erzeugt hat, und
+falsch, wenn ein Mensch sie gesetzt hat. Das Veto in `pipeline.process` steht
+dagegen bewusst: das ist der unbeaufsichtigte Lauf.
 
 | | conf | stability | focal |
 |---|---|---|---|
@@ -180,11 +195,18 @@ Bild wurde übersprungen und gar nicht korrigiert.
 | ROI, Fassadenrotation (jetzt) | **0,470** | 0,582 | 0,850 |
 
 Eine Brennweite aus `f² = −(v₁−c)·(v₂−c)` fiel durch das Raster auf den
-0,60-Wert für „unbekannte Quelle". Sie ist nicht unbekannt, sondern eine
-geschlossene geometrische Bedingung mit einer einzigen Annahme — dass die
-beiden Richtungen senkrecht stehen —, und genau das sichert die
-Ein-Fassaden-Voraussetzung zu. Sie steht jetzt bei den anderen geometrischen
-Quellen (0,85).
+0,60-Wert für „unbekannte Quelle". Das ist die falsche **Einstufung** für eine
+geschlossene geometrische Bedingung, unabhängig davon, was sie freischaltet;
+sie steht jetzt bei den anderen geometrischen Quellen (0,85).
+
+Wichtig ist, dass Fenster und Note zusammenpassen. Die erste Fassung nahm alles
+innerhalb eines **Faktors 2** an und gab ihm dann 0,85 — sie behauptete also
+gerade dann, die Brennweite sei gut bestimmt, wenn die beiden unabhängigen
+Schätzungen einander um 80 % widersprechen. Eine Bedingung ist nur so lange
+*bestätigende* Evidenz, wie sie nahe bei dem landet, was die vertikale Evidenz
+für sich gefunden hat. Das Fenster ist deshalb ±25 %; darüber hinaus steht die
+Voraussetzung selbst in Zweifel — die beiden Fluchtpunkte sind dann nicht
+senkrecht —, der alte Wert bleibt stehen und `ortho_focal_rejected` sagt es.
 
 ## 4. Offene Punkte
 
