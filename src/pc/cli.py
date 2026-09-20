@@ -189,8 +189,9 @@ def build_parser():
                    help="Grounding DINO model dir; empty uses the vendored "
                         "models/GroundingDINO")
     g.add_argument("--remember", action="store_true",
-                   help="store --birefnet-model, --mask-file, -o and --focal-35mm as "
-                        "defaults for future runs")
+                   help="store --birefnet-model, --mask-file, -o, --focal-35mm, "
+                        "--pad, --comfy-url and --comfy-workflow as defaults for "
+                        "future runs")
     g.add_argument("--forget", action="store_true",
                    help="delete the remembered defaults and exit")
     g.add_argument("--mask-export", metavar="DIR",
@@ -576,8 +577,13 @@ def main(argv=None) -> int:
     if used and not args.quiet:
         print(f"# using remembered {', '.join(used)} from {prefs.path()}")
     if args.remember:
+        # `pad` is listed in prefs.ALLOWED, read back at startup by
+        # gui.py:4679, and was passed by nothing -- a setting prefs.py calls
+        # "the one deliberate exception ... expects to survive" and that no
+        # code path could ever store. It is saved here now, where the user
+        # states it.
         ok = prefs.save(birefnet_model=args.birefnet_model, mask_file=args.mask_file,
-                        output=args.output,
+                        output=args.output, pad=args.pad,
                         focal_35mm=args.focal_35mm if args.focal_35mm else None,
                         comfy_url=(args.comfy_url
                                    if args.comfy_url != Settings.comfy_url else None),

@@ -4105,8 +4105,8 @@ class ReviewPanel(tk.Frame):
         y1 = (event.y - oy) / self._before_scale
         cx0, cy0 = min(x0, x1), min(y0, y1)
         cx1, cy1 = max(x0, x1), max(y0, y1)
-        if (cx1 - cx0) < 5 or (cy1 - cy0) < 5:
-            return  # too small, ignore
+        if (cx1 - cx0) < sam2seg.MIN_BOX_PX or (cy1 - cy0) < sam2seg.MIN_BOX_PX:
+            return  # a stray click, not a selection -- see sam2seg.MIN_BOX_PX
         # SAM2 expects pixel coordinates [x0, y0, x1, y1], not normalised.
         # The child script feeds the array straight to pred.predict(box=...),
         # which treats values as pixels -- 0.15 means 0.15 px, i.e. the corner,

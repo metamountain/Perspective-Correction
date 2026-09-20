@@ -670,7 +670,13 @@ def fill(bgr: np.ndarray, hole: np.ndarray, settings) -> tuple:
     if hole is None or not bool(np.any(hole)):
         return bgr, "nothing to fill"
     share = float(np.mean(hole))
-    cap = float(getattr(settings, "fill_max_share", 0.35))
+    # The fallback has to BE the documented default, not a second opinion
+    # about it: this read 0.35 while config.py declared 0.40, so an object
+    # without the field got a different answer from the one the help text
+    # promises. Imported here rather than at module scope to keep the heavy
+    # fill backends out of config's import path.
+    from .config import Settings as _S
+    cap = float(getattr(settings, "fill_max_share", _S.fill_max_share))
     if cap > 0 and share > cap:
         note = (f"fill skipped — hole is {share:.0%} of the frame "
                 f"(over --fill-max-share {cap:.0%}); consider cropping first")
