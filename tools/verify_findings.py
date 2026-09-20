@@ -25,7 +25,11 @@ REPORTS = os.path.join(REPO, "analysis", "powerdebug")
 
 # `file.py:123` followed, on this or a later line, by a double-quoted span
 CITE = re.compile(r"`([A-Za-z_][A-Za-z0-9_]*\.py):(\d+)(?:-\d+)?`")
-QUOTED = re.compile(r'"([^"]{8,})"')
+# Quotes contain escaped quotes, because the lines being quoted are code:
+# `text=\"offer manual review ...`. A naive "([^"]+)" stops at the first inner
+# one and hands back a fragment, which is then "not found" -- 44 of 52 entries
+# were failed that way by this checker's first version, not by the report.
+QUOTED = re.compile(r'"((?:[^"\\]|\\.)*)"')
 ENTRY = re.compile(r"^\s*(\d+)\.\s", re.M)
 
 _cache: dict = {}
@@ -55,9 +59,17 @@ def check_entry(text):
     for f in dict.fromkeys(files):
         if source(f) is None:
             miss_f.append(f)
-    bodies = [squash(source(f) or "") for f in dict.fromkeys(files)]
+    # Two views of each file. A prose quote that runs across a wrapped comment
+    # carries no `#`, but the source between the two halves does -- so a
+    # verbatim quote of a two-line comment never matches the raw text. Strip
+    # the comment markers for a second pass and accept a hit in either.
+    bodies = []
+    for f in dict.fromkeys(files):
+        raw = source(f) or ""
+        bodies.append(squash(raw))
+        bodies.append(squash(re.sub(r"(?m)^\s*#\s?", "", raw)))
     for q in QUOTED.findall(text):
-        sq = squash(q)
+        sq = squash(q.replace('\\"', '"').replace("\\\\", "\\"))
         if len(sq) < 8:
             continue
         if any(sq in b for b in bodies):
