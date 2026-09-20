@@ -19,8 +19,51 @@ CSV_HEADER = [
     "after_yaw_deg", "after_horiz_lines", "after_support",
     "roll_deg", "pitch_deg", "yaw_applied_deg", "confidence",
     "focal_35mm", "focal_source", "status",
-    "roi_x0", "roi_x1",
+    # Fractions of the image width, not pixels. "Pixels" is three different
+    # numbers here -- full-resolution in a Result, analysis-resolution in a
+    # session, displayed in the window -- and a stored value that needs to be
+    # told which of the three it is has not been stored.
+    "strip_x0", "strip_x1",
 ]
+
+
+def _strip_fractions(strip, width):
+    """A facade strip as two fractions of the width, or ``None``.
+
+    Full-resolution pixels in, fractions out -- the only form that still means
+    the same thing after the analysis resolution changes.
+    """
+    if not strip or not width:
+        return None
+    return [float(strip[0]) / float(width), float(strip[1]) / float(width)]
+
+
+def remember_strip(folder: str, stem: str, strip, width) -> str:
+    """Keep the facade strip beside the photograph it was drawn on.
+
+    A strip is a statement about ONE picture -- where that building's corner
+    falls -- so it belongs with that picture. The CLI's ``--roi-x`` cannot serve:
+    it is one pair of numbers for a whole run, and thirty facades have thirty
+    different corners.
+
+    Merged into any existing record rather than replacing it, so a correction
+    run's measurements survive a later hand-placed strip and the other way
+    round.
+    """
+    os.makedirs(folder, exist_ok=True)
+    path = os.path.join(folder, f"{stem}.json")
+    rec = {}
+    if os.path.isfile(path):
+        try:
+            with open(path, encoding="utf-8") as fh:
+                rec = json.load(fh)
+        except (OSError, ValueError):
+            rec = {}                    # unreadable: replace rather than refuse
+    rec["file"] = stem
+    rec["strip"] = _strip_fractions(strip, width)
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump(rec, fh, indent=2)
+    return path
 
 
 def write_record(folder: str, stem: str, record: dict):
@@ -61,8 +104,11 @@ def build_record(result, before: dict, after: dict, version: str) -> dict:
             "focal_source": result.focal_source,
             "clamped": bool(result.clamped),
         },
-        "roi_x": ([float(v) for v in result.roi_x]
-                  if getattr(result, "roi_x", None) else None),
+        # getattr on BOTH: a record builder must not require an attribute it
+        # can do without. Demanding out_size broke every caller that hands it a
+        # lighter stand-in, which is how the tests found it.
+        "strip": _strip_fractions(getattr(result, "roi_x", None),
+                                  (getattr(result, "out_size", None) or (0, 0))[0]),
     }
 
 
@@ -88,6 +134,6 @@ def record_to_row(record: dict) -> dict:
         "focal_35mm": c.get("focal_35mm"),
         "focal_source": c.get("focal_source"),
         "status": record["status"],
-        "roi_x0": (record.get("roi_x") or [None, None])[0],
-        "roi_x1": (record.get("roi_x") or [None, None])[1],
+        "strip_x0": (record.get("strip") or [None, None])[0],
+        "strip_x1": (record.get("strip") or [None, None])[1],
     }

@@ -3133,12 +3133,22 @@ class ReviewPanel(tk.Frame):
         wash = dict(fill=INK["field"], stipple="gray50")
         self.c_before.create_rectangle(ox, oy, px0, oy + ih, **wash, tags="roi_ruler")
         self.c_before.create_rectangle(px1, oy, ox + iw, oy + ih, **wash, tags="roi_ruler")
-        for pxf in (px0, px1):
+        # Each ruler carries its own reading. The spinboxes hold the same two
+        # numbers, but they are on the far side of the window from the line you
+        # are dragging, and a strip has to be placed EXACTLY -- the value belongs
+        # where the eye already is (2026-09-20, user-directed). Both labels face
+        # into the strip so neither falls off the frame edge.
+        for pxf, frac, side in ((px0, x0f, 1), (px1, x1f, -1)):
             self.c_before.create_line(pxf, oy, pxf, oy + ih, fill=OVERLAY["strip"],
                                       width=2, tags="roi_ruler")
             cy = oy + ih // 2
             self.c_before.create_oval(pxf - 7, cy - 7, pxf + 7, cy + 7,
                                       outline=OVERLAY["strip"], width=2, fill=INK["field"],
+                                      tags="roi_ruler")
+            self.c_before.create_text(pxf + side * 9, oy + 12,
+                                      text=f"{frac * 100:.0f}%",
+                                      fill=OVERLAY["strip"], font=("TkDefaultFont", 8),
+                                      anchor="w" if side > 0 else "e",
                                       tags="roi_ruler")
 
     def _roi_ruler_at(self, x, y=None):
@@ -3680,13 +3690,11 @@ class ReviewPanel(tk.Frame):
         _roi_btn = tool("strip", self.v_roi, self._on_roi_icon_click,
                         "Facade strip (ROI): restrict horizontal\n"
                         "evidence to one facade on corner views.")
-        # Planar left the palette (2026-09-14, "less is more"). The quad was
-        # being asked to do two unrelated jobs -- rectify a flat face, and state
-        # which plane the lines belong to -- and the second is answered better,
-        # and with far less UI, by marking the lines themselves: a vertical and
-        # a horizontal mark say the same thing about a facade as four dragged
-        # corners, and they are the tool that already exists. The module and its
-        # tests stay in the tree; nothing in the window points at them.
+        # NOTE: this used to say the quad had left the palette and that
+        # nothing in the window pointed at it -- sitting directly above
+        # `tool("rect", ...)`. The quad came back and the comment stayed, which
+        # is the exact shape of defect this project keeps paying for: a reader
+        # trusts the prose over the line of code beside it.
 
     def _draw_after_lines(self, arr, iw, ih):
         """Re-detect lines on the *corrected* frame, as a check on the correction.
@@ -4224,9 +4232,32 @@ class ReviewPanel(tk.Frame):
         except Exception as exc:
             messagebox.showerror("Save", str(exc), parent=self)
             return
+        # A hand-placed strip is the one thing in this window that cannot be
+        # recovered by looking at the result: it says where THIS building's
+        # corner falls, and it was gone the moment the photograph closed.
+        self._remember_strip()
         if self.on_saved:
             self.on_saved(self.session.path, dst)
         self._fire_closed()
+
+    def _remember_strip(self):
+        """Store the facade strip beside the photograph, as fractions.
+
+        Failure here must never cost the save: the picture is already written,
+        and a sidecar that could not be created is worth a status line, not an
+        exception thrown on top of a completed action.
+        """
+        s = self.session
+        strip = getattr(s, "roi_x", None) if s is not None else None
+        if not strip:
+            return
+        try:
+            from . import hpc_log as HPC
+            gw = s.gray.shape[1]        # roi_x is in ANALYSIS pixels
+            stem = os.path.splitext(os.path.basename(s.path))[0]
+            HPC.remember_strip("hpc_save", stem, strip, gw)
+        except Exception as exc:        # never break a finished save
+            self._set_status(f"strip not stored: {exc}")
 
     def _save_as(self):
         from tkinter import filedialog
@@ -4248,6 +4279,7 @@ class ReviewPanel(tk.Frame):
         except Exception as exc:
             messagebox.showerror("Save As", str(exc), parent=self)
             return
+        self._remember_strip()
         if self.on_saved:
             self.on_saved(self.session.path, dst)
         self._fire_closed()

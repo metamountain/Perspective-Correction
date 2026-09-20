@@ -109,8 +109,20 @@ def scene_rect(app, r):
     _pump(app, 3)
 
 
+def scene_strip(app, r):
+    """The facade strip: each ruler must carry its own percentage, because the
+    strip has to be placed exactly and the spinboxes are on the far side of the
+    window from the line being dragged."""
+    r.v_roi.set(True)
+    r._on_roi_icon_click()
+    r.v_roi_x0.set(18.0)
+    r.v_roi_x1.set(63.0)
+    r._apply_roi()
+    _pump(app, 8)
+
+
 SCENES = {"idle": scene_idle, "mark": scene_mark, "brush": scene_brush,
-          "phosphor": scene_phosphor, "rect": scene_rect}
+          "phosphor": scene_phosphor, "rect": scene_rect, "strip": scene_strip}
 
 
 def main() -> None:
