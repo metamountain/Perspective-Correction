@@ -1,0 +1,167 @@
+{
+  "_README": [
+    "Facade strips (ROI x) for the test assets, as fractions of image width.",
+    "",
+    "WHY THIS FILE EXISTS: roi_x restricts which horizontals feed the yaw, and on a",
+    "corner view that choice IS the correction -- one camera rotation can level one",
+    "wall, never two. A blanket 20-80% strip is not an application of the feature,",
+    "it is a default that straddles both walls on exactly the photographs the",
+    "feature is for. Measured 2026-09-20: a strip read off the photograph by eye",
+    "beats the blanket 20-80% default by 0.364 deg of horizontal lean against 0.131,",
+    "on 11 corner views. Placing it needs somebody to LOOK at the picture.",
+    "",
+    "FORMAT: \"roi\": [x0, x1] as fractions of the FULL image width; \"plane\" names",
+    "the wall chosen; \"read\" says how carefully -- see the warning below.",
+    "",
+    "!! HOW CAREFULLY THESE WERE READ, because it decides what they are worth:",
+    "   \"read\": \"full-size\"  -- the photograph was opened at full resolution and",
+    "                           the wall boundaries were read off it. Trust these.",
+    "   \"read\": \"thumbnail\"  -- read off a 440px contact-sheet preview against a",
+    "                           percentage ruler. NOT VERIFIED at full size.",
+    "   The one strip that WAS checked at full size (Platte) turned out to be wrong:",
+    "   the thumbnail reading of 0.05-0.50 straddled the strongly foreshortened left",
+    "   wall AND half the frontal facade -- the exact error this file exists to stop.",
+    "   Assume the same of every other \"thumbnail\" entry until somebody opens it.",
+    "",
+    "These are judgements about photographs, not measurements of code. Disagree with",
+    "one by looking at the photograph, not by reasoning about this file."
+  ],
+  "corner_views": {
+    "Platte": {
+      "roi": [
+        0.2,
+        0.78
+      ],
+      "plane": "the frontal facade (murals 34 and 36). Portrait image, three zones, not two",
+      "read": "full-size",
+      "also": {
+        "left_wall_foreshortened": [
+          0.0,
+          0.17
+        ],
+        "note": [
+          "The left sliver is a wall seen almost edge-on -- the hardest case there is,",
+          "and measured 2026-09-20 the most interesting one. All three strips tried on",
+          "this photograph return essentially the SAME yaw (-42.8, -43.3, -43.1 deg),",
+          "so the strip barely moves the estimate here; what it moves is CONFIDENCE:",
+          "0.20 on the foreshortened sliver (116 lines) against 0.49 on the frontal",
+          "facade (480 lines) and 0.54 on the sloppy wide strip. The narrow, correct",
+          "strip is the one the confidence gate would refuse. It also starts the most",
+          "crooked (10.74 deg of lean against 8.25) and gains the most: 10.74 -> 7.85",
+          "in one pass, -> 6.15 with a residual-capped second pass."
+        ]
+      }
+    },
+    "Mariánské_Hory,_panelové_domy_4": {
+      "roi": [
+        0.5,
+        0.9
+      ],
+      "plane": "right long facade; gable end left of 0.48",
+      "read": "thumbnail"
+    },
+    "Platte_1": {
+      "roi": [
+        0.0,
+        0.62
+      ],
+      "plane": "left wing, seen almost edge-on. Corner seam is at 0.33; the strip deliberately runs PAST it",
+      "read": "full-size",
+      "note": [
+        "Measured 2026-09-20, sweeping the strip's right edge. This asset is where the",
+        "strip genuinely changes the ANSWER, not just the confidence: the left wing wants",
+        "yaw +45 deg and the gable end wants -39 deg -- opposite rotations, as two walls",
+        "of a corner should.",
+        "",
+        "  strip     conf      yaw    lean in the left wing (1 pass / +2nd pass capped 10)",
+        "  0-32%     0.33   +45.24    4.99 / 6.56    <- best single pass, but REFUSED by the 0.40 gate",
+        "  0-48%     0.57   +45.31    5.14 / 5.51",
+        "  0-55%     0.54   +45.17    5.24 / 5.49",
+        "  0-62%     0.52   +45.83    5.22 / 4.88    <- kept",
+        "  0-68%     0.59   -39.66    8.28 / 8.23    <- the vote FLIPS; worse than uncorrected",
+        "  none      0.54   -40.03    8.46 / 8.31",
+        "",
+        "So the strip does NOT want to stop at the corner seam. Everything from the seam",
+        "out to ~2x the seam gives the same yaw and buys back the confidence the narrow",
+        "strip loses; past that the other facade wins the vote and the wall it was aimed",
+        "at ends up worse than if nothing had been done. Place it wide of the seam, short",
+        "of the flip."
+      ]
+    },
+    "Presserundgang_Deuts_89635534": {
+      "roi": [
+        0.05,
+        0.52
+      ],
+      "plane": "left long facade; corner seam ~0.56",
+      "read": "thumbnail"
+    },
+    "Struktur-Graubeige-2": {
+      "roi": [
+        0.2,
+        0.6
+      ],
+      "plane": "gable front; right wing beyond 0.62",
+      "read": "thumbnail"
+    },
+    "aprikot": {
+      "roi": [
+        0.35,
+        0.76
+      ],
+      "plane": "gable front; side wall recedes right of 0.78",
+      "read": "thumbnail"
+    },
+    "1070912stkzg": {
+      "roi": [
+        0.02,
+        0.4
+      ],
+      "plane": "left face; corner ~0.43",
+      "read": "thumbnail"
+    },
+    "35559_XXL": {
+      "roi": [
+        0.5,
+        0.86
+      ],
+      "plane": "right long facade; left gable 0.28-0.48",
+      "read": "thumbnail"
+    },
+    "images-(1)": {
+      "roi": [
+        0.2,
+        0.58
+      ],
+      "plane": "gable front; right wing beyond 0.60",
+      "read": "thumbnail"
+    },
+    "Chateau": {
+      "roi": [
+        0.5,
+        0.95
+      ],
+      "plane": "the building; trees fill the left half",
+      "read": "thumbnail"
+    },
+    "39079116-ein-augenmerk-muessen-immobilienbesitzer-auf-die-fassaden-inklusive-der-werbung-daran-legen-wie-hier-an-der-muenzstrasse-3Rec": {
+      "roi": [
+        0.44,
+        0.7
+      ],
+      "plane": "the one house nearest square to the camera",
+      "read": "thumbnail",
+      "note": "The receding-row asset. Its horizontals lie on MANY shallow planes, not two, so no strip represents it -- and measured 2026-09-20 a strip makes it worse (lean 7.56 without, 8.96 with). Kept here so nobody re-derives that."
+    }
+  },
+  "flat_on": {
+    "_note": "A strip here would only throw evidence away. null on purpose. All read from thumbnails.",
+    "Aulendorf_Schloss_Fassade": null,
+    "Ocker Fassade": null,
+    "csm_klassik": null,
+    "images": null,
+    "screenshot_20260914_082955": null,
+    "50er": null,
+    "YNS7NARKLFGJ3EHAYCR2S3VNMU": null
+  }
+}
