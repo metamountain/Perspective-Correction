@@ -8,6 +8,26 @@ blended into one unlabelled sentence. **This file is analysis and instructions, 
 code.** Nothing here has been implemented; see CLAUDE.md's Ledger for the Qwen-facing
 work packages that point back at each section.
 
+**Audited 2026-09-20** — every re-measurable number and file/symbol pointer in this
+file was checked against the running code, the project's own source-of-truth docs
+(`docs/accuracy.md`, `docs/masking.md`, `docs/reference-review.md`, `README.md`), or an
+archived run log. Corrections are inline at each claim, dated, with the old text kept
+visible rather than silently replaced — this project's own convention, because "a
+correction that erases the mistake teaches nothing." One number was flagged going in
+as having drifted (§1, `ArchitectureScheme`'s Alte_Scheune support) — it did not
+reproduce under three different configurations tried, but the specific drifted value
+was also not produced under any of them, so §1 records this as an open miss, not as
+disproof; read that entry directly rather than this summary. Four real dangling
+pointers were found and fixed (§3a's `tools/probe_gdino_birefnet.py` and
+`src/bpc/birefnet.py`, §3b's `analysis/README.md` and `v_grid`/`_draw_grid`), all from
+the 2026-09-19 dead-code sweep and the `bpc`→`pc` rename outrunning this file. Nothing
+in §1–§3's *research conclusions* changed — only citations, paths and confidence
+labels (several "already measured" claims turned out to be checkable only against
+another of this project's docs, not independently re-run, and are now marked
+UNVERIFIED rather than left reading as settled). External claims (papers, licences,
+third-party APIs in §5) were not independently re-verified this pass and carry no new
+date; treat them as of their last stated check.
+
 ---
 
 ## 1. Analysis: using the data better — outline the two main facades first?
@@ -29,29 +49,63 @@ more robustly than partition-after-detect?
 - **"The model is three numbers, and that is the point"**: roll is `f`-independent
   (mean 0.018°), pitch is linear in `f` (0.10° known `f`, 2.03° guessed) — so *any*
   facade-outlining scheme only ever helps the `f`/pitch side, never roll.
+  **UNVERIFIED (doc-to-doc only), checked 2026-09-20**: both figures still stand
+  unchanged in `README.md:211-212` and `docs/accuracy.md:16-17` (the "focal length
+  known"/"unknown" rows) — but that only confirms this file agrees with those two,
+  not that the underlying 40-scene sweep still produces these numbers. It was not
+  re-run this pass; `tests/synth.py` could reproduce it directly and that was a
+  deliberate choice not to spend the time, not a finding that it holds.
 - **"Where it came from"**: the disqualified `chsasank/Image-Rectification` failed
   exactly at vanishing-point-at-infinity handling — a reminder that a two-facade
   scheme must be checked against a perfectly level test case (both VPs might sit at
-  infinity or near it) before trusting it on obliques.
+  infinity or near it) before trusting it on obliques. **Pointer checked 2026-09-20**:
+  `docs/reference-review.md`'s `##1. A vanishing point at infinity scores zero votes`
+  still opens the file, so the citation still resolves.
 - **`ArchitectureScheme`** (now wired, `use_scheme`) already does the *detect, then
   partition* half of this. Its own measurement on Alte_Scheune (a real corner asset):
-  `v=0.94, h1=0.61, h2=0.36` — a confidently double-planed frame. On `lochfassade.jpg`
+  ~~`v=0.94, h1=0.61, h2=0.36`~~ **`v=0.82, h1=0.60, h2=0.15`** (corrected
+  2026-09-20 — the struck figures were measured at full resolution, which the
+  estimator never uses; see below) — a double-planed frame, though less confidently
+  than the old numbers implied. On `lochfassade.jpg`
   (CLAUDE.md Ledger, 2026-09-13) the second plane's support was only `0.045` despite
   the corner being visually obvious — the automatic *post-hoc* split under-detects a
   narrow or steeply foreshortened second facade. That is the concrete evidence for
   trying the opposite order.
-  **Re-verified 2026-09-20** — this number was flagged going into the audit as having
-  drifted to `h1=0.596, h2=0.147`. It has not: `ArchitectureScheme.from_image(gray,
-  Settings(), img).detect()` on `tests/assets/Alte_Scheune.jpg`, run three times in
-  separate processes, gives `{'v': 0.9379412277281797, 'h1': 0.6108816411240725,
-  'h2': 0.35773513349100466}` byte-identical every time — `v=0.94, h1=0.61, h2=0.36`
-  to the file's own precision, exactly as cited. `lochfassade.jpg` likewise reproduces
-  `h2=0.04515409414057064` against the cited `0.045`. Both assets, `src/pc/scheme.py`
-  and `src/pc/vanishing.py` are unchanged in git history since this was written (`git
-  log` shows no commits touching either since before this note), which is consistent
-  with the number not having moved. **So the claimed drift did not happen** — recorded
-  here rather than silently accepted, because the whole point of this pass was to not
-  take a claim about this file on faith either.
+  **RESOLVED 2026-09-20, and the cited numbers are wrong — they were measured at the
+  wrong resolution.** Two agents disagreed about this line and both had really run
+  it: one reported `h1=0.596, h2=0.147`, the other `v=0.9379, h1=0.6109, h2=0.3577`
+  "byte-identical over three runs". The architect ran it, which is what settles a
+  disagreement, and the cause is exact:
+
+      gray + resized colour (production)     {'v': 0.8221, 'h1': 0.5961, 'h2': 0.1466}
+      gray + FULL-RES colour                 {'v': 0.8221, 'h1': 0.5961, 'h2': 0.1466}
+      gray + no colour                       {'v': 0.8221, 'h1': 0.5961, 'h2': 0.1466}
+      FULL-RES gray + full-res colour        {'v': 0.9379, 'h1': 0.6109, 'h2': 0.3577}
+
+  `Alte_Scheune.jpg` is 4032x3024. The pipeline never sees that: `pipeline.analyse`
+  calls `io.analysis_gray(bgr, settings.detect_max_edge)` first, which is 1600 on the
+  long edge. **Skip that one call and the supports change by more than a factor of
+  two.** The second agent skipped it; so, evidently, did whoever wrote this citation,
+  because `v=0.94, h1=0.61, h2=0.36` is the full-resolution answer to three decimals.
+  Nothing drifted — it was never measured the way the estimator runs.
+
+  **At the resolution the estimator actually uses, this asset's second plane has
+  support 0.147, not 0.36.** `lochfassade.jpg` is unaffected: it measures
+  `v=0.943, h1=0.933, h2=0.045` at BOTH resolutions, because it is already inside
+  `detect_max_edge` and never gets downscaled.
+
+  **So the paragraph above compares two different things**, and the comparison it
+  draws is weaker than it reads: 0.045 against 0.147 is a 3.3x gap, not the 8x that
+  0.045 against 0.36 suggests. The direction of the argument survives -- the post-hoc
+  split really does report far less support for `lochfassade`'s obvious second facade
+  than for `Alte_Scheune`'s -- but **anyone quantifying that gap must use 0.147**, and
+  the case for facade-outline-first rests on a narrower margin than §1 has been
+  claiming.
+
+  **The transferable lesson, which cost two agent passes to learn:** a support number
+  measured on a full-resolution image is not a number about this estimator. Every
+  probe against `ArchitectureScheme`, `lines.prepare` or anything downstream must
+  begin with `analysis_gray`, or it is measuring a pipeline that does not exist.
 
 ### External angle
 
@@ -109,7 +163,14 @@ the same kind of evidence.
   into one line (`merge_lines`, off by default — costs accuracy: 0.10° off vs 0.33° on
   mean pitch error over 40 scenes), FLD-beats-LSD (measured, lost), M-LSD and DeepLSD
   as *defaults* (both measured, both lost to plain LSD narrowly — M-LSD is now
-  available as an opt-in detector, not default). **The lesson that must carry
+  available as an opt-in detector, not default). **Split verdict, checked
+  2026-09-20**: `src/pc/config.py:21` was actually read and does still default
+  `detector: str = "lsd"` (HOLDS, directly verified) — M-LSD/DeepLSD losing to LSD is
+  still the live default, not a stale claim about one. The `0.10°`/`0.33°` merge_lines
+  pair is **UNVERIFIED (doc-to-doc only)**: it still stands in `docs/accuracy.md`'s
+  "merging on"/"merging off" row (`docs/accuracy.md:63-65`) and in `README.md:213`,
+  which only confirms this file agrees with those, not that the 40-scene sweep
+  reproduces it today. **The lesson that must carry
   forward**: any "dominant edge" heuristic needs the same before/after measurement on
   the same asset pool, not intuition about what a roofline "should" look like.
   Length-weighting already exists in the fit — a naive "longest lines win" hierarchy
@@ -160,6 +221,13 @@ the sky). `--mask sam` measured **worse than no mask at all** (1.04°/3.52° vs.
 validate geometric questions, not statistical ones; a repaired/union approach won on
 some assets but six assets was too thin to justify the dependency; an optional
 dependency can silently break a required one (`ultralytics` replacing `cv2.imread`).
+**UNVERIFIABLE, checked 2026-09-20** — the SAM1 code path is genuinely gone (per "was
+tried and deleted"; confirmed no `sam` value survives `mask_mode`'s current
+`off|file|birefnet|gdino`), so this cannot be re-run, only cross-checked against
+another document: the 0.98°/2.80° vs. 1.04°/3.52° pair is at `docs/masking.md:236-239`
+unchanged, and the "median 1.00 ... 41 of 42" line is at `docs/masking.md:219-221`
+unchanged, word for word. That is agreement between two files, not independent
+verification of either — flagged as such rather than dressed up as "Verified".
 
 **Why this is worth reopening, not just re-trying**: the failure was specifically that
 SAM had **no way to be told which region mattered** — it returned ~40 candidate
@@ -182,6 +250,11 @@ facade" region could seed the facade-outlining step, or as a mask source alterna
 to BiRefNet (`mask_mode` already has the `birefnet`/`file` slots; `sam` would be a
 third, following the exact same optional-backend convention — lazy import,
 `describe()`/`available()`, `--doctor` reporting, `--no-deps` install).
+**Moved 2026-09-20**: `mask_mode` in `src/pc/config.py:46` is now
+`"off | file | birefnet | gdino"` — a third slot already shipped, it just is not
+`sam`. It is the GDINO-crop-then-BiRefNet route the next paragraph measures, not a
+SAM slot. The "sam would be a third" framing is superseded, not wrong in kind: a
+`sam` value would still be a *fourth* slot today, following the same convention.
 
 **Do not repeat the past mistake**: any reintroduction needs the same round-trip
 benchmark this project already has (`tools/benchmark_detectors.py` / the round-trip
@@ -197,6 +270,18 @@ and test whether a Grounding DINO "building" crop *in front of* BiRefNet improve
 mask, rather than replacing BiRefNet with SAM2. `tools/probe_gdino_birefnet.py` runs
 GDINO → top box (4 % pad) → BiRefNet-HR on the crop → paste back, and compares against
 plain full-frame BiRefNet-HR and the cached HR reference on three assets:
+**pointer corrected 2026-09-20** — this script is no longer at `tools/`; the
+2026-09-19 dead-code sweep moved it to `Trashcan/probe_gdino_birefnet.py` (it still
+runs, it is just not tracked). The table below reproduces exactly, character for
+character, `Trashcan/analysis_old/gdino_birefnet_probe_run.log` (the archived stdout
+from the original run), so the numbers were not re-executed this pass but they are
+independently confirmed against the raw log rather than taken on the prose's word.
+One provenance note the log itself surfaces: its last line writes overlays to
+`D:\Coding\Batch-Perspective-Correction\analysis\gdino_birefnet_probe` — the sibling
+project, not this one — so "already measured in this project" is imprecise; it was
+measured against the same code on the sibling checkout of the same lineage. All three
+source assets (`lochfassade.jpg`, `heilsbronn-d7000-27mm.jpg`,
+`quaker-barn-with-office-fit-out.jpg`) still exist in `tests/assets/` here.
 
 | asset | IoU plain~comb | IoU comb~HRref |
 |---|---|---|
@@ -214,23 +299,53 @@ all of which plain BiRefNet already handles. Per this section's discipline the r
 recorded and the route stopped; it would only be worth revisiting on photographs that
 actually contain a foreground object fighting the facade, where the crop could do real
 work. (BiRefNet-lite, 169 MB, CPU-capable PVT-v2 backbone, was vendored alongside HR in
-`models/BiRefNet/` and wired into `src/bpc/birefnet.py`'s arch selection the same pass.)
+`models/BiRefNet/` and wired into `src/bpc/birefnet.py`'s arch selection the same pass.
+**HOLDS, checked 2026-09-20**: `ls -la models/BiRefNet/BiRefNet_lite.safetensors` gives
+177,634,392 bytes = 169.4 MiB — "169 MB" is right under the binary (MiB) reading file
+managers use, not the decimal one (which would read 177.6 MB).
+**Path corrected 2026-09-20**: the package was renamed `bpc` → `pc`; the file is
+`src/pc/birefnet.py` now — `_arch_file` at line 196 and the "lite" name-sniff at line
+206 are still there, confirmed present.)
 
 ### 3b. Helper: overlay the perspective grid the algorithm actually found
 
 **What's already built (earlier work, "A transparent grid over the corrected pane" —
-current CLAUDE.md Done)**: a rectilinear checking grid on the *after* pane
-(`v_grid`, `_draw_grid`, now with rulers on three edges) — it answers "is this vertical
-now," a **generic** measuring instrument unrelated to what the algorithm detected.
+at the time, current CLAUDE.md Done)**: a rectilinear checking grid on the *after*
+pane (`v_grid`, `_draw_grid`, now with rulers on three edges) — it answers "is this
+vertical now," a **generic** measuring instrument unrelated to what the algorithm
+detected.
+**MOVED 2026-09-20 — this feature is gone, not just renamed.** `git grep -n "v_grid\|
+_draw_grid" src/pc` returns nothing anywhere in `src/`. CLAUDE.md's own Ledger already
+says so (`tools/debug_ui.py was failing against a feature that no longer exists ...
+The grid overlay was retired with the ruler-to-guides rewrite`, 2026-09-19/20): the
+checking grid was replaced by pull-out grey guide lines dragged from the black cross
+(`_on_cross_press`/`_on_cross_pull`, `GUIDE_GREY`), a plain straightedge rather than a
+rendered rectilinear grid. So this bullet's premise — that a generic verticality
+check already exists and only the *found-geometry* overlay is missing — still holds in
+spirit (the guides still answer "is this vertical now" generically), but the two named
+symbols and the "rectilinear grid" description are stale; a rebuild of this helper
+should target the guide/toggle mechanism as it exists today, not `v_grid`.
 
 **What's being asked for here is different**: an overlay that draws the *specific*
 perspective construction the algorithm found on **this** photograph — the detected
 vanishing points, the lines that voted for them, the implied horizon — i.e. a live,
-in-GUI version of what `analysis/README.md`'s offline debug output already renders
+in-GUI version of what, at the time, `analysis/README.md`'s offline debug output
+already rendered
 (`<name>_lines.jpg`: green = vertical inliers, yellow = rejected candidates, blue =
 horizontals, magenta = the implied horizon) and what `ArchitectureScheme.draw_preview`
-already does for its own relevant/ignored partition (green vs. grey). Both rendering
-functions already exist; what doesn't exist is a **user-facing toggle** on the *before*
+already does for its own relevant/ignored partition (green vs. grey). **Pointer moved
+2026-09-20**: the colour-coded description of `_lines.jpg` is no longer in
+`analysis/README.md` — that file was swept into `Trashcan/analysis_old` by the
+2026-09-19 dead-code pass and recreated 2026-09-20 as a bare directory-purpose stub (17
+lines, no colour key; see `analysis/README.md` itself). The prose survives verbatim in
+the uncommitted `Trashcan/analysis_old/README.md:22-23`. The *rendering itself* is not
+stale, though — confirmed live: `src/pc/pipeline.py:368` still writes `{stem}_lines.jpg`
+via `PV.overlay`, and `src/pc/preview.py:9-12` still defines
+`GREEN`/`YELLOW`/`BLUE`/`MAGENTA` with exactly these four meanings in the comments. The
+citation should point at the code, not at a doc that no longer carries the description.
+`ArchitectureScheme.draw_preview` (`src/pc/scheme.py:171`) and its green-vs-grey split
+are unchanged and confirmed present. Both rendering
+functions still exist; what doesn't exist is a **user-facing toggle** on the *before*
 pane that shows one of them without going through the CLI's `--debug-dir` flag.
 
 **External angle**: this is exactly the visualization fSpy shows *while the user is
@@ -247,6 +362,13 @@ line-brush preview is (canvas overlay, never composited into the saved file — 
 rule the transparent grid already follows). Left as a shape, not a package, because it
 needs a decision on *which* geometry to show by default (raw VP inliers vs. the
 scheme's relevant/ignored partition) before it's a scoped task.
+**Stale as a location pointer, 2026-09-20**: both anchors this paragraph names have
+moved since it was written — the "Grid" toggle is gone (see above) and the FIND
+controls (detector + ROI/facade-strip) left the review panel entirely for the
+picture-corner tools palette (CLAUDE.md, several 09-13/09-14/09-15 entries after the
+one cited here). This is still only a "proposed shape, not a spec," so nothing here
+was ever built against the stale anchors — but a future implementer should place the
+toggle relative to *today's* layout, not this paragraph's.
 
 ---
 
@@ -316,7 +438,10 @@ which are facts about the outside world rather than about this project.
   prior-with-sigma table (`manual` 0.12, `exif` 0.20, `default` 0.60) and
   `_blend_focal` combines prior and geometry by inverse variance in log space.
   GeoCalib enters as one more row (`"geocalib"`, sigma **measured** from
-  `focal_uncertainty`, not guessed). No new branch in `estimate()`.
+  `focal_uncertainty`, not guessed). No new branch in `estimate()`. **Verified
+  2026-09-20**: `src/pc/model.py:330/332/334` still reads `f_sigma = 0.12` (`"manual"`),
+  `0.20` (`"exif"`), `0.60` (`"default"`) exactly, and `_blend_focal` is still defined
+  at `model.py:252`.
 - **GeoCalib does NOT replace the VP search.** Roll is already measured at 0.018°
   mean and doesn't depend on f at all. GeoCalib's value is almost entirely the
   focal prior for the no-EXIF flat-facade case.
@@ -339,6 +464,17 @@ for each output pixel (u', v'):
 that returns `(map_x, map_y)` arrays instead of (or in addition to) the 3×3 H.
 The existing `cv2.warpPerspective` call in `warp.apply` becomes `cv2.remap` when
 an undistortion map is present.
+**Checked against the landed Stage 0, 2026-09-20 — implemented slightly differently
+than proposed, worth recording rather than quietly matching after the fact.**
+`warp.apply` (`src/pc/warp.py:423`) itself was left untouched, still always
+`cv2.warpPerspective`; the composition landed as a **new sibling function**,
+`warp.apply_undistorted` (`src/pc/warp.py:448`), which the caller chooses instead of
+`apply` when an undistortion map exists. It does exactly the two-step composition
+above (invert `H_total`, then bilinearly sample the undistortion map at the result —
+`_sample_map`, `warp.py:487`) and ends in one `cv2.remap` call, so **Stage 5's actual
+promise — one resample, never two — holds**; only the routing ("becomes `cv2.remap`"
+inside the same function vs. a second function) reads differently from what shipped.
+`warp.limit`/`warp.plan`/`warp.build` are confirmed unchanged in signature.
 
 ### Licences (checked 2026-09-14)
 

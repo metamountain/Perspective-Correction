@@ -249,23 +249,14 @@ features ahead of everything else.*
    inference from the repo, and this project's own rule is that a document
    claiming something is not evidence of it.
 
-7. **[started, cut off — do not assume it was finished] An agent pass
-   were terminated mid-run by a session rate limit on 2026-09-20.** Neither
-   left a half-edited source file — checked, `git status` showed only the one
-   test each had finished — but neither reached its conclusion:
-   - **`knowledge.md` accuracy audit.** It was to re-measure every checkable
-     number in that file and every `file:line` pointer it names, after one of
-     its cited figures was caught wrong (§1's `Alte_Scheune` `h2=0.36` measures
-     **0.147** today, reproduced three ways; `lochfassade`'s `h2=0.045` in the
-     same passage reproduces exactly). **It wrote nothing.** `knowledge.md` is
-     therefore still unaudited, and §1's h2 figure specifically must not be
-     built on without re-measuring.
-   - ~~**Non-GUI audit findings.**~~ **All five adjudicated by hand after the
-     agent was cut off — see Done.** Two were real and fixed, two were not
-     defects, and one was wrongly framed but had a real defect underneath.
-     **Of the six audit findings adjudicated today in total, three were not
-     defects** — which is the same rate the 2026-09-15 pass measured, and the
-     reason the hard rule about pointers and verdicts is a hard rule.
+7. ~~**Two agent passes cut off by a rate limit.**~~ **Both finished; closed
+   2026-09-20.** Kept as a title so the next session does not re-open it:
+   neither had left a half-edited source file (checked at the time — only the
+   one test each had completed), the non-GUI findings were adjudicated by hand
+   and the `knowledge.md` audit was re-run. **Both outcomes are in Done, and
+   the second one needed correcting afterwards** — the audit stamped a wrong
+   support figure as verified, which is the entry worth reading.
+
 8. **`gui.py` is 5217 lines** — 3.5× the next largest file (`review.py`, 1369).
    A 12-file composition split was proposed and **deprioritised by the user**. It
    stays deprioritised; recorded so it is not re-proposed as if new.
@@ -540,12 +531,12 @@ features ahead of everything else.*
   that fires on flat facades and stays silent on the pool's clearest corner
   would be worse than the current silence**, so none was added. Blocked on
   `knowledge.md` §1, facade-outline-first.
-  **Discrepancy found on the way, not hidden**: `knowledge.md` §1 (line 38)
-  cites `Alte_Scheune` scheme support as `h1=0.61, h2=0.36`; measured today it
-  is **`h1=0.596, h2=0.147`**, reproduced three ways and byte-identical each
-  time (seeded RNG). `lochfassade`'s cited `h2=0.045` reproduces exactly. The
-  `Alte_Scheune` number is unexplained — **do not build on §1's h2 figure
-  without re-measuring it.**
+  **Discrepancy found on the way — and since resolved, see the entry below.**
+  `knowledge.md` §1 cited `Alte_Scheune` support as `h1=0.61, h2=0.36`; at the
+  resolution the estimator actually runs it is **`h1=0.596, h2=0.147`**. §1's
+  headline comparison is therefore 0.045 against **0.147**, a 3.3x gap and not
+  the 8x it reads as. The direction of its argument survives; the margin is
+  narrower than it has been claiming.
 - **[not a defect] The `cli.py` `isatty()` gate was a wrong finding, and is
   struck.** It had been carried as an open MED item — "blocks piped
   double-click". Measured: when stdin is not a tty the `else` branch prints
@@ -669,6 +660,35 @@ features ahead of everything else.*
   spacing unit the tool column is built from", which a reader can easily take
   as the window's unit. It now states the measurement and why the spacing was
   left as it is, so this is not re-proposed as an untouched task.
+- **[resolved] Two agents disagreed about one number, both had really run it,
+  and the cause was resolution.** One reported `Alte_Scheune` support as
+  `h1=0.596, h2=0.147`; the other reported `v=0.9379, h1=0.6109, h2=0.3577`
+  "byte-identical over three runs" and wrote into `knowledge.md` that the
+  citation **holds**. It does not. Measured by hand, four ways:
+
+      gray + resized colour (production)   {'v': 0.8221, 'h1': 0.5961, 'h2': 0.1466}
+      gray + FULL-RES colour               {'v': 0.8221, 'h1': 0.5961, 'h2': 0.1466}
+      gray + no colour                     {'v': 0.8221, 'h1': 0.5961, 'h2': 0.1466}
+      FULL-RES gray + full-res colour      {'v': 0.9379, 'h1': 0.6109, 'h2': 0.3577}
+
+  The asset is 4032x3024 and `pipeline.analyse` calls
+  `io.analysis_gray(bgr, settings.detect_max_edge)` — 1600 on the long edge —
+  before anything else. **Skip that one call and the supports move by more than
+  a factor of two.** The second agent skipped it, and so did whoever wrote the
+  citation, because `0.94 / 0.61 / 0.36` is the full-resolution answer to three
+  decimals. **Nothing drifted; it was never measured the way the estimator
+  runs.** Checked against the other five "Scheune" assets in the pool — none
+  produces those numbers at production resolution — and against `lochfassade`,
+  which is identical at both resolutions because it is already inside
+  `detect_max_edge` and never downscaled.
+  **The part worth keeping is not the number.** Both agents were honest and one
+  was thorough — it ruled out a cached mask, and monkeypatched
+  `_plausible_horizontal_rows` back to its pre-`b6cefbf` 45° gate and traced
+  that it ran — but it never varied the one thing that mattered, and then
+  stamped a wrong figure as verified with today's date. **A confirmed-wrong
+  number carrying a fresh verification date is worse than a stale one**, which
+  is why the architect running it is not a formality. And this file had already
+  repeated the first agent's half of it without running it either.
 - **This file rewritten from measurement** - see the header.
 
 **2026-09-19 → 20 (from `QWEN.md`, verified against the code)**
@@ -806,6 +826,14 @@ detector removed · M-LSD unblocked in the GUI interpreter.
 - **Tested is not reachable.** A seam with tests is half a feature; "done" means
   someone can use it. Check for the caller before writing a Done entry. SAM drew
   an outline and never reached the estimator for weeks while looking wired.
+- **A probe that skips `analysis_gray` is measuring a pipeline that does not
+  exist.** `pipeline.analyse` downscales to `detect_max_edge` (1600 on the long
+  edge) before any detection, so a 4032x3024 photograph is never seen at full
+  size. Measured 2026-09-20: skipping that call moves `ArchitectureScheme`'s
+  plane supports by more than 2x on one asset, and it is what put a wrong number
+  into `knowledge.md` in the first place and what made two agents disagree about
+  it. **Every probe against `ArchitectureScheme`, `lines.prepare` or anything
+  downstream starts with `analysis_gray`.**
 - **Deleting one function strands the next.** After any deletion, sweep every
   function in `src/pc` for references across src, tests and tools.
 
