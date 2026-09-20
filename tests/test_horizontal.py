@@ -157,3 +157,123 @@ def test_no_horizontal_vp_is_recorded_not_silent():
     assert m.yaw == 0.0
     note = m.diagnostics.get("yaw_skipped")
     assert note is not None, "yaw zero with the feature on must be explained"
+
+
+# --------------------------------------------------------------------------
+# The facade rotation: built from one plane's own two vanishing points.
+# --------------------------------------------------------------------------
+def test_two_vp_rotation_sends_both_vanishing_points_to_the_axes():
+    """The whole claim of the construction, checked directly.
+
+    Rows of a rotation are the axes of the frame it rotates into, so writing
+    the facade's horizontal in row 0 and its vertical in row 1 must send both
+    vanishing points to infinity, at 0 and 90 degrees. Not approximately --
+    this is construction, not fitting, and anything above a rounding error
+    means the rows are not what they claim to be.
+    """
+    from pc import geometry as G
+
+    rng = np.random.default_rng(11)
+    worst = 0.0
+    for _ in range(50):
+        f = rng.uniform(400.0, 4000.0)
+        K = G.intrinsics(f, 660.0, 371.0)
+        A = np.linalg.qr(rng.normal(size=(3, 3)))[0]      # a random orthonormal frame
+        if np.linalg.det(A) < 0:
+            A[:, 2] = -A[:, 2]
+        vp_h, vp_v = K @ A[:, 0], K @ A[:, 1]             # two orthogonal directions
+        R = G.rotation_from_two_vps(vp_h, vp_v, K)
+        assert np.allclose(R @ R.T, np.eye(3), atol=1e-9), "R is not orthonormal"
+        H = K @ R @ np.linalg.inv(K)
+        for vp, want in ((vp_h, 0.0), (vp_v, 90.0)):
+            p = H @ vp
+            assert abs(p[2]) < 1e-6 * max(abs(p[0]), abs(p[1]), 1.0), (
+                "vanishing point was not sent to infinity")
+            a = math.degrees(math.atan2(p[1], p[0])) % 180.0
+            worst = max(worst, min(abs(a - want), abs(a - want - 180.0),
+                                   abs(a - want + 180.0)))
+    assert worst < 1e-9, f"vanishing points land {worst} deg off the axes"
+
+
+def test_rotation_decomposes_into_the_three_angles_the_pipeline_speaks():
+    """The pipeline speaks in (roll, pitch, yaw) everywhere -- sliders, caps,
+    report, sidecar -- so a rotation from elsewhere has to arrive in that form
+    without loss. This is the join between the new source and the old plumbing;
+    if it drifts, the correction applied stops being the one constructed."""
+    from pc import geometry as G
+
+    rng = np.random.default_rng(12)
+    worst = 0.0
+    for _ in range(200):
+        r = rng.uniform(-0.4, 0.4)
+        p = rng.uniform(-0.5, 0.5)
+        y = rng.uniform(-1.2, 1.2)
+        R = G.correction_rotation(r, p, y)
+        r2, p2, y2 = G.roll_pitch_yaw_from_rotation(R)
+        worst = max(worst, float(np.abs(G.correction_rotation(r2, p2, y2) - R).max()))
+    assert worst < 1e-12, f"round-trip through the three angles loses {worst}"
+
+
+def test_a_corrected_facade_actually_comes_out_square():
+    """The question no other test asks: in the OUTPUT PICTURE, are the facade's
+    horizontals horizontal and its verticals vertical?
+
+    Everything upstream is an opinion about angles. This measures the pixels a
+    user gets. Platte_1.jpg is a corner view -- two facades, two competing
+    horizontal vanishing points -- and the ROI names the left one, which is the
+    precondition the construction needs. Composing three separately estimated
+    angles leaves it 4.8 degrees out of square here; the facade rotation leaves
+    it 0.07.
+    """
+    import os
+
+    import cv2
+
+    from pc import imageio as IO
+    from pc import lines as L
+    from pc import pipeline as P
+    from pc.pipeline import _match_scale
+
+    here = os.path.dirname(os.path.abspath(__file__))
+    img = os.path.join(here, "assets", "Horizontal", "Platte_1.jpg")
+    if not os.path.isfile(img):
+        import pytest
+        pytest.skip("Platte_1.jpg not available")
+
+    st = _settings(min_horizontal_support=0.15)
+    dst = os.path.join(os.environ.get("TEMP", "."), "_test_facade_square.jpg")
+    # The left facade runs from the frame edge to the building corner at
+    # x ~ 660 of 1320. roi_x is in full-resolution pixels.
+    res = P.process(img, dst, st, roi_x=(0.02 * 1320, 0.46 * 1320))
+    assert res.status == "OK", f"refused the correction: {res.reason}"
+    assert os.path.isfile(dst), "no output written"
+
+    im = cv2.imread(dst)
+    h, w = im.shape[:2]
+    crop_path = os.path.join(os.environ.get("TEMP", "."), "_test_facade_crop.jpg")
+    # The facade only: away from the warp's slanted black border, which the
+    # detector would otherwise read as a family of steep "verticals".
+    cv2.imwrite(crop_path, im[int(0.20 * h):int(0.80 * h), int(0.14 * w):int(0.72 * w)])
+
+    src = IO.load(crop_path)
+    gray, _ = IO.analysis_gray(src.bgr, st.detect_max_edge)
+    _ls, vfam, hfam, _d, _i = L.prepare(gray, st, _match_scale(src.bgr, gray), crop_path)
+
+    def median_angle(fam, centre):
+        seg = fam.seg
+        dx = seg[:, 2] - seg[:, 0]
+        dy = seg[:, 3] - seg[:, 1]
+        a = np.degrees(np.arctan2(dy, dx)) % 180.0
+        # fold around the family's own centre: verticals sit at +-90 and a fold
+        # at zero would split them across the seam and median to nonsense
+        a = (a - centre + 90.0) % 180.0 - 90.0 + centre
+        wt = np.hypot(dx, dy)
+        keep = wt > np.percentile(wt, 60)
+        return float(np.median(a[keep] if keep.any() else a))
+
+    mh = median_angle(hfam, 0.0)
+    mv = median_angle(vfam, 90.0)
+    out_of_square = abs(abs(mv - mh) - 90.0)
+    assert abs(mh) < 1.5, f"facade horizontals came out at {mh:+.2f} deg"
+    assert abs(mv - 90.0) < 1.5, f"facade verticals came out at {mv:+.2f} deg"
+    assert out_of_square < 1.0, f"facade is {out_of_square:.2f} deg out of square"

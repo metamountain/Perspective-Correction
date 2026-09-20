@@ -104,7 +104,10 @@ def analyse(bgr, settings, exif_focal_px=None, image_path="", roi_x=None):
             vert = vert.subset(keep_v)
     gh, gw = gray.shape[:2]
     exif_small = exif_focal_px * scale if exif_focal_px else None
-    m = M.estimate(vert, horiz, gw, gh, settings, exif_small)
+    # A strip means the caller has pointed at one facade, which is exactly the
+    # precondition the two-vanishing-point rotation needs.
+    m = M.estimate(vert, horiz, gw, gh, settings, exif_small,
+                   single_facade=roi_x is not None)
     if m.f:
         m.f = m.f / scale                       # back to full resolution pixels
     m.detect_info = info
@@ -114,7 +117,14 @@ def analyse(bgr, settings, exif_focal_px=None, image_path="", roi_x=None):
     # proportionally to |yaw| so that at 45°+ only ~30% of the original pitch
     # is applied — enough to level the frame, not enough to tilt the
     # corrected facade's verticals.
-    if settings.correct_horizontal and m.yaw is not None:
+    # ...unless the rotation came from the facade's own two vanishing points.
+    # That construction has no "pitch computed from all verticals" to rescue:
+    # the pitch in it was orthogonalised against THIS facade's horizontal, and
+    # the three angles are a decomposition of one rotation, not three knobs.
+    # Damping one of them shears the result back out of square -- measured on
+    # Platte_1.jpg, 13.63 degrees off with the damping against 0.15 without.
+    built_from_facade = "facade_rotation" in (m.diagnostics or {})
+    if settings.correct_horizontal and m.yaw is not None and not built_from_facade:
         yaw_abs = abs(m.yaw)
         if yaw_abs > math.radians(20):
             # Linear damping: 20°→100%, 50°+→30%
