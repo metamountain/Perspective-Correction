@@ -152,3 +152,87 @@ def test_max_inscribed_rect_of_a_plain_frame_is_the_whole_frame():
 def test_max_inscribed_rect_of_a_degenerate_quad_is_none():
     quad = np.array([[0, 0], [10, 0], [20, 0], [30, 0]], dtype=float)
     assert W.max_inscribed_rect(quad, 1.5) is None
+
+
+def test_the_pixel_reference_dial_trades_canvas_for_detail_and_zero_loses_none():
+    """`pixel_reference_edge` is the one knob over that trade, and it must work.
+
+    ``H = K R K^-1`` at a large yaw inflates the receding edge five- to
+    sevenfold, and the plan then scales the output back so the facade keeps
+    *about* its source pixel count.  On average that is right.  At the **near**
+    edge -- the part of the building closest to the camera, carrying the most
+    real detail -- it is a loss, because the average is dragged up by the edge
+    that was inflated.  Measured 2026-09-20 before the dial existed: the canvas
+    grew to 2.3-7x the source area while the near edge was still sampled at
+    **0.71-0.95**, which is invisible in the output size and is why it survived.
+
+    Two claims, both against the definition rather than today's numbers:
+      * at 0.0 the short/near edge is the reference, so NOTHING is sampled
+        below 1:1 -- no photographed detail is discarded;
+      * the dial is monotonic -- turning it up must not both shrink the canvas
+        and keep the sampling, or it is not a trade and the number means nothing.
+    """
+    import numpy as np
+
+    from pc import warp as W
+    from pc.config import Settings
+
+    w, h, f = 1600, 1000, 1400.0
+    bit = False
+    for yaw_deg in (20.0, 35.0, 50.0):
+        yaw = np.radians(yaw_deg)
+        H = W.build(w, h, f, np.radians(1.0), np.radians(6.0), yaw)
+
+        seen = []
+        for dial in (0.0, 0.5, 1.0):
+            st = Settings(correct_horizontal=True)
+            st.pixel_reference_edge = dial
+            plan = W.plan(w, h, H, st, yaw=yaw)
+            assert plan is not None, f"no plan at yaw {yaw_deg}, dial {dial}"
+            seen.append((W.min_magnification(plan[0], w, h, plan[1], plan[2]),
+                         plan[1] * plan[2]))
+
+        assert seen[0][0] >= 0.99, (
+            f"yaw {yaw_deg} deg at dial 0.0: the near edge is sampled at "
+            f"{seen[0][0]:.3f}. Dial 0 means the short edge is the pixel "
+            f"reference, so that is photographed detail being discarded")
+
+        if seen[2][0] < 0.99:          # this yaw actually exercises the trade
+            bit = True
+            assert seen[0][0] >= seen[1][0] >= seen[2][0] - 1e-9, (
+                f"yaw {yaw_deg} deg: sampling is not monotonic in the dial: "
+                f"{[round(a, 3) for a, _ in seen]}")
+            assert seen[0][1] >= seen[1][1] >= seen[2][1], (
+                f"yaw {yaw_deg} deg: the canvas is not monotonic in the dial: "
+                f"{[b for _, b in seen]}")
+            assert seen[0][1] > seen[2][1], (
+                f"yaw {yaw_deg} deg: dial 0 kept more detail than dial 1 "
+                f"without costing a single pixel of canvas, which cannot be true")
+
+    assert bit, ("no yaw in the sweep downsampled even at dial 1.0, so this test "
+                 "cannot fail and is not testing anything -- pick a harder case")
+
+
+def test_the_near_edge_floor_leaves_a_pure_roll_and_pitch_warp_alone():
+    """No yaw, no asymmetry, no reason to touch the plan.
+
+    The floor is deliberately scoped to yaw: a roll/pitch correction is
+    symmetric about the centre and does not inflate one edge against the other,
+    and widening its scope would move every output size in the suite for
+    nothing.  Pinned so that scope is a decision somebody has to undo on
+    purpose.
+    """
+    import numpy as np
+
+    from pc import warp as W
+    from pc.config import Settings
+
+    w, h = 1600, 1000
+    H = W.build(w, h, 1400.0, np.radians(2.0), np.radians(8.0), 0.0)
+    a = W.plan(w, h, H, Settings(), yaw=0.0)
+    b = Settings()
+    b.preserve_near_edge = False
+    c = W.plan(w, h, H, b, yaw=0.0)
+    assert a is not None and c is not None
+    assert (a[1], a[2]) == (c[1], c[2]), (
+        "the near-edge floor changed a zero-yaw plan; it is scoped to yaw")

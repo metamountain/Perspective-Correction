@@ -205,12 +205,44 @@ def process(src_path, dst_path, settings, debug_dir=None, dry_run=False,
             io.copy_through(src_path, dst_path)
         return Result(status=SKIPPED, reason=reason, seconds=time.time() - t0, **base)
 
-    if m.confidence < settings.min_confidence:
+    # The confidence gate does not refuse a correction the user asked for.
+    #
+    # (user, 2026-09-20: "konfidenz tor bei HA muss dann weg", "user mit roi
+    # rules".)  Measured that day over the 47-photograph pool: turning
+    # horizontal auto on refuses 10 for low confidence, and placing the facade
+    # strip properly -- one wall, read off the photograph -- takes that to 17.
+    # The strip is the feature that makes a corner view correctable at all, and
+    # it pushes 7 more photographs under the gate, weakest term `stability` in
+    # six of them.  Confidence is multiplicative and counts evidence, so
+    # restricting the evidence to the right wall reads as less certainty: the
+    # gate scores a deliberate, informed action as weakness.  On `Platte` all
+    # three strips tried returned the same yaw to within 0.5 deg while
+    # confidence ran 0.20 / 0.49 / 0.54 -- the strip moved the confidence and
+    # not the answer.
+    #
+    # Both of these are the user saying what to do, and this is the same rule
+    # the mask brush already follows: what the user draws is a decision, not a
+    # hypothesis.  Manual review is the product, so a wrong attempt is rejected
+    # on sight and refusing costs more than attempting.  The number is still
+    # computed, still logged and still shown in the panel -- it just stops being
+    # a veto.
+    #
+    # It remains a veto for the unattended path with horizontal auto off and no
+    # strip, which is the case the gate was measured for and still fits.
+    _user_asked = settings.correct_horizontal or roi_x is not None
+    if m.confidence < settings.min_confidence and not _user_asked:
         why = m.diagnostics.get("reason", "low confidence")
         weakest = m.diagnostics.get("weakest_term")
         detail = f"; weakest: {weakest}" if weakest else ""
         return finish_skip(f"{why} (conf={m.confidence:.2f} < "
                            f"{settings.min_confidence:.2f}{detail})")
+    if m.confidence < settings.min_confidence:
+        base["diagnostics"]["low_confidence_allowed"] = (
+            f"conf={m.confidence:.2f} < {settings.min_confidence:.2f}"
+            f"{'; weakest: ' + str(m.diagnostics.get('weakest_term')) if m.diagnostics.get('weakest_term') else ''}"
+            f" -- applied anyway because "
+            + ("a facade strip was placed by hand" if roi_x is not None
+               else "horizontal correction was asked for"))
 
     guessed = m.f_source in ("default", "prior", "none", "refined")
     # The model's yaw must go through the same limits as roll and pitch --
