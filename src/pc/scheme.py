@@ -47,6 +47,7 @@ import cv2
 import numpy as np
 
 from . import geometry as G
+from . import preview as PV
 from . import vanishing as V
 from .lines import LineSet, split_by_orientation
 
@@ -168,21 +169,30 @@ class ArchitectureScheme:
 
     # -- step 3: preview ---------------------------------------------------
     def draw_preview(self, bgr):
-        """Render the partition on a copy of ``bgr``: relevant green, ignored dim."""
+        """Render the partition on a copy of ``bgr``: relevant green, ignored dim.
+
+        The colours come from ``preview`` rather than from here. They were
+        written inline -- (0, 200, 0) for the lines that count, (96, 96, 96)
+        for the ones that do not -- while `preview.py` drew the same two ideas
+        as GREEN (80, 220, 90) and GREY (130, 130, 130). Two renderings of the
+        same geometry that did not agree on what green means, which is an
+        awkward place to start from when the open question is which of the two
+        to show by default.
+        """
         out = bgr.copy()
         if self.ignored is not None and len(self.ignored):
             for x0, y0, x1, y1 in self.ignored.seg:
                 cv2.line(out, (int(x0), int(y0)), (int(x1), int(y1)),
-                         (96, 96, 96), 1, cv2.LINE_AA)
+                         PV.GREY, 1, cv2.LINE_AA)
         if self.relevant is not None and len(self.relevant):
             for x0, y0, x1, y1 in self.relevant.seg:
                 cv2.line(out, (int(x0), int(y0)), (int(x1), int(y1)),
-                         (0, 200, 0), 2, cv2.LINE_AA)
+                         PV.GREEN, 2, cv2.LINE_AA)
         for vp in (self.vp_vert, self.vp_h1, self.vp_h2):
             if vp is None or abs(vp[2]) < 1e-9:
                 continue
             x, y = int(vp[0] / vp[2]), int(vp[1] / vp[2])
-            cv2.circle(out, (x, y), 6, (0, 128, 255), 2, cv2.LINE_AA)
+            cv2.circle(out, (x, y), 6, PV.VP_MARK, 2, cv2.LINE_AA)
         return out
 
     def summary(self):

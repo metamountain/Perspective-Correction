@@ -94,3 +94,38 @@ def test_refine_vp_beats_the_two_line_estimate():
     ang = lambda v: math.degrees(math.acos(min(1.0, abs(float(v @ vp_true)))))
     assert ang(refined) < ang(pair)
     assert ang(refined) < 0.2
+
+
+def test_normalize_vp_signs_every_result_the_same_way_including_its_fallback():
+    """The sign fix exists so equal vanishing points compare equal -- and one
+    path used to skip it.
+
+    A vanishing point is a line through the origin, not a ray, so `normalize_vp`
+    flips the sign until the dominant component is positive. Every return did
+    that except the zero-norm fallback, which handed back [0, -1, 0]: the only
+    output in the function with a negative dominant component, and therefore
+    the only one that could not compare equal to an identical direction that
+    had arrived the normal way.
+
+    That path is reachable -- `intersect` normalises `cross(l1, l2)`, which is
+    the zero vector for two identical lines. Asserted as the invariant rather
+    than as the fallback's particular value, because the defect was a path
+    escaping the rule, not a wrong constant.
+    """
+    import numpy as np
+
+    cases = [np.zeros(3),                       # the fallback
+             np.array([0.0, -1.0, 0.0]),
+             np.array([0.0, 1.0, 0.0]),
+             np.array([-3.0, 1.0, 0.0]),
+             np.array([600.0, 400.0, 1.0]),
+             np.array([-1e-13, 1e-14, 0.0])]    # under the 1e-12 floor
+    for v in cases:
+        out = G.normalize_vp(v)
+        k = int(np.argmax(np.abs(out)))
+        assert out[k] > 0, f"normalize_vp({v.tolist()}) = {out.tolist()} is not sign-fixed"
+        assert abs(np.linalg.norm(out) - 1.0) < 1e-9, f"{out.tolist()} is not unit"
+
+    # the concrete consequence: a direction reached two ways must agree
+    assert np.allclose(G.normalize_vp(np.zeros(3)),
+                       G.normalize_vp(np.array([0.0, -1.0, 0.0])))
