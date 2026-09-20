@@ -160,36 +160,7 @@ def test_a_four_three_box_beats_the_wide_short_one_for_real_framings():
     assert min(new) > min(old)
 
 
-def test_the_preview_row_takes_the_height_and_stops_at_the_aspect():
-    """As big as possible -- but past 4:3 extra height only letterboxes."""
-    # a tall window: the cap bites, so the row stops at the ideal
-    each = L.preview_box(2560)
-    ideal = int(each / L.PREVIEW_ASPECT)
-    assert L.preview_row_height(2560, 4000, 250) == ideal
-    # a short window: the row takes everything that is left, not the ideal
-    h = L.preview_row_height(2560, 900, 250)
-    assert h == 900 - 250 < ideal
 
-
-def test_compacting_the_bottom_gives_the_picture_the_height():
-    """The user's rule: the previews are what matters, so chrome is the
-    variable that gives way. A smaller bottom strip must never shrink the
-    preview row."""
-    prev = None
-    for bottom in (400, 300, 200, 150):
-        h = L.preview_row_height(1920, 1080, bottom)
-        if prev is not None:
-            assert h >= prev, f"bottom {bottom}px gave the preview less height"
-        prev = h
-
-
-def test_a_preview_survives_a_window_too_short_for_the_layout():
-    """A cramped window still shows an instrument; a layout with no picture in
-    it is not a smaller version of this UI, it is a different one."""
-    for pane_h in (1, 60, 200, 300):
-        h = L.preview_row_height(1280, pane_h, 250)
-        assert h >= 1
-        assert h <= max(1, pane_h)
 
 
 def test_both_preview_boxes_fit_across_the_pane():
@@ -200,59 +171,8 @@ def test_both_preview_boxes_fit_across_the_pane():
 # --------------------------------------------------------------------------
 # The perfect cross: four fields of exactly the same size
 # --------------------------------------------------------------------------
-def test_the_four_fields_are_exactly_the_same_size():
-    """A cross one pixel out reads as a mistake, so this is exact equality.
-
-    Both columns equal and both rows equal, on every real window. The leftover
-    from an odd pane goes into the gap, never into one field.
-    """
-    for w, h in [(1366, 700), (1920, 900), (2560, 1200), (3440, 1300), (1281, 901)]:
-        qw, qh = L.quadrant(w, h)
-        top, bottom = L.cross_rows(h)
-        assert top == bottom == qh, f"{w}x{h}: rows {top} vs {bottom}, quadrant {qh}"
-        assert 2 * qw + L.PREVIEW_GAP <= w + 1
-        assert 2 * qh + L.PREVIEW_GAP <= h + 1
 
 
-def test_the_ui_fits_in_the_lower_fields_on_every_real_screen():
-    """The directive is that the UI lives in the lower two boxes. If a field is
-    too short for the control block plus the action row, the cross is a lie."""
-    for _w, h in SCREENS:
-        pane = h - 425                       # measured chrome at the loaded stage
-        _top, ui = L.cross_rows(pane)
-        # the action row may never be traded away at any size
-        assert ui >= min(L.UI_HARD_MIN_H, pane), (
-            f"{h}: lower field {ui}px cannot even hold the action row "
-            f"({L.UI_HARD_MIN_H}px)")
-        # and where the screen can afford it, the controls fit open too
-        if pane >= 2 * L.MIN_UI_QUADRANT_H + L.PREVIEW_GAP:
-            assert ui >= L.MIN_UI_QUADRANT_H, (
-                f"{h}: lower field {ui}px, controls need {L.MIN_UI_QUADRANT_H}px")
-
-
-def test_a_window_too_short_keeps_the_controls_and_says_so_by_being_uneven():
-    """Usable beats equal. Controls that do not fit are controls nobody can
-    reach -- a worse failure than a visibly uneven split, which at least tells
-    the user the window is too small."""
-    # too short even for the action row in half the pane: (100-12)//2 = 44 < 48
-    top, ui = L.cross_rows(100)
-    assert ui >= 1 and top >= 1
-    assert not L.cross_is_perfect(100)
-    # 260 is NOT such a case -- it splits equally with the controls folded away,
-    # which is still a perfect cross and is why the floor is the action row
-    assert L.cross_is_perfect(260)
-    # and the previews never vanish entirely to feed the controls
-    assert top >= 1
-    for pane in (1, 40, 120, 260, 399):
-        t, u = L.cross_rows(pane)
-        assert t >= 1 and u >= 1, f"a field vanished at pane={pane}"
-
-
-def test_the_cross_is_perfect_on_the_screens_this_tool_is_used_on():
-    """The fallback above must be the exception, not the normal case."""
-    ok = [h for _w, h in SCREENS if L.cross_is_perfect(h - 425)]
-    assert len(ok) >= len(SCREENS) - 1, (
-        f"the equal cross only holds on {len(ok)}/{len(SCREENS)} real screens")
 
 
 def test_equal_fields_still_beat_the_old_wide_short_row():

@@ -169,23 +169,6 @@ def preview_box(pane_w, gap=PREVIEW_GAP):
     return max(1, (int(pane_w) - int(gap)) // 2)
 
 
-def preview_row_height(pane_w, pane_h, bottom_h, aspect=PREVIEW_ASPECT,
-                       min_h=MIN_PREVIEW_H):
-    """Height for the row holding the two previews.
-
-    As tall as the window allows, capped where each box reaches ``aspect`` --
-    past that point extra height only letterboxes the photograph, so it is
-    better spent below. Floored at ``min_h``: a window too short for both still
-    shows a picture, because the alternative is a layout with no instrument in
-    it.
-    """
-    each_w = preview_box(pane_w)
-    ideal = int(each_w / float(aspect))
-    avail = int(pane_h) - int(bottom_h)
-    if avail <= min_h:
-        return max(1, min(int(min_h), max(1, int(pane_h))))
-    return max(min_h, min(avail, ideal))
-
 
 def fill_fraction(box_w, box_h, img_w, img_h):
     """Share of a preview box a photograph actually paints, 0..1.
@@ -436,45 +419,8 @@ def mark_line_width(short_edge):
     return max(MARK_LINE_MIN, min(MARK_LINE_MAX, int(short_edge) // 250))
 
 
-def cross_is_perfect(pane_h, gap=PREVIEW_GAP, min_ui=UI_HARD_MIN_H):
-    """Whether an equal split leaves the lower fields enough for the UI.
-
-    Below this the cross cannot be both equal and usable, and usable wins --
-    controls that do not fit are controls nobody can reach, which is a worse
-    failure than an uneven layout. `preview_row_height` handles the fallback.
-    """
-    return quadrant(1, pane_h, gap)[1] >= int(min_ui)
 
 
-def cross_rows(pane_h, gap=PREVIEW_GAP, min_ui=MIN_UI_QUADRANT_H):
-    """``(preview_row_h, ui_row_h)`` -- equal where it can be, honest where not.
-
-    Equal halves on any window tall enough. On a window too short, the UI row
-    takes the minimum it needs and the previews take the rest, so the controls
-    stay reachable; the split is then visibly unequal, which is the correct
-    signal that the window is too small rather than a layout that silently
-    hides a button.
-    """
-    pane_h = int(pane_h)
-    qh = quadrant(1, pane_h, gap)[1]
-    # Equal whenever the lower field can hold the controls *or* can hold the
-    # action row with the controls folded away -- both are the perfect cross.
-    if qh >= UI_HARD_MIN_H:
-        return qh, qh
-    ui = max(1, min(UI_HARD_MIN_H, max(1, pane_h - MIN_PREVIEW_H)))
-    return max(1, pane_h - ui - int(gap)), ui
-
-
-# --------------------------------------------------------------------------
-# The bottom row is not split down the middle, and that is a correction
-# --------------------------------------------------------------------------
-# Four exactly equal fields was the directive and it was tried. It failed on
-# contact with the content: the loader is a drop target and a short list, which
-# needs almost nothing, while the controls are four slider rows plus the
-# detector, mask and fill selectors, which need everything they can get. Equal
-# fields spent half the bottom row on the emptiest thing in the window.
-#
-# The 2026-09-12 directive supersedes this: the four fields are again exactly
 # equal (CROSS_GAP / CROSS_BORDER above), with the loader's *content* kept
 # compact and top-aligned inside its field instead of the field itself being
 # shrunk.  `bottom_split` is no longer called from the panel; it stays because

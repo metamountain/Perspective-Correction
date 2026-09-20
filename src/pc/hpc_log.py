@@ -30,8 +30,12 @@ CSV_HEADER = [
 def _strip_fractions(strip, width):
     """A facade strip as two fractions of the width, or ``None``.
 
-    Full-resolution pixels in, fractions out -- the only form that still means
-    the same thing after the analysis resolution changes.
+    *strip* and *width* must be in the SAME frame -- both full-resolution, or
+    both analysis-resolution. The fraction is the same either way, which is the
+    point of storing fractions: it is the only form that still means the same
+    thing after the analysis resolution changes. (This used to say
+    "full-resolution pixels in", which its GUI caller does not do and does not
+    need to.)
     """
     if not strip or not width:
         return None

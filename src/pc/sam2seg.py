@@ -33,9 +33,14 @@ from typing import List, Optional, Tuple
 import cv2
 import numpy as np
 
-# A prompt box smaller than this in analysis-res pixels is a stray click, not a
-# selection; SAM2 would happily segment a 3-pixel box and the result reads as
-# "it masked everything".
+# A prompt box smaller than this is a stray click, not a selection; SAM2 would
+# happily segment a 3-pixel box and the result reads as "it masked everything".
+#
+# IMAGE pixels, not analysis pixels. SAM2 segments the full-resolution file, so
+# the box handed to it is in that frame, and so is the drag the GUI measures.
+# The comment said analysis-res while the only gate in the project measured
+# image pixels -- and that gate used its own literal 5, so this constant was
+# read by nothing. One number, one frame, one place.
 MIN_BOX_PX = 8
 
 _COMFY_CANDIDATES = (
