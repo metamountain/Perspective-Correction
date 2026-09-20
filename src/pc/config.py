@@ -122,6 +122,28 @@ class Settings:
 
     # ---- gating ----
     min_confidence: float = 0.40
+    preserve_near_edge: bool = True     # apply the pixel-reference dial when yaw is corrected
+    # Which edge of a foreshortened facade is the pixel reference, when a yaw is
+    # being corrected.  0 = the SHORT (near, compressed) edge keeps 1:1, so no
+    # photographed detail is discarded and the canvas grows most; 1 = the LONG
+    # (far, stretched) edge is the reference, no growth, the near edge loses
+    # resolution.  Measured over 8 corner views 2026-09-20:
+    #
+    #   dial   min sampling   canvas vs source   linear detail lost
+    #   0.00       1.08            6.44x               0.0%
+    #   0.25       1.03            5.75x               4.8%
+    #   0.50       0.98            5.16x               9.2%
+    #   0.75       0.94            4.65x              13.4%
+    #   1.00       0.90            4.22x              17.3%
+    #
+    # The user proposed 0.75 as the compromise.  The measurement says otherwise
+    # and that is why it is written here rather than quietly changed: the two
+    # axes are not the same length.  The whole range only moves the canvas from
+    # 6.44x to 4.22x -- a third -- while detail loss runs 0 to 17.3%.  At 0.75
+    # you give up 13.4% of the near edge, which cannot be got back, to save 28%
+    # of a file size, which is cheap.  0.25 costs 4.8% -- under what anyone sees
+    # -- and saves 11%.  Override with a number, not an argument.
+    pixel_reference_edge: float = 0.25
     max_area_ratio: float = 9.0         # crop canvas to this × source area (trim fill zones)
 
     # ---- distortion correction (Stage 0) ----

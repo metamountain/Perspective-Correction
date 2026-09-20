@@ -328,6 +328,109 @@ def _whole_frame(H, quad, img_w, img_h, settings, area_ratio,
     return T @ H, max(ow, 1), max(oh, 1), 1.0, area_ratio
 
 
+NEAR_EDGE_MAX_SCALE = 3.0
+
+
+def _wf_keep_near_edge(wf, img_w, img_h, settings, yaw):
+    """Apply the no-downsampling floor to a ``_whole_frame`` plan."""
+    if wf is None:
+        return None
+    H_total, ow, oh, coverage, area_ratio = wf
+    H_total, ow, oh = _keep_near_edge(H_total, ow, oh, img_w, img_h, settings, yaw)
+    return H_total, ow, oh, coverage, area_ratio
+
+
+def min_magnification(H_total: np.ndarray, img_w: int, img_h: int,
+                      out_w: int, out_h: int, n: int = 9) -> float:
+    """Smallest local linear magnification (output px per source px) that the
+    warp applies to any part of the source still visible in the output.
+
+    Below 1.0 means that part of the photograph is being **downsampled** -- real
+    detail thrown away -- and it is invisible in the output size, because a
+    canvas can grow while one edge is still being squeezed.  Measured
+    2026-09-20 with horizontal auto on: the canvas grew to 2.3-7x the source
+    area and the near edge was still sampled at 0.71-0.95.
+
+    Only points that actually land inside the output canvas count; a corner the
+    crop discards must not dictate the scale.
+    """
+    xs = np.linspace(0.02, 0.98, n) * img_w
+    ys = np.linspace(0.02, 0.98, n) * img_h
+    gx, gy = np.meshgrid(xs, ys)
+    base = np.stack([gx.ravel(), gy.ravel()], axis=1)
+    d = max(1.0, min(img_w, img_h) / 200.0)
+    dx = base + np.array([d, 0.0])
+    dy = base + np.array([0.0, d])
+    q = cv2.perspectiveTransform(base.reshape(-1, 1, 2), H_total).reshape(-1, 2)
+    qx = cv2.perspectiveTransform(dx.reshape(-1, 1, 2), H_total).reshape(-1, 2)
+    qy = cv2.perspectiveTransform(dy.reshape(-1, 1, 2), H_total).reshape(-1, 2)
+    inside = ((q[:, 0] >= 0) & (q[:, 0] <= out_w) &
+              (q[:, 1] >= 0) & (q[:, 1] <= out_h))
+    if not inside.any():
+        return 1.0
+    sx = np.linalg.norm(qx - q, axis=1) / d
+    sy = np.linalg.norm(qy - q, axis=1) / d
+    return float(np.minimum(sx, sy)[inside].min())
+
+
+def _keep_near_edge(H_total, out_w, out_h, img_w, img_h, settings, yaw):
+    """Scale the plan up until nothing is sampled below 1:1.
+
+    ``H = K R K^-1`` at a large yaw inflates the receding edge five- to
+    sevenfold, and ``_whole_frame`` then scales the whole output back so the
+    facade keeps *about* its source pixel count.  On average that is right; at
+    the **near** edge it is a loss, because the average is dragged up by the
+    edge that was inflated.  The near edge is where the real resolution is.
+
+    So: measure the worst magnification still visible, and scale up by its
+    reciprocal so the worst becomes exactly 1.0.  Bounded by
+    ``max_area_ratio`` -- a photograph that would need more than that keeps as
+    much as the bound allows rather than producing a canvas nobody asked for.
+
+    Only applies when a yaw is being corrected; with yaw 0 the roll/pitch warp
+    does not have this asymmetry and every output size in the suite would move.
+    """
+    if abs(yaw) < 1e-9 or not getattr(settings, "preserve_near_edge", True):
+        return H_total, out_w, out_h
+    worst = min_magnification(H_total, img_w, img_h, out_w, out_h)
+    if worst >= 0.999:
+        return H_total, out_w, out_h
+    # WHICH EDGE IS THE PIXEL REFERENCE (user, 2026-09-20).  Growing the canvas
+    # is normal when a facade is foreshortened, but how far to grow it is a
+    # taste, so it is a dial rather than a rule:
+    #
+    #   pixel_reference_edge = 0.0  the SHORT (compressed, near) edge is the
+    #                               reference -- scale up until nothing is
+    #                               sampled below 1:1.  Biggest file, no
+    #                               photographed detail discarded.
+    #   pixel_reference_edge = 1.0  the LONG (stretched, far) edge is the
+    #                               reference -- no scaling at all.  Smallest
+    #                               file, the near edge loses resolution.
+    #
+    # Interpolated geometrically, because these are scale factors and the
+    # halfway point between 1x and 1.4x should be 1.18x, not 1.20x.
+    t = float(getattr(settings, "pixel_reference_edge", 0.75))
+    t = min(1.0, max(0.0, t))
+    full = 1.0 / worst
+    scale_wanted = full ** (1.0 - t)
+    if scale_wanted <= 1.0 + 1e-9:
+        return H_total, out_w, out_h
+
+    # `max_area_ratio` deliberately does NOT bound this.  Its own comment says
+    # what it is for -- "crop canvas to this x source area (trim fill zones)" --
+    # which is about how much invented border to carry, not about how finely the
+    # photograph is sampled.  Letting it clamp the floor left two assets at 0.84
+    # and 0.98 when the whole point is 1.0.  The floor gets its own bound
+    # instead: it may enlarge the planned canvas by at most `NEAR_EDGE_MAX_SCALE`
+    # linearly, which is generous for every yaw the caps allow and still stops a
+    # degenerate plan from asking for a canvas nobody can hold.
+    s = min(scale_wanted, NEAR_EDGE_MAX_SCALE)
+    if s <= 1.0 + 1e-9:
+        return H_total, out_w, out_h
+    S = np.array([[s, 0, 0], [0, s, 0], [0, 0, 1]], dtype=float)
+    return S @ H_total, max(1, int(round(out_w * s))), max(1, int(round(out_h * s)))
+
+
 def plan(img_w: int, img_h: int, H: np.ndarray, settings,
          line_segs: np.ndarray | None = None, yaw: float = 0.0):
     """Work out the output canvas.
@@ -355,7 +458,8 @@ def plan(img_w: int, img_h: int, H: np.ndarray, settings,
     area_ratio = quad_area(quad) / float(img_w * img_h)
 
     if settings.crop == "none":
-        return _whole_frame(H, quad, img_w, img_h, settings, area_ratio, line_segs)
+        wf = _whole_frame(H, quad, img_w, img_h, settings, area_ratio, line_segs)
+        return _wf_keep_near_edge(wf, img_w, img_h, settings, yaw)
 
     centre = G.apply_h(H, np.array([[img_w / 2.0, img_h / 2.0]]))[0]
     aspect = (img_w / img_h) if settings.crop in ("aspect", "auto") else None
@@ -372,7 +476,8 @@ def plan(img_w: int, img_h: int, H: np.ndarray, settings,
         # fill band cover what the warp invented.  A reframe that scales the
         # facade down to fit a source-sized canvas would shrink the image,
         # which is forbidden: the output must never be smaller than the input.
-        return _whole_frame(H, quad, img_w, img_h, settings, area_ratio, line_segs)
+        wf = _whole_frame(H, quad, img_w, img_h, settings, area_ratio, line_segs)
+        return _wf_keep_near_edge(wf, img_w, img_h, settings, yaw)
 
     if settings.keep_size:
         s = min(img_w / rw, img_h / rh)
@@ -381,7 +486,9 @@ def plan(img_w: int, img_h: int, H: np.ndarray, settings,
         s = 1.0
         ow, oh = int(round(rw)), int(round(rh))
     S = np.array([[s, 0, -rect[0] * s], [0, s, -rect[1] * s], [0, 0, 1]], dtype=float)
-    return S @ H, max(ow, 1), max(oh, 1), float(coverage), area_ratio
+    Ht, ow, oh = _keep_near_edge(S @ H, max(ow, 1), max(oh, 1), img_w, img_h,
+                                 settings, yaw)
+    return Ht, ow, oh, float(coverage), area_ratio
 
 
 def pad_colour(spec: str):
