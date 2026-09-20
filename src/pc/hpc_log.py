@@ -19,6 +19,7 @@ CSV_HEADER = [
     "after_yaw_deg", "after_horiz_lines", "after_support",
     "roll_deg", "pitch_deg", "yaw_applied_deg", "confidence",
     "focal_35mm", "focal_source", "status",
+    "roi_x0", "roi_x1",
 ]
 
 
@@ -60,6 +61,8 @@ def build_record(result, before: dict, after: dict, version: str) -> dict:
             "focal_source": result.focal_source,
             "clamped": bool(result.clamped),
         },
+        "roi_x": ([float(v) for v in result.roi_x]
+                  if getattr(result, "roi_x", None) else None),
     }
 
 
@@ -85,4 +88,6 @@ def record_to_row(record: dict) -> dict:
         "focal_35mm": c.get("focal_35mm"),
         "focal_source": c.get("focal_source"),
         "status": record["status"],
+        "roi_x0": (record.get("roi_x") or [None, None])[0],
+        "roi_x1": (record.get("roi_x") or [None, None])[1],
     }

@@ -1239,10 +1239,9 @@ class ReviewPanel(tk.Frame):
         self.v_focal = tk.DoubleVar(value=28.0)
         self.v_correct_horizontal = tk.BooleanVar(value=self.settings.correct_horizontal)
         self.v_yaw = tk.DoubleVar(value=0.0)
-        if getattr(self, "v_hmarker", None) is None:
-            self.v_hmarker = tk.BooleanVar(value=False)
-        # Made once, like `v_hmarker`: this is a preference about output size,
-        # not a property of the photograph, so it should survive the next one.
+        # Made once, not per photograph: this is a preference about output
+        # size, not a property of the picture, so it should survive the next
+        # one.
         # The trace goes on with it -- `_build` re-runs per photograph and a
         # trace added there would stack up one more copy each time.  It is the
         # variable that is watched rather than the scale's `command`, because a
@@ -1252,16 +1251,14 @@ class ReviewPanel(tk.Frame):
             self.v_keep_px = tk.DoubleVar(value=self.settings.keep_pixels)
             self.v_keep_px.trace_add("write", lambda *_a: self._apply_keep_px())
 
-        # Row 0: horizontal marker (manuell) — yaw from hand-drawn lines.
-        _hm = ttk.Checkbutton(ctl, text="h-marker",
-                              variable=self.v_hmarker,
-                              command=self._on_hmarker_toggle)
-        _hm.grid(row=0, column=0, sticky="w")
-        _attach_tooltip(
-            _hm,
-            "Compute yaw directly from a hand-drawn horizontal marker.\n"
-            "1-2 lines: exact. 3+: least-squares interpolation.\n"
-            "Mutually exclusive with horizontal auto.")
+        # Row 0 used to hold an "h-marker" checkbox: tick it and the yaw came
+        # from hand-drawn horizontals instead of the vanishing point. It is
+        # gone (2026-09-20, user-directed). Its precondition -- the lines --
+        # was created by a tool on the far side of the window, so the box could
+        # refuse a click and untick itself, and a control that undoes your click
+        # is not a control. The line is the switch now: draw a horizontal and
+        # the yaw comes from it, delete it and the vanishing point has it back.
+        # `ReviewSession.marker_yaw` reads it off the lines themselves.
 
         # Row 1: horizontal auto (yaw) — VP-based correction + slider, as before.
         _hchk = ttk.Checkbutton(ctl, text="horizontal auto (yaw)",
@@ -1931,12 +1928,16 @@ class ReviewPanel(tk.Frame):
         self._redraw()
 
     def _on_horizontal_toggle(self):
-        """Auto mode: VP-based yaw. Mutually exclusive with H-Marker."""
+        """Auto mode: yaw from the horizontal vanishing point.
+
+        No longer switches anything else off. It used to turn the h-marker
+        checkbox off, which was one half of a hand-written mutual exclusion
+        between two mode flags -- a second mechanism beside `_exclusive`, and
+        pairwise code that never grew to include the manual slider. There is
+        only one flag here now, and a drawn horizontal simply outranks it: see
+        `ReviewSession.current_yaw`.
+        """
         on = self.v_correct_horizontal.get()
-        if on and self.v_hmarker.get():
-            # Switching to auto turns off manual.
-            self.v_hmarker.set(False)
-            self._on_hmarker_toggle()
         s = self.session
         if s is None:
             return
@@ -1953,99 +1954,6 @@ class ReviewPanel(tk.Frame):
         elif not on and self.session.mode == AUTO:
             self.v_yaw.set(0.0)
             self._schedule_redraw()
-
-    def _on_hmarker_toggle(self):
-        """Manual mode (H-Marker): yaw from line bearings, no VP.
-
-        Mutually exclusive with "horizontal auto".  When active, the bearing
-        algorithm replaces the VP path entirely -- different correction model.
-        """
-        on = self.v_hmarker.get()
-        if not on:
-            s = self.session
-            if s is not None:
-                s._hmarker_yaw = None
-                s._hmarker_active = False
-                s.refit()
-                self._sync_from_session()
-            return
-        # Switching to manual turns off auto.
-        if self.v_correct_horizontal.get():
-            self.v_correct_horizontal.set(False)
-            s = self.session
-            if s is not None:
-                s.settings = s.settings.replace(correct_horizontal=False)
-        s = self.session
-        if s is None:
-            self._set_status("no image loaded")
-            self.v_hmarker.set(False)
-            return
-        n_v = len(s.control_lines)
-        n_h = len(s.control_hlines)
-        if n_v < 1 and n_h < 1:
-            self._set_status("draw at least one marker line (V or H)")
-            self.v_hmarker.set(False)
-            return
-        try:
-            import math as _m
-            import numpy as _np
-            from . import geometry as _G
-            f = (s.model.f if s.model and s.model.f
-                 else M.focal_px_from_35mm(s.settings.default_focal_35mm,
-                                           s.w, s.h))
-            # Roll/pitch: from V-line(s) if available, else model.
-            if n_v >= 1:
-                roll, pitch = s._marker_roll_pitch(f)
-            elif s.model and s.model.f:
-                roll, pitch, _, _ = W.limit(s.model.roll, s.model.pitch,
-                                            s.settings)
-            else:
-                roll, pitch = 0.0, 0.0
-            # Yaw from H-line(s): the line's image direction, un-rotated by
-            # roll/pitch, gives the world horizontal bearing.  The yaw that
-            # makes it axis-aligned is atan2 of its z/x components after
-            # removing the camera tilt.
-            cx, cy = s.w / 2.0, s.h / 2.0
-            yaw = 0.0
-            if n_h >= 1:
-                # For each H-line, compute the 3D direction of the line in
-                # camera coords (difference of two ray directions), then
-                # un-rotate by roll and pitch to get the world direction.
-                # The yaw that makes this world direction lie in the x-axis
-                # is atan2(w[2], w[0]).
-                yaws = []
-                for i in range(n_h):
-                    seg = s.control_hlines[i]
-                    x0, y0, x1, y1 = (float(seg[0]), float(seg[1]),
-                                      float(seg[2]), float(seg[3]))
-                    # 3D direction of the line in camera coords.
-                    r0 = _np.array([(x0 - cx) / f, (y0 - cy) / f, 1.0])
-                    r1 = _np.array([(x1 - cx) / f, (y1 - cy) / f, 1.0])
-                    d3 = r1 - r0
-                    dn = _np.linalg.norm(d3)
-                    if dn < 1e-9:
-                        continue
-                    d3 = d3 / dn
-                    # Un-rotate by roll and pitch to get world direction.
-                    w = _G.rot_z(-roll) @ _G.rot_x(-pitch) @ d3
-                    # The yaw that sends this direction onto the x-axis.
-                    yaws.append(_m.atan2(w[2], w[0]))
-                if yaws:
-                    # Average angles (wrap-aware).
-                    yaw = _m.atan2(
-                        sum(_m.sin(y) for y in yaws),
-                        sum(_m.cos(y) for y in yaws))
-            s._hmarker_yaw = yaw
-            s._hmarker_active = True
-            self.v_yaw.set(_m.degrees(yaw))
-            self._yaw_scale.configure(state="normal")
-            self._yaw_spin.configure(state="normal")
-            label = f"{n_v}V + {n_h}H"
-            self._set_status(f"Marker: yaw={_m.degrees(yaw):.1f}° roll="
-                             f"{_m.degrees(roll):.1f}° pitch={_m.degrees(pitch):.1f}° ({label})")
-            self._schedule_redraw()
-        except Exception as e:
-            self._set_status(f"H-Marker error: {e}")
 
     def _on_slider(self):
         self.session.set_manual(roll_deg=self.v_roll.get(), pitch_deg=self.v_pitch.get(),
