@@ -1939,6 +1939,13 @@ class ReviewPanel(tk.Frame):
         """
         on = self.v_correct_horizontal.get()
         s = self.session
+        if on and s is not None and s.drop_planar_for("horizontal auto"):
+            # The other direction of the same rule: a placed quad ignores
+            # roll, pitch and yaw entirely, so switching the yaw back on with
+            # one in force would have changed nothing visible at all.
+            if getattr(self, "v_rect", None) is not None:
+                self.v_rect.set(False)
+            self._set_status("PC Rectangle cleared -- horizontal auto is back in charge")
         if s is None:
             return
         s.settings = s.settings.replace(correct_horizontal=on)
@@ -2040,7 +2047,12 @@ class ReviewPanel(tk.Frame):
         if on:
             self._exclusive("v_rect")
             self._rect_pending = []
-            self._loupe_hide()
+            # The glass comes up WITH the tool, before the first point. Placing
+            # a facade corner is the finest aim this window asks for, and the
+            # first corner is aimed at exactly like the other three -- it used
+            # to appear only once a corner was down, which is after the moment
+            # it was needed (2026-09-20, user-directed).
+            self._loupe_show()
         else:
             self._rect_pending = []
             self._mark_drag = None
@@ -2063,23 +2075,90 @@ class ReviewPanel(tk.Frame):
         if hit is not None:
             self._rect_drag = hit
             return
-        # Otherwise place the next corner (1→2→3→4).
+        # Place the next corner. CAD order: four points, closed on the fourth.
         i = len(self.session.planar_quad)
         if i >= 4:
-            # All four placed; a fifth click clears and starts over.
-            self.session.clear_planar()
-            self._rect_pending = []
-            self._set_status("PC Rectangle cleared -- click corner 1 again")
-            self._redraw()
+            # Closed. A click on empty ground does NOT start over: wiping four
+            # placed corners because somebody missed a handle is a destructive
+            # answer to a miss. Right-click clears, and says so.
+            self._set_status("PC Rectangle is closed -- drag a corner to adjust, "
+                             "right-click to clear")
             return
+        # A quad is an answer about this facade, and so are marks and the strip.
+        # Whichever arrives last is the instruction; the others stand down
+        # rather than sitting there looking as if they still applied.
+        if i == 0:
+            self._planar_takes_over()
         self.session.set_planar_point(i, fx, fy)
-        if len(self.session.planar_quad) >= 4:
+        n = len(self.session.planar_quad)
+        if n >= 4:
             self._loupe_hide()
-            self._set_status("PC Rectangle set -- drag any corner to adjust")
+            self._set_status("PC Rectangle closed -- drag any corner to adjust")
         else:
-            self._set_status(f"PC Rectangle corner {i + 1}/4 placed -- click the next "
-                             f"corner (top-left, top-right, bottom-right, bottom-left)")
+            # No order is prescribed any more: `planar.order_quad` sorts the
+            # four into top-left, top-right, bottom-right, bottom-left whatever
+            # sequence they arrive in, so the facade no longer comes out turned
+            # depending on which corner somebody started with.
+            self._set_status(f"PC Rectangle: corner {n} of 4 -- click the next one "
+                             f"(any order)")
         self._redraw()
+
+    def _rect_rubber(self, event):
+        """The edge under construction, from the last corner to the cursor.
+
+        Bound to plain <Motion>, not <B1-Motion>. It used to be the latter --
+        motion with the button HELD -- while the corners are placed by clicking,
+        so once the button came back up the band vanished and the only way to
+        see it was to hold the button down and drag, which is not how a point
+        gets placed. That is the whole of "gummiband ist schrottig".
+
+        With three corners down the closing edge back to the first is drawn too,
+        so the shape reads as a closed quad before the fourth click lands.
+        """
+        if self.session is None or getattr(self, "v_rect", None) is None:
+            return
+        self.c_before.delete("rect_rubber")
+        if not self.v_rect.get():
+            return
+        quad = self.session.planar_quad
+        if not quad or len(quad) >= 4:
+            return                      # nothing started, or already closed
+        ox, oy = self._before_off
+        sc = self._before_scale
+        lx, ly = quad[-1]
+        self.c_before.create_line(ox + lx * sc, oy + ly * sc, event.x, event.y,
+                                  fill=OVERLAY["sam"], width=2, dash=(4, 4),
+                                  tags="rect_rubber")
+        if len(quad) >= 3:
+            fx, fy = quad[0]
+            self.c_before.create_line(event.x, event.y, ox + fx * sc, oy + fy * sc,
+                                      fill=OVERLAY["sam"], width=2, dash=(4, 4),
+                                      tags="rect_rubber")
+
+    def _planar_takes_over(self):
+        """Stand the rotation-path instructions down when a quad starts.
+
+        The quad replaces the rotation preview entirely, so horizontal auto,
+        the facade strip and the yaw slider stop having any effect the moment
+        it closes. Leaving them switched on shows controls that look live and
+        are not -- the failure this project keeps finding. Say what went.
+        """
+        s = self.session
+        if s is None:
+            return
+        gone = []
+        if getattr(self, "v_correct_horizontal", None) is not None \
+                and self.v_correct_horizontal.get():
+            self.v_correct_horizontal.set(False)
+            s.settings = s.settings.replace(correct_horizontal=False)
+            gone.append("horizontal auto")
+        if getattr(self, "v_roi", None) is not None and self.v_roi.get():
+            self.v_roi.set(False)
+            s.roi_x = None
+            gone.append("facade strip")
+        if gone:
+            self._set_status("PC Rectangle takes over: " + " and ".join(gone)
+                             + " switched off")
 
     def _rect_drag_move(self, event):
         """Nudge the grabbed corner; the rectified preview follows live."""
@@ -2128,6 +2207,7 @@ class ReviewPanel(tk.Frame):
             return  # keep the hourglass; motion must not reset it mid-inference
         if getattr(self, "_loupe", None) is not None:
             self._loupe_move(event)
+        self._rect_rubber(event)
         if getattr(self, "v_roi", None) is not None and self.v_roi.get() \
                 and getattr(self, "_ph_b", None) is not None:
             oy = self._before_off[1]
@@ -2713,6 +2793,14 @@ class ReviewPanel(tk.Frame):
             return
         x0, y0 = self._pending_mark
         self._pending_mark = None
+        # Marker or planar, not both (2026-09-20, user). A placed quad ignores
+        # roll, pitch and yaw completely, so a line drawn while one is in force
+        # would change nothing and look broken. The newest instruction wins.
+        if self.session.drop_planar_for("a marker line"):
+            if getattr(self, "v_rect", None) is not None:
+                self.v_rect.set(False)
+            self._set_status("PC Rectangle cleared -- the marker line is the "
+                             "instruction now")
         added = self.session.add_control_line(x0, y0, x, y,
                                               display_scale=self._before_scale,
                                               kind=self._kind_for(x0, y0, x, y))
@@ -2762,6 +2850,14 @@ class ReviewPanel(tk.Frame):
         self._loupe_hide()              # the drag is over
         x = event.x - self._before_off[0]
         y = event.y - self._before_off[1]
+        # Marker or planar, not both (2026-09-20, user). A placed quad ignores
+        # roll, pitch and yaw completely, so a line drawn while one is in force
+        # would change nothing and look broken. The newest instruction wins.
+        if self.session.drop_planar_for("a marker line"):
+            if getattr(self, "v_rect", None) is not None:
+                self.v_rect.set(False)
+            self._set_status("PC Rectangle cleared -- the marker line is the "
+                             "instruction now")
         added = self.session.add_control_line(x0, y0, x, y,
                                               display_scale=self._before_scale,
                                               kind=self._kind_for(x0, y0, x, y))
@@ -2939,25 +3035,6 @@ class ReviewPanel(tk.Frame):
             return
         if getattr(self, "_rect_drag", None) is not None:
             self._rect_drag_move(event)
-            return
-        if getattr(self, "v_rect", None) is not None and self.v_rect.get():
-            # Rubber band: from the last placed corner to the cursor.  When
-            # three corners are down, also preview the closing edge (4→1) so
-            # the polygon reads as closed before the fourth click lands.
-            self.c_before.delete("rect_rubber")
-            quad = self.session.planar_quad if self.session else []
-            if quad:
-                ox, oy = self._before_off
-                s = self._before_scale
-                lx, ly = quad[-1]
-                self.c_before.create_line(ox + lx * s, oy + ly * s, event.x, event.y,
-                                          fill=OVERLAY["sam"], width=2, dash=(4, 4),
-                                          tags="rect_rubber")
-                if len(quad) >= 3:
-                    fx, fy = quad[0]
-                    self.c_before.create_line(event.x, event.y, ox + fx * s, oy + fy * s,
-                                              fill=OVERLAY["sam"], width=2, dash=(4, 4),
-                                              tags="rect_rubber")
             return
         if getattr(self, "_roi_drag", None) is not None:
             self._on_roi_drag_move(event)
@@ -3199,6 +3276,16 @@ class ReviewPanel(tk.Frame):
         """Right-click: SAM prompt reset when SAM is on, erase stroke otherwise."""
         if getattr(self, "v_sam", None) is not None and self.v_sam.get():
             self._on_sam_right_click(event)
+            return "break"
+        # Rectangle: right-click clears the quad. A LEFT click no longer does,
+        # because wiping four placed corners because somebody missed a handle is
+        # a destructive answer to a miss; clearing is now a gesture of its own.
+        if getattr(self, "v_rect", None) is not None and self.v_rect.get():
+            if self.session is not None and self.session.planar_quad:
+                self.session.clear_planar()
+                self.c_before.delete("rect_rubber")
+                self._set_status("PC Rectangle cleared -- click the first corner")
+                self._redraw()
             return "break"
         return self._on_erase_press(event)
 

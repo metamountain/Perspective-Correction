@@ -1318,6 +1318,29 @@ class ReviewSession:
         return had
 
     # -- planar (four-point) correction ---------------------------------
+    def planar_is_set(self) -> bool:
+        """Four corners down: the planar rectification is what the user sees."""
+        return len(self.planar_quad) >= 4
+
+    def drop_planar_for(self, reason: str) -> bool:
+        """Put the quad away because something incompatible arrived.
+
+        A placed quad REPLACES the rotation path entirely -- `render_before`
+        does not go through roll, pitch or yaw at all -- so it cannot quietly
+        coexist with the things that feed that path. Marker lines, horizontal
+        auto and the facade strip are all instructions about a correction the
+        quad is not using, and leaving both in force meant the newer one
+        appeared to do nothing (2026-09-20, user: "marker oder planar").
+
+        Returns True when there was something to drop, so the caller can say so
+        instead of a control silently going dead.
+        """
+        if not self.planar_quad:
+            return False
+        self.clear_planar()
+        self.planar_dropped_because = reason
+        return True
+
     def set_planar_point(self, i: int, x: float, y: float) -> None:
         """Place or move corner ``i`` of the quad (full-resolution pixels)."""
         while len(self.planar_quad) <= i:

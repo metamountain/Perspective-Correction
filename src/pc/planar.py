@@ -84,6 +84,29 @@ def quad_area(quad):
     return float(np.sum(x * np.roll(y, -1)) - np.sum(y * np.roll(x, -1)))
 
 
+def order_quad(quad):
+    """The four corners as top-left, top-right, bottom-right, bottom-left.
+
+    Whatever order they were clicked in. ``transform_for`` maps corner 0 to the
+    output's top-left and corner 1 to its top-right, so before this the picture
+    came out turned a quarter or a half depending on which corner somebody
+    happened to start with -- and the status line had to teach the order, which
+    is a user interface apologising for its arithmetic.
+
+    Sorted by angle around the centroid, which puts them in cyclic order for any
+    quad however sheared, then rotated so the cycle starts at the corner nearest
+    the top-left. Image y grows DOWNWARD, so increasing angle runs clockwise on
+    screen and the cycle from top-left is exactly TL, TR, BR, BL.
+    """
+    q = np.asarray(quad, dtype=np.float64)
+    if len(q) != 4:
+        return q
+    c = q.mean(axis=0)
+    order = np.argsort(np.arctan2(q[:, 1] - c[1], q[:, 0] - c[0]))
+    q = q[order]
+    return np.roll(q, -int(np.argmin(q[:, 0] + q[:, 1])), axis=0)
+
+
 def transform_for(quad):
     """``(H, w, h)`` mapping a source quad to an axis-aligned rectangle at the origin.
 
@@ -93,7 +116,10 @@ def transform_for(quad):
     degenerate (collinear or repeated-point) quad rather than returning a broken
     homography that would warp the image into a sliver.
     """
-    q = np.asarray(quad, dtype=np.float64)
+    # Sorted here rather than where the corners are stored: dragging a corner
+    # must keep hold of the one that was grabbed, so the stored quad keeps the
+    # click order and only the arithmetic sees the canonical one.
+    q = order_quad(np.asarray(quad, dtype=np.float64))
     if abs(quad_area(q)) < 1e-6:
         raise ValueError("planar quad is degenerate (collinear or repeated points)")
     w, h = target_size(q)
