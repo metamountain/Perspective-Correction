@@ -203,6 +203,78 @@ def correction_rotation(roll: float, pitch: float, yaw: float = 0.0) -> np.ndarr
     return rot_y(-yaw) @ rot_x(pitch) @ rot_z(-roll)
 
 
+def rotation_from_two_vps(vp_h: np.ndarray, vp_v: np.ndarray,
+                          K: np.ndarray) -> np.ndarray:
+    """Rotation that squares ONE facade, built from its own two vanishing points.
+
+    The rows of a rotation matrix ARE the axes of the frame it rotates into.
+    Write the facade's horizontal direction in row 0 and its vertical in row 1
+    and both land on the image axes by construction -- there is no optimisation
+    to converge and no third estimate to disagree with the first two.  Both
+    vanishing points go exactly to infinity, at 0 and 90 degrees.
+
+    This is the difference from composing ``(roll, pitch, yaw)``: those come
+    from three separate estimates -- the vertical vanishing point, whichever
+    horizontal cluster had the most lines, and a focal length from a fourth
+    source -- and nothing in that chain forces the two directions to end up
+    perpendicular.  Measured on Platte_1.jpg, the composed angles leave the
+    facade 6.12 degrees out of square; this leaves 0.15.
+
+    ``vp_h`` must belong to the SAME facade as ``vp_v``.  On a corner view that
+    means restricting the horizontal evidence to one face first (the ROI strip)
+    -- the derivation assumes one plane, so one plane is a precondition, not a
+    refinement.  See `horizontalauto theorie.md`.
+
+    Noise leaves the two back-projected directions not quite perpendicular;
+    Gram-Schmidt takes the nearest exactly-orthonormal frame, which is the most
+    a measurement can honestly claim.
+    """
+    Kinv = np.linalg.inv(K)
+    dx = Kinv @ np.asarray(vp_h, dtype=float)
+    dy = Kinv @ np.asarray(vp_v, dtype=float)
+    nx, ny = np.linalg.norm(dx), np.linalg.norm(dy)
+    if nx < 1e-12 or ny < 1e-12:
+        return np.eye(3)
+    dx, dy = dx / nx, dy / ny
+    # A vanishing point has no sign -- it is where a line family meets, and the
+    # family runs both ways.  Pick the pair that leaves the picture upright and
+    # unmirrored: image y grows downward, so the vertical points down.
+    if dy[1] < 0:
+        dy = -dy
+    if dx[0] < 0:
+        dx = -dx
+    dy = dy - (dy @ dx) * dx
+    n = np.linalg.norm(dy)
+    if n < 1e-9:                      # the two directions collapsed: refuse
+        return np.eye(3)
+    dy = dy / n
+    R = np.vstack([dx, dy, np.cross(dx, dy)])
+    if np.linalg.det(R) < 0:
+        R[2] = -R[2]
+    return R
+
+
+def roll_pitch_yaw_from_rotation(R: np.ndarray) -> tuple:
+    """Decompose *R* into the ``(roll, pitch, yaw)`` ``correction_rotation`` takes.
+
+    The pipeline speaks in three angles everywhere -- the sliders, the caps in
+    ``warp.limit``, the report, the saved sidecar -- so a rotation that comes
+    from somewhere else still has to arrive in that form.  This changes where
+    the angles come from, not what downstream does with them.
+
+    Exact inverse of ``correction_rotation`` up to floating point: that one
+    composes ``rot_y(-yaw) @ rot_x(pitch) @ rot_z(-roll)``, so the world
+    vertical is ``R.T @ UP`` (yaw leaves it fixed), and what remains after
+    dividing the tilt out is the yaw alone.
+    """
+    R = np.asarray(R, dtype=float)
+    u = R.T @ UP
+    roll, pitch = roll_pitch_from_up(u / max(float(np.linalg.norm(u)), 1e-12))
+    Y = R @ (rot_x(pitch) @ rot_z(-roll)).T      # == rot_y(-yaw)
+    yaw = -float(np.arctan2(Y[0, 2], Y[0, 0]))
+    return roll, pitch, yaw
+
+
 def homography(K: np.ndarray, R: np.ndarray) -> np.ndarray:
     H = K @ R @ np.linalg.inv(K)
     return H / H[2, 2]

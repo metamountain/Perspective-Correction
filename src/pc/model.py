@@ -297,8 +297,16 @@ def _cost_terms(params, vert, horiz_vps, horiz_w, cx, cy, f_prior, f_sigma):
     return cost
 
 
-def estimate(vert, horiz, w: int, h: int, settings, exif_focal_px=None) -> Model:
-    """Estimate ``(roll, pitch, f)`` and a confidence for one image."""
+def estimate(vert, horiz, w: int, h: int, settings, exif_focal_px=None,
+             single_facade: bool = False) -> Model:
+    """Estimate ``(roll, pitch, f)`` and a confidence for one image.
+
+    ``single_facade`` says the horizontal evidence has been restricted to ONE
+    plane -- the ROI strip did it, or the caller knows the frame holds a single
+    facade.  That licenses the two-vanishing-point rotation below, which is
+    exact for a plane and wrong for a corner seen whole.  See
+    `horizontalauto theorie.md`.
+    """
     cx, cy = w / 2.0, h / 2.0
     diag = {"n_vertical": len(vert), "n_horizontal": len(horiz)}
 
@@ -416,6 +424,12 @@ def estimate(vert, horiz, w: int, h: int, settings, exif_focal_px=None) -> Model
                 f_use = max(float(math.exp(x[2])), 0.05 * max(w, h))
                 f_src = "refined"
         u = G.up_from_roll_pitch(roll, pitch)
+    # Kept for the stability term below: that test refits roll/pitch on halves
+    # of the VERTICAL inliers, so it has to be judged against the angles the
+    # vertical evidence produced -- not against angles the facade rotation has
+    # since adjusted. Comparing the two measures a difference of METHOD and
+    # reports it as noise.
+    roll_v, pitch_v = roll, pitch
 
     # ---- horizontal (yaw) de-convergence ------------------------------
     # The third camera angle.  It cannot be read off the vertical vanishing
@@ -430,10 +444,35 @@ def estimate(vert, horiz, w: int, h: int, settings, exif_focal_px=None) -> Model
     if settings.correct_horizontal:
         dom = horiz_hyps[0] if horiz_hyps else None
         if dom is not None and dom.support >= settings.min_horizontal_support:
-            b = G.bearings(np.array([dom.vp]), G.intrinsics(f_use, cx, cy))[0]
-            wv = G.rot_x(pitch) @ G.rot_z(-roll) @ b
-            yaw = math.atan2(-wv[2], wv[0])
-            yaw = (yaw + math.pi / 2.0) % math.pi - math.pi / 2.0
+            if single_facade and hy.vp is not None:
+                # One plane, two directions: build the rotation from the facade's
+                # OWN axes instead of composing three separately estimated
+                # angles.  Its horizontals and verticals then land on the image
+                # axes by construction rather than by agreement -- measured on
+                # Platte_1.jpg, 0.15 degrees out of square against 6.12 for the
+                # composed version.  The angles are read back out afterwards
+                # because every consumer downstream still speaks in three.
+                f_orth = G.focal_from_orthogonal(hy.vp, dom.vp, cx, cy)
+                if f_orth:
+                    # The orthogonality constraint is not a foreign assumption
+                    # here: it agreed with the refined focal to 0.4% on the test
+                    # facade.  Where it disagrees wildly, the two vanishing
+                    # points are not perpendicular and the premise is false, so
+                    # keep what the vertical evidence gave.
+                    if 0.5 * f_use <= f_orth <= 2.0 * f_use:
+                        f_use, f_src = f_orth, "orthogonal"
+                    else:
+                        diag["ortho_focal_rejected"] = round(f_orth, 1)
+                Rf = G.rotation_from_two_vps(dom.vp, hy.vp,
+                                             G.intrinsics(f_use, cx, cy))
+                roll, pitch, yaw = G.roll_pitch_yaw_from_rotation(Rf)
+                u = G.up_from_roll_pitch(roll, pitch)
+                diag["facade_rotation"] = "two vanishing points, one plane"
+            else:
+                b = G.bearings(np.array([dom.vp]), G.intrinsics(f_use, cx, cy))[0]
+                wv = G.rot_x(pitch) @ G.rot_z(-roll) @ b
+                yaw = math.atan2(-wv[2], wv[0])
+                yaw = (yaw + math.pi / 2.0) % math.pi - math.pi / 2.0
         elif dom is not None:
             # the feature is on but the evidence is too weak to trust: record
             # why yaw reads zero instead of leaving it silent
@@ -459,7 +498,7 @@ def estimate(vert, horiz, w: int, h: int, settings, exif_focal_px=None) -> Model
         u = G.up_vector(hy.vp, G.intrinsics(f_use, cx, cy))
         roll, pitch = G.roll_pitch_from_up(u)
 
-    conf, cdiag = _confidence(vert, hy, support, f_src, f_quality, roll, pitch,
+    conf, cdiag = _confidence(vert, hy, support, f_src, f_quality, roll_v, pitch_v,
                               f_use, cx, cy, w, h, settings, hv, hw)
     diag.update(cdiag)
     diag["hypotheses"] = len(hyps)
@@ -532,6 +571,7 @@ def _confidence(vert, hy, support, f_src, f_quality, roll, pitch, f, cx, cy,
     c_focal = {"exif": 1.0, "manual": 1.0, "horizon": 0.85 + 0.15 * f_quality,
                "geometric": 0.80 + 0.20 * f_quality,
                "blended": 0.75 + 0.20 * f_quality, "refined": 0.72,
+               "orthogonal": 0.85,
                "default": 0.60, "none": 0.40}.get(f_src, 0.6)
     d["focal_source"] = f_src
 

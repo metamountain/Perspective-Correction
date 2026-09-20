@@ -250,8 +250,14 @@ class ReviewSession:
         if self.roi_x is None:
             return None
         gh, gw = self.gray.shape[:2]
-        x0 = int(round(self.roi_x[0] / max(self.w, 1) * gw))
-        x1 = int(round(self.roi_x[1] / max(self.w, 1) * gw))
+        # roi_x is ALREADY in analysis coordinates -- `set_roi_x` says so and
+        # clamps it to gw, and gui._apply_roi stores `fraction * analysis width`.
+        # Scaling it again by w/gw narrowed the strip by the analysis factor on
+        # every downsampled photograph: a 20..80% strip of a 6000 px frame came
+        # out as roughly 4..17%, so the band a user drew was not the band that
+        # filtered the lines. Invisible on a small test image, where scale is 1.
+        x0 = int(round(self.roi_x[0]))
+        x1 = int(round(self.roi_x[1]))
         x0, x1 = max(0, min(x0, gw)), max(0, min(x1, gw))
         if x1 <= x0:
             return None
@@ -331,8 +337,11 @@ class ReviewSession:
         horiz = _drop_touching(horiz, self.ignore_mask("h"))
         exif_px = IO.focal_px_from_exif(self.src, self.w, self.h) \
             if self.settings.use_exif_focal else None
+        # A strip means one facade has been pointed at, which is the precondition
+        # for building the rotation from that facade's own two vanishing points.
         m = M.estimate(vert, horiz, gw, gh, settings,
-                       exif_px * self.scale if exif_px else None)
+                       exif_px * self.scale if exif_px else None,
+                       single_facade=self.roi_x is not None)
         if m.f:
             m.f = m.f / self.scale
             # Sanity clamp: focal below 5% of frame width is unphysical
