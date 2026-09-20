@@ -59,7 +59,7 @@ left alone (see Done).
   | command | what it runs | measured 2026-09-20 |
   |---|---|---|
   | `python tests/run_tests.py` | fast — skips `test_gui`, `test_assets` | **283 tests, 0 failed, ~19 s** |
-  | `python tests/run_tests.py --full` (or `PC_FULL=1`) | everything, 23 modules | **332 tests, 0 failed, 2 skipped, ~67 s** |
+  | `python tests/run_tests.py --full` (or `PC_FULL=1`) | everything, 23 modules | **335 tests, 0 failed, 2 skipped, ~67 s** |
 
   The fast run says so on exit (`!! FAST RUN -- did NOT run: test_assets,
   test_gui`). **Green there does not mean green.** `-s` forces the old sequential
@@ -169,8 +169,8 @@ declared `mlsd` extra) is in the **system** interpreter, so
 
 ## Ledger — the only place status lives
 
-**Suite, measured 2026-09-20 at `bd37bea`+: `--full` = 332 tests, 0 failed,
-2 skipped, 67.0 s. The suite is green for the first time in this file's history.** Fast run
+**Suite, measured 2026-09-20 at `eecd1a1`+: `--full` = 335 tests, 0 failed,
+2 skipped, 66.9 s. The suite is green for the first time in this file's history.** Fast run
 = 283 in ~19 s and is not the suite. **And the honest one:
 `PC_TEST_ASSETS=0 python tests/run_tests.py test_assets` over the whole
 photograph pool = 11 tests, 0 failed, 2 skipped, 133.7 s** — `--full` still
@@ -248,6 +248,26 @@ features ahead of everything else.*
    **Whoever picks this up: read the log first.** Every hypothesis above is an
    inference from the repo, and this project's own rule is that a document
    claiming something is not evidence of it.
+
+7. **[started, cut off — do not assume either was finished] Two agent passes
+   were terminated mid-run by a session rate limit on 2026-09-20.** Neither
+   left a half-edited source file — checked, `git status` showed only the one
+   test each had finished — but neither reached its conclusion:
+   - **`knowledge.md` accuracy audit.** It was to re-measure every checkable
+     number in that file and every `file:line` pointer it names, after one of
+     its cited figures was caught wrong (§1's `Alte_Scheune` `h2=0.36` measures
+     **0.147** today, reproduced three ways; `lochfassade`'s `h2=0.045` in the
+     same passage reproduces exactly). **It wrote nothing.** `knowledge.md` is
+     therefore still unaudited, and §1's h2 figure specifically must not be
+     built on without re-measuring.
+   - **Non-GUI audit findings.** Five were handed over; **only one was
+     adjudicated** (`lines.masked_out` — not a defect, see Done). The other four
+     are untouched and still open: `geometry.normalize_vp`'s zero-norm fallback
+     direction, `model.focal_from_horizon`'s dead line and misleading comment,
+     `review.py` reaching into `preview._draw_lines`, and the diverging colour
+     tables in `preview.py` vs `scheme.py`. Given that **two of today's five
+     adjudicated findings turned out to be non-defects**, expect the same rate
+     here and run the arithmetic before applying anything.
 7. **`gui.py` is 5217 lines** — 3.5× the next largest file (`review.py`, 1369).
    A 12-file composition split was proposed and **deprioritised by the user**. It
    stays deprioritised; recorded so it is not re-proposed as if new.
@@ -548,6 +568,50 @@ features ahead of everything else.*
   `test_gui`'s off-screen `geometry("<WxH>-4000+0")` is UNVERIFIED and cannot be
   checked from here — the first run of that job is the experiment, not a
   formality.** YAML machine-validated.
+- **[bug, measured] The primary action button was unreadable in one theme.**
+  `Accent.TButton`'s foreground was the literal `"#0b1017"` — one dark ink,
+  hardcoded for every palette. Five of the six have a bright accent and read
+  fine. **Amiga 500 does not**: accent `#0055BB` under that ink measures a WCAG
+  contrast ratio of **2.74** against AA's 4.5, which made **Save** — the button
+  the entire review loop ends on — the least legible thing in the window.
+  Nothing said so, because a hex literal in a widget option looks like a
+  decision somebody made. `on_accent()` now computes both candidate ratios and
+  takes the better, rather than switching on a luminance threshold (which is
+  one more number to be wrong about). Amiga goes **2.74 → 6.96** and **no other
+  theme changes at all** — the fix reaches only the palette that needed it.
+  Pinned by `test_every_theme_keeps_the_accent_button_readable`, asserted
+  against the 4.5 constant rather than today's numbers, and verified failing on
+  the old behaviour.
+- **"Every colour comes from `INK`" is enforceable now, instead of prose.**
+  There were **24 bare `#rrggbb` literals** scattered through the draw calls
+  below the palette, and the rule could not be checked by looking: you could
+  not tell a deliberate colour from a forgotten one. That ambiguity is how the
+  Amiga bug above survived and how the tool palette ended up with two different
+  "held" colours. They are named now — `OVERLAY` for the marks drawn **on a
+  photograph**, plus `MASK_SWATCHES`, `ICON_WHITE`, `INK_ON_ACCENT_*`, beside
+  the `GUIDE_GREY` that was already exactly this idea.
+  **`OVERLAY` deliberately does NOT follow the theme, and that is the point of
+  writing it down.** Those marks are read against the *picture*, not against
+  the palette: a green inlier line has to stay legible on brick, sky and shadow
+  in every theme. Nine of them duplicate an `INK` value by coincidence of
+  taste, and binding them to it would mean picking Amiga 500 — whose `ok` is
+  `#008800` — turns the SAM selection outline into dark green on a dark facade.
+  Pinned by `test_no_colour_is_typed_into_a_widget_below_the_palette_tables`,
+  which **parses** rather than greps, so a hex inside a docstring (such as
+  `on_accent`'s, explaining the literal it replaced) is not mistaken for a
+  colour in use. Verified failing on one reintroduced literal.
+- **[not a defect] `lines.prepare()`'s empty `masked_out`.** Carried as an open
+  **MED** audit item — "shape `(0,)` not `(0,4)`", which would break any
+  consumer doing `dropped[:, 0]`, on a path that runs constantly (any clean
+  photograph whose mask ignores nothing). Measured: the list-comprehension
+  *does* produce `(0,)`, and `lines.py:388-389` catches it two lines later with
+  `if len(masked_out) == 0: masked_out = np.zeros((0, 4))`; `:362` initialises
+  it the same way. The guard predates the audit, so the finding was already
+  fixed in the code the audit read. **Nothing changed**, and
+  `test_masked_out_stays_four_wide_when_nothing_was_dropped` now pins the guard
+  so a future edit cannot quietly drop it. **Second wrong finding struck
+  today**, after the `cli.py` `isatty()` one — the hard rule about pointers and
+  verdicts keeps paying.
 - **This file rewritten from measurement** - see the header.
 
 **2026-09-19 → 20 (from `QWEN.md`, verified against the code)**

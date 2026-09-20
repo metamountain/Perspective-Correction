@@ -1608,3 +1608,85 @@ def test_every_tool_key_is_the_same_size_and_every_glyph_renders():
             f"holding has to have one answer (the brush inverts, so two): {sorted(selects)}")
     finally:
         app.destroy()
+
+
+def test_every_theme_keeps_the_accent_button_readable():
+    """The primary action button must be legible in every palette.
+
+    Its foreground was the literal "#0b1017" -- one dark ink, hardcoded for
+    all of them. Five of the six palettes have a bright accent and read fine
+    on it. **Amiga 500 does not**: accent #0055BB under dark text measures a
+    contrast ratio of 2.74 against WCAG AA's 4.5, which made Save -- the
+    button the whole review loop ends on -- the least legible thing in the
+    window. Nothing said so, because a hex literal in a widget option looks
+    like a decision somebody made.
+
+    4.5 is WCAG AA for body text, and it is asserted against the constant
+    rather than against the numbers the palettes currently produce: a new
+    theme is exactly how this comes back.
+    """
+    from pc.gui import THEMES, INK, on_accent, contrast_ratio
+
+    AA = 4.5
+    palettes = {"Minimal Black": INK["accent"]}
+    palettes.update({name: p.get("accent", INK["accent"])
+                     for name, p in THEMES.items()})
+    assert len(palettes) >= 3, "the theme table looks empty -- check the import"
+
+    bad = []
+    for name, accent in sorted(palettes.items()):
+        ratio = contrast_ratio(on_accent(accent), accent)
+        if ratio < AA:
+            bad.append(f"{name}: accent {accent} gives {ratio:.2f} (< {AA})")
+    assert not bad, "the accent button is unreadable in:\n  " + "\n  ".join(bad)
+
+
+def test_no_colour_is_typed_into_a_widget_below_the_palette_tables():
+    """"Every colour comes from INK" is a hard rule; this is what enforces it.
+
+    Until 2026-09-20 there were twenty-four bare `#rrggbb` literals scattered
+    through the draw calls, and the rule was unenforceable prose: you could
+    not tell a deliberate colour from a forgotten one by looking, which is how
+    the Amiga contrast bug above survived and how the tool palette ended up
+    with two different "held" colours.
+
+    They are named now -- `INK` and `THEMES` for chrome, `OVERLAY` for marks
+    drawn ON a photograph (which deliberately do NOT follow the theme, because
+    they are read against the picture and not against the palette),
+    `MASK_SWATCHES`, `ICON_WHITE`, `GUIDE_GREY`. All of those live at the top
+    of the module. So the rule becomes checkable: below them, a colour must be
+    referred to by name.
+
+    Parsed rather than grepped, so that a hex written inside a docstring --
+    such as the one in `on_accent` explaining the literal it replaced -- is
+    not mistaken for a colour being used.
+    """
+    import ast
+    import os
+    import re
+
+    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                        "src", "pc", "gui.py")
+    with open(path, encoding="utf-8") as fh:
+        src = fh.read()
+    tree = ast.parse(src, filename="gui.py")
+
+    # The tables end where the first function after them begins.
+    boundary = None
+    for node in tree.body:
+        if isinstance(node, ast.FunctionDef) and node.name == "_relative_luminance":
+            boundary = node.lineno
+            break
+    assert boundary, ("cannot find `_relative_luminance`, which marks the end of "
+                      "the colour tables -- if it was renamed, update this test")
+
+    hexish = re.compile(r"^#[0-9a-fA-F]{3,8}$")
+    offenders = []
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Constant) and isinstance(node.value, str)
+                and hexish.match(node.value) and node.lineno > boundary):
+            offenders.append(f"gui.py:{node.lineno}: {node.value!r}")
+    assert not offenders, (
+        "a colour is typed in below the palette tables, so it cannot be "
+        "retinted and no theme switch will reach it. Name it in INK, OVERLAY "
+        "or a constant instead:\n  " + "\n  ".join(offenders))
