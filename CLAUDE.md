@@ -709,8 +709,12 @@ features ahead of everything else.*
 - Mask overlay controls in the Q1 bar: colour swatch + opacity slider, with a
   custom 4×4 picker because Tkinter's `colorchooser` is broken on Windows.
   Default alpha 0.28 → **0.60**, brush width 10 → **60 px**.
-- `_after_dims` shows the live crop size; menus themed via `TMenu` instead of the
-  OS default black.
+- The corrected pane shows its output size and the live crop size, as a canvas
+  text item at the **bottom left** (`gui.py:2595`, `f"{ow}×{oh}  {cw}×{ch}"`).
+  This entry used to name a widget `_after_dims` and place it top-right; there
+  is no such attribute anywhere in `src/`, and the corner was wrong too
+  (found 2026-09-20 by checking every symbol the docs name against the tree).
+  Menus themed via `TMenu` instead of the OS default black.
 - **Guide system rewrite** (09-16): cross-pull creation with a dashed preview,
   canvas-based interaction at 15 px grab distance, border-zone creation from Q2,
   and **crop handles checked first** so all 8 of them outrank guides.
