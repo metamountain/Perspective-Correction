@@ -40,6 +40,18 @@ more robustly than partition-after-detect?
   the corner being visually obvious — the automatic *post-hoc* split under-detects a
   narrow or steeply foreshortened second facade. That is the concrete evidence for
   trying the opposite order.
+  **Re-verified 2026-09-20** — this number was flagged going into the audit as having
+  drifted to `h1=0.596, h2=0.147`. It has not: `ArchitectureScheme.from_image(gray,
+  Settings(), img).detect()` on `tests/assets/Alte_Scheune.jpg`, run three times in
+  separate processes, gives `{'v': 0.9379412277281797, 'h1': 0.6108816411240725,
+  'h2': 0.35773513349100466}` byte-identical every time — `v=0.94, h1=0.61, h2=0.36`
+  to the file's own precision, exactly as cited. `lochfassade.jpg` likewise reproduces
+  `h2=0.04515409414057064` against the cited `0.045`. Both assets, `src/pc/scheme.py`
+  and `src/pc/vanishing.py` are unchanged in git history since this was written (`git
+  log` shows no commits touching either since before this note), which is consistent
+  with the number not having moved. **So the claimed drift did not happen** — recorded
+  here rather than silently accepted, because the whole point of this pass was to not
+  take a claim about this file on faith either.
 
 ### External angle
 

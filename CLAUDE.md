@@ -58,7 +58,7 @@ left alone (see Done).
 
   | command | what it runs | measured 2026-09-20 |
   |---|---|---|
-  | `python tests/run_tests.py` | fast — skips `test_gui`, `test_assets` | **283 tests, 0 failed, ~19 s** |
+  | `python tests/run_tests.py` | fast — skips `test_gui`, `test_assets` | **290 tests, 0 failed, ~19 s** |
   | `python tests/run_tests.py --full` (or `PC_FULL=1`) | everything, 23 modules | **337 tests, 0 failed, 2 skipped, ~67 s** |
 
   The fast run says so on exit (`!! FAST RUN -- did NOT run: test_assets,
@@ -171,7 +171,7 @@ declared `mlsd` extra) is in the **system** interpreter, so
 
 **Suite, measured 2026-09-20 at `a6d1aaa`+: `--full` = 337 tests, 0 failed,
 2 skipped, 67.0 s. The suite is green for the first time in this file's history.** Fast run
-= 283 in ~19 s and is not the suite. **And the honest one:
+= 290 in ~19 s and is not the suite. **And the honest one:
 `PC_TEST_ASSETS=0 python tests/run_tests.py test_assets` over the whole
 photograph pool = 11 tests, 0 failed, 2 skipped, 133.7 s** — `--full` still
 samples 5 photographs, so it is not by itself a claim about the pool. Re-run

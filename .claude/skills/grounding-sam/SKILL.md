@@ -24,7 +24,7 @@ probe runs against the repo copy without touching the ComfyUI install:
 | GDINO weights (HF format) | `models\GroundingDINO\`  ← from `ComfyUI\models\grounding-dino\` | `config.json` + `model.safetensors` (689 MB) + tokenizer = Swin-T OGC; ComfyUI also has `groundingdino_swinb_cogcoor.pth` (895 MB, original format) |
 | SAM2 checkpoints | `models\sam2\`  ← from `ComfyUI\models\sam2\` | `sam2.1_hiera_base_plus.pt` (324 MB); config YAMLs under `models\sam2\configs\sam2.1\`; `-fp16.safetensors` + small/tiny in ComfyUI |
 | SAM3 (text-prompted, alt route) | `ComfyUI\models\sam3\sam3.pt` (not vendored) | 3.29 GB — the §3a "concept prompt" option: one model instead of two |
-| BiRefNet (the mask engine this box actually uses) | `models\BiRefNet\` | `BiRefNet-HR.safetensors` (424 MB) + `BiRefNet_lite.safetensors` (169 MB, CPU-capable PVT-v2 backbone) + `birefnet.py` / `birefnet_lite.py` arch; see `src/bpc/birefnet.py` |
+| BiRefNet (the mask engine this box actually uses) | `models\BiRefNet\` | `BiRefNet-HR.safetensors` (424 MB) + `BiRefNet_lite.safetensors` (169 MB, CPU-capable PVT-v2 backbone) + `birefnet.py` / `birefnet_lite.py` arch; see `src/pc/birefnet.py` |
 | `transformers` | `python_embeded\Lib\site-packages\` | loads GDINO via `AutoModelForZeroShotObjectDetection` |
 | `sam2` (official pkg, v1.1.0) | `python_embeded\Lib\site-packages\sam2` | `build_sam.py` + `sam2_image_predictor.py`; config YAMLs also vendored at `models\sam2\configs\` |
 | ComfyUI node graph (server route only) | `custom_nodes\comfyui-grounding` | `GroundingDetector` → `Sam2Segment`, or the fused `GroundingMaskDetector` |
