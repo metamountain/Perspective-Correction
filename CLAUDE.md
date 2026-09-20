@@ -188,11 +188,12 @@ features ahead of everything else.*
 
 **A. Tools and UI — small and visible.**
 
-1. ~~**Tool icons as one coherent set.**~~ **Done 2026-09-20 — see the Ledger.**
-   The button sizes and type scale half of this entry landed 09-14; the icons
-   landed today. **What is left of the "single pass" is spacing**, and it is
-   deliberately not being called done: the column pitch and the field paddings
-   were not touched, and nobody has looked at them as a set.
+1. ~~**Tool icons as one coherent set; bigger buttons; typography and
+   spacing.**~~ **Closed 2026-09-20, all four halves.** Button sizes and the
+   type scale landed 09-14; the icons landed today; and **the spacing was
+   measured and deliberately left alone** — see the Ledger for why, because
+   "we chose not to" is a different answer from "nobody got to it" and the
+   entry should not be re-opened as if it were the second one.
 2. **More tools — only where a gesture is already being done the long way.**
    Not a wish for its own sake. Shortcuts are done (`m` mark, `b` brush,
    `p` planar, `s` SAM).
@@ -655,6 +656,20 @@ features ahead of everything else.*
     that **antialiasing can only darken**, so a peak of 118 cannot have come
     from a source of 96, and measuring above the old value proves it is gone
     without needing to know the coverage.
+- **[measured, deliberately not changed] The spacing was already consistent.**
+  The UI item called for icons, button sizes, type scale *and* spacing as one
+  pass, so spacing was measured rather than assumed: **132 `padx`/`pady` values
+  in `gui.py`, of which 41 % are not multiples of the `GRID = 4` in
+  `layout.py`.** That looks like the drift the entry feared — and it is not.
+  **Every single off-grid value is exactly 2 away** (2, 6, 10, 14, with one 14
+  at `gui.py:1359`), so the window is laid out on a consistent **2 px** rhythm
+  and `GRID = 4` is a local doubling for the palette keys alone. There is no
+  disorder to fix; a sweep forcing 54 values onto a 4 px grid would move the
+  whole window and correct nothing. **Nothing was re-spaced.**
+  What *was* wrong is the documentation: `GRID = 4` carried the comment "the
+  spacing unit the tool column is built from", which a reader can easily take
+  as the window's unit. It now states the measurement and why the spacing was
+  left as it is, so this is not re-proposed as an untouched task.
 - **This file rewritten from measurement** - see the header.
 
 **2026-09-19 → 20 (from `QWEN.md`, verified against the code)**

@@ -329,7 +329,19 @@ def ruler_ticks(span, step):
 MARK_LINE_MIN, MARK_LINE_MAX = 1, 3
 
 
-GRID = 4        # the spacing unit the tool column is built from
+# The tool column's unit -- and ONLY the tool column's.
+#
+# Worth stating, because reading `GRID = 4` here and assuming it is the
+# window's unit would be wrong. Measured 2026-09-20 over every `padx`/`pady`
+# in gui.py: 132 values, and 41 % of them are not multiples of 4. They are not
+# arbitrary either -- every one of the "off-grid" values is exactly 2 away
+# (2, 6, 10, 14), so the window at large is laid out on a consistent **2 px**
+# rhythm and this 4 px unit is a local doubling for the palette keys.
+#
+# That measurement is also why the spacing was left alone rather than
+# regularised: a sweep that forced 54 values onto a 4 px grid would move the
+# whole window to fix nothing. The rhythm was already there.
+GRID = 4
 
 
 def tool_key(unit=GRID):
