@@ -971,9 +971,27 @@ class ReviewSession:
         came back "SKIP, conf=0.04, weakest: count".  Refusing evidence because
         there is little of it is right when a detector produced it and wrong
         when a person did.
+
+        **A hand-placed facade strip is on that list too** (2026-09-20,
+        user-directed, measured). ``roi_x`` restricts the horizontals to one
+        wall, which on a corner view *is* the correction -- one camera rotation
+        can level one facade, never two. Measured over 11 corner views: a strip
+        read off the photograph by eye beats the blanket 20-80% default
+        (+0.364 deg of horizontal lean against +0.131), and it drops **7 of
+        those 11 from OK to SKIPPED**, confidence falling 0.67 -> 0.20 on
+        ``35559_XXL`` and 0.40 -> 0.05 on ``images-(1)``, weakest term
+        ``stability`` in six of the seven. On ``Platte`` all three strips tried
+        returned the same yaw to within 0.5 deg while confidence ran
+        0.20 / 0.49 / 0.54 -- the strip moved the confidence and not the answer.
+        The fall is therefore an artifact of counting evidence rather than a
+        judgement about the correction, and it lands on exactly the photographs
+        the feature exists for. Drawing it is a decision, so it counts as one.
+
+        **This is the review path only.** ``pipeline.process`` -- the unattended
+        run -- keeps its veto, and the comment there says why it must.
         """
         if self.mode == MANUAL or self.control_active \
-                or len(self.control_hlines) >= 2:
+                or len(self.control_hlines) >= 2 or self.roi_x is not None:
             return None
         if self.model is None:
             return "no model"

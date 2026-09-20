@@ -205,44 +205,36 @@ def process(src_path, dst_path, settings, debug_dir=None, dry_run=False,
             io.copy_through(src_path, dst_path)
         return Result(status=SKIPPED, reason=reason, seconds=time.time() - t0, **base)
 
-    # The confidence gate does not refuse a correction the user asked for.
+    # The confidence gate stays a veto HERE, and the reason is which path this is.
     #
-    # (user, 2026-09-20: "konfidenz tor bei HA muss dann weg", "user mit roi
-    # rules".)  Measured that day over the 47-photograph pool: turning
-    # horizontal auto on refuses 10 for low confidence, and placing the facade
-    # strip properly -- one wall, read off the photograph -- takes that to 17.
-    # The strip is the feature that makes a corner view correctable at all, and
-    # it pushes 7 more photographs under the gate, weakest term `stability` in
-    # six of them.  Confidence is multiplicative and counts evidence, so
-    # restricting the evidence to the right wall reads as less certainty: the
-    # gate scores a deliberate, informed action as weakness.  On `Platte` all
-    # three strips tried returned the same yaw to within 0.5 deg while
-    # confidence ran 0.20 / 0.49 / 0.54 -- the strip moved the confidence and
-    # not the answer.
+    # `process` is the UNATTENDED path -- `cli.py:375` and the batch run at
+    # `gui.py:5359`.  Nobody is looking at what it writes, so the batch-era
+    # reasoning still holds in full: a photograph left alone costs nothing, a
+    # photograph warped on a bad hypothesis is gone.
     #
-    # Both of these are the user saying what to do, and this is the same rule
-    # the mask brush already follows: what the user draws is a decision, not a
-    # hypothesis.  Manual review is the product, so a wrong attempt is rejected
-    # on sight and refusing costs more than attempting.  The number is still
-    # computed, still logged and still shown in the panel -- it just stops being
-    # a veto.
+    # The gate was briefly removed here on 2026-09-20, on the strength of a real
+    # measurement -- placing the facade strip properly pushes 7 of 11 corner
+    # views under the threshold, because confidence is multiplicative and counts
+    # evidence, so narrowing the evidence to the right wall reads as less
+    # certainty.  That measurement is sound and the conclusion drawn from it was
+    # not: it was applied to the wrong path.  `Alte_Scheune` (conf 0.39, weakest
+    # term the focal length) then sailed through with a -26.5 deg yaw and came
+    # out visibly sheared, for 0.5 deg of gain -- the user saw it immediately.
+    # A gate removed where nobody is watching is not a manual-first decision, it
+    # is an unattended tool with its safety off.
     #
-    # It remains a veto for the unattended path with horizontal auto off and no
-    # strip, which is the case the gate was measured for and still fits.
-    _user_asked = settings.correct_horizontal or roi_x is not None
-    if m.confidence < settings.min_confidence and not _user_asked:
+    # The rule the measurement actually argues for lives in `review.py`'s
+    # `would_skip`, which already says it: refusing evidence because there is
+    # little of it "is right when a detector produced it and wrong when a person
+    # did".  A hand-placed strip is a person, so it belongs on that list -- and
+    # is now on it.  That is the review path, where somebody sees the result
+    # before it is written.
+    if m.confidence < settings.min_confidence:
         why = m.diagnostics.get("reason", "low confidence")
         weakest = m.diagnostics.get("weakest_term")
         detail = f"; weakest: {weakest}" if weakest else ""
         return finish_skip(f"{why} (conf={m.confidence:.2f} < "
                            f"{settings.min_confidence:.2f}{detail})")
-    if m.confidence < settings.min_confidence:
-        base["diagnostics"]["low_confidence_allowed"] = (
-            f"conf={m.confidence:.2f} < {settings.min_confidence:.2f}"
-            f"{'; weakest: ' + str(m.diagnostics.get('weakest_term')) if m.diagnostics.get('weakest_term') else ''}"
-            f" -- applied anyway because "
-            + ("a facade strip was placed by hand" if roi_x is not None
-               else "horizontal correction was asked for"))
 
     guessed = m.f_source in ("default", "prior", "none", "refined")
     # The model's yaw must go through the same limits as roll and pitch --

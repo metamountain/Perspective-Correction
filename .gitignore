@@ -58,6 +58,11 @@ models/*.tar
 # theme switching). Scanned for secrets before un-ignoring; the API key lives
 # in ~/.qwen/settings.json, not here.
 .qwen/*
+# ...and anywhere else it lands. The root pattern only anchors at the root, and a
+# stray copy once appeared under tests/assets/Horizontal/ where a blanket
+# `git add -A` would have taken it. settings.json is where the API key lives.
+**/.qwen/settings.json
+**/.qwen/tmp/
 !.qwen/skills/
 
 # local backups taken before a large doc edit; the content is in git history
