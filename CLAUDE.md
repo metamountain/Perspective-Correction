@@ -208,23 +208,22 @@ features ahead of everything else.*
 
 **B. Correctness and infrastructure.**
 
-5. **CI runs the fast suite only** (`.github/workflows/tests.yml:33`). It has
-   never executed `test_gui` or `test_assets`, so **"CI is green" has never been
-   a statement about the GUI or the photographs.** Now that `--full` completes in
-   ~64 s there is no longer a runtime argument against it, but the obvious change
-   is **not** safely blind:
-   - `test_gui` opens real Tk windows at `geometry("<WxH>-4000+0")` — off-screen
-     by design. Whether a runner's single virtual display tolerates a negative
-     off-screen origin is **unverified**, and cannot be verified from here.
-   - On Linux it additionally needs a display at all (`xvfb-run`), and the Linux
-     job is already failing for an unrelated and undiagnosed reason.
-   - A runner has 2 cores; the ~64 s here is on 32, and the runner would largely
-     serialise.
-   **The narrow, defensible version is a windows-only `--full` job**, since
-   Windows CI passes today and is where the GUI tests are developed. Do not
-   record it as done without a green run — a CI change cannot be tested locally,
-   which is exactly why this one has to be made deliberately rather than
-   assumed.
+5. **CI's `full-windows` job exists but has never run — watch its first run.**
+   Until 2026-09-20 CI ran only `run_tests.py -v`, the fast run, so it had
+   **never executed `test_gui` or `test_assets`** and "CI is green" was never a
+   statement about the GUI or the photographs. A sibling `full-windows` job now
+   runs `--full`; the original `test` job is untouched and neither gates the
+   other. Windows-only deliberately: the Linux leg is failing for an unrelated
+   undiagnosed reason (item 6), and `test_gui` opens real Tk windows.
+   **This is NOT done, and the reason is written here rather than assumed away.**
+   `test_gui` positions its windows off-screen at `geometry("<WxH>-4000+0")`,
+   and whether a GitHub runner's single virtual display tolerates a negative
+   origin is **unverified and cannot be verified from this machine**. A runner
+   also has 2 cores against the 32 the ~67 s was measured on, so it will largely
+   serialise. **The first run of that job is the experiment.** If it goes red,
+   read the log before touching the job: a red that says the display cannot
+   place the window is a different answer from a red that says a GUI test
+   genuinely fails, and only one of them is about this project's code.
 6. **CI Linux is failing** (ubuntu-latest, 3.9 and 3.12; Windows passing) —
    recorded 2026-09-19. **`gh` is not installed on this box and the Actions logs
    cannot be read from here**, so this is diagnosed only by elimination:
@@ -250,7 +249,7 @@ features ahead of everything else.*
    inference from the repo, and this project's own rule is that a document
    claiming something is not evidence of it.
 
-7. **[started, cut off — do not assume either was finished] Two agent passes
+7. **[started, cut off — do not assume it was finished] An agent pass
    were terminated mid-run by a session rate limit on 2026-09-20.** Neither
    left a half-edited source file — checked, `git status` showed only the one
    test each had finished — but neither reached its conclusion:
@@ -267,22 +266,22 @@ features ahead of everything else.*
      **Of the six audit findings adjudicated today in total, three were not
      defects** — which is the same rate the 2026-09-15 pass measured, and the
      reason the hard rule about pointers and verdicts is a hard rule.
-7. **`gui.py` is 5217 lines** — 3.5× the next largest file (`review.py`, 1369).
+8. **`gui.py` is 5217 lines** — 3.5× the next largest file (`review.py`, 1369).
    A 12-file composition split was proposed and **deprioritised by the user**. It
    stays deprioritised; recorded so it is not re-proposed as if new.
-8. ~~**`cli.py` `isatty()` gate**~~ **Struck 2026-09-20: it was not a defect.**
+9. ~~**`cli.py` `isatty()` gate**~~ **Struck 2026-09-20: it was not a defect.**
    See the Ledger — the gate refuses rather than proceeding, which is the only
    safe answer for a flag that destroys originals, and `--yes` is the documented
    way to mean it non-interactively.
 
 **C. Decide, do not necessarily fix.**
 
-9. **Shootout suite** — a 20-image benchmark. Estimated 9–10 h, independent of
+10. **Shootout suite** — a 20-image benchmark. Estimated 9–10 h, independent of
    everything else, no `tests/shootout/` exists.
 
 **D. Research — measurement passes, explicitly not implementation packages.**
 
-10. **Distortion Stages 1–3.** Stage 0 (`lensfunpy`, EXIF-driven) shipped
+11. **Distortion Stages 1–3.** Stage 0 (`lensfunpy`, EXIF-driven) shipped
     2026-09-14: `src/pc/distortion.py`, `warp.apply_undistorted()`,
     `--undistort lensfun`, 7 tests. No EXIF = graceful skip. Stages 1–3
     (AnyCalib blind fit, GeoCalib gravity prior, cross-check gate) remain, each
@@ -296,7 +295,7 @@ features ahead of everything else.*
     to read. Aulendorf, the one known wide-angle asset, scored 0.04 — near the
     bottom, below ordinary facades. A real trigger would group by proximity and
     continuity and measure residual curvature. Different mechanism, unmeasured.
-11. **Four research goals in `knowledge.md`** — read that file before picking any
+12. **Four research goals in `knowledge.md`** — read that file before picking any
     of them up. Each needs its own measured comparison first; if the measurement
     says no, write that down and stop. (1) facade-outline-first vs.
     partition-after-detect; (2) a dominant-edge hierarchy in the detector;
