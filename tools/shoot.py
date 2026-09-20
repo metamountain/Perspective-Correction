@@ -94,8 +94,23 @@ def scene_phosphor(app, r):
     _pump(app, 30)
 
 
+def scene_rect(app, r):
+    """The rectangle tool mid-polygon: the glass must already be up (it comes
+    with the TOOL now, not with the first corner), and the rubber band must
+    reach the cursor on plain motion -- it used to be bound to B1-Motion, so it
+    only existed while a button was held, which is never while clicking."""
+    r.v_rect.set(True)
+    r._on_rect_toggle()
+    _pump(app, 4)
+    r._click_rect(140, 120)
+    r._click_rect(520, 150)
+    _pump(app, 2)
+    r._on_before_motion(_ev(r, 540, 400, app))
+    _pump(app, 3)
+
+
 SCENES = {"idle": scene_idle, "mark": scene_mark, "brush": scene_brush,
-          "phosphor": scene_phosphor}
+          "phosphor": scene_phosphor, "rect": scene_rect}
 
 
 def main() -> None:
