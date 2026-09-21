@@ -454,6 +454,10 @@ class ReviewSession:
         A drag is just the four-edge case of ``set_crop_edge``; nothing here
         stores a rectangle of its own.
         """
+        # Whoever set it last owns it: `refresh_auto_crop` reads this to
+        # decide whether it may replace what is there. A hand-drawn rectangle
+        # is a decision and the automatic one must not overwrite it.
+        self.crop_is_auto = False
         if shown_w <= 0 or shown_h <= 0:
             return False
         x0, x1 = sorted((float(x0) / shown_w, float(x1) / shown_w))
@@ -590,9 +594,39 @@ class ReviewSession:
         if not self.auto_crop():
             return False
         if self.crop_loss() <= self.auto_crop_threshold:
+            self.crop_is_auto = True
             return True
         self.clear_crop_rect()
         return False
+
+    def refresh_auto_crop(self):
+        """Recompute the automatic crop for the correction now in force.
+
+        ``auto_crop_if_cheap`` runs once, when the photograph opens, and
+        refuses to touch a crop that already exists. Both of those are right
+        for a one-shot. Neither is right for a MODE: switch horizontal auto on,
+        or move the facade strip, and the correction changes completely while
+        the crop stays where it was computed for a different picture -- which
+        is what "the auto crop is not actualising" means (user, 2026-09-21).
+
+        A crop the USER drew is never touched. ``crop_is_auto`` records who put
+        the current one there, because "is there a crop" cannot answer "may I
+        replace it".
+
+        Returns True when the crop changed.
+        """
+        if self.crop_rect is not None and not getattr(self, "crop_is_auto", False):
+            return False                      # a hand-drawn crop is a decision
+        before = self.crop_rect
+        self.clear_crop_rect()
+        self.crop_is_auto = False
+        if not self.auto_crop():
+            return before is not None
+        if self.crop_loss() > self.auto_crop_threshold:
+            self.clear_crop_rect()
+            return before is not None
+        self.crop_is_auto = True
+        return self.crop_rect != before
 
     def crop_loss(self):
         """Fraction of the corrected frame the current crop discards."""

@@ -1460,14 +1460,33 @@ class ReviewPanel(tk.Frame):
                         command=self._clear_marks)
         _b.pack(side="left", padx=(6, 0))
         _attach_tooltip(_b, "Remove all manually placed control lines")
-        _b = ttk.Button(btns2, text="Auto crop",
-                        command=self._auto_crop)
+        # A SWITCH, not a one-shot (user, 2026-09-21). It was a button, and a
+        # button fires once: `auto_crop_if_cheap` ran when the photograph
+        # opened and never again, so turning horizontal auto on or moving the
+        # facade strip changed the whole correction while the crop stayed where
+        # it had been computed for a different picture. As a switch it keeps up.
+        if getattr(self, "v_autocrop", None) is None:
+            self.v_autocrop = tk.BooleanVar(value=True)
+        _b = ttk.Checkbutton(btns2, text="Auto crop", variable=self.v_autocrop,
+                             command=self._auto_crop)
+        _attach_tooltip(
+            _b,
+            "Keep the crop following the correction.\n"
+            "Switches itself off when you drag a crop by hand --\n"
+            "a rectangle you drew is a decision, not a suggestion.")
         _b.pack(side="left", padx=(0, 6))
-        _attach_tooltip(_b, "Crop to the detected content bounds")
+        # The old button's tooltip lived here and replaced the switch's, because
+        # Tk's bind() REPLACES a handler for a sequence -- the rule this file
+        # already states about `<ButtonPress-3>`. Two tooltips on one widget
+        # means the first is dead, and it was.
         _b = ttk.Button(btns2, text="Reset crop",
                         command=self._clear_crop)
         _b.pack(side="left", padx=(0, 6))
-        _attach_tooltip(_b, "Remove any manual crop selection")
+        _attach_tooltip(
+            _b,
+            "Remove the crop entirely, including one you drew.\n"
+            "Different from switching Auto crop off: that only lets go\n"
+            "of the automatic rectangle and leaves yours alone.")
 
         # -- assembly: who gives up height first ---------------------------
         # `pack` hands each child its requested height in call order and gives
@@ -1954,6 +1973,7 @@ class ReviewPanel(tk.Frame):
         if f:
             self.v_focal.set(round(focal_35mm_from_px(f, self.session.w, self.session.h), 0))
         self._redraw()
+        self._autocrop_follow()
 
     def _on_horizontal_toggle(self):
         """Auto mode: yaw from the horizontal vanishing point.
@@ -2478,8 +2498,19 @@ class ReviewPanel(tk.Frame):
             self._refresh_crop()
 
     def _auto_crop(self):
-        """Cut the padded band away instead of inventing something to put in it."""
+        """The switch was moved: crop now, or give the whole frame back."""
+        if self.session is None:
+            return
+        if not self.v_autocrop.get():
+            if getattr(self.session, "crop_is_auto", False):
+                self.session.clear_crop_rect()
+                self.session.crop_is_auto = False
+                self._refresh_crop()
+            self._set_status_extra("auto crop off -- the whole corrected frame "
+                                   "is kept, band and all")
+            return
         if self.session.auto_crop():
+            self.session.crop_is_auto = True
             self._refresh_crop()
             kept = (1.0 - self.session.crop_loss()) * 100.0
             self._set_status_extra(f"cropped -- keeps {kept:.0f}% of the frame, "
@@ -2487,6 +2518,27 @@ class ReviewPanel(tk.Frame):
         else:
             self._set_status_extra("nothing to trim -- the correction opened no "
                                    "band, or the plan had already cropped it")
+
+    def _autocrop_follow(self):
+        """Re-cut after the correction changed, while the switch is on.
+
+        Called from `_sync_from_session`, which is the one place every change
+        to the angles, the strip or the mode passes through. `refresh_auto_crop`
+        refuses to touch a crop the user drew, so this cannot eat a decision.
+        """
+        s = self.session
+        if s is None or getattr(self, "v_autocrop", None) is None:
+            return
+        if not self.v_autocrop.get():
+            return
+        if s.refresh_auto_crop():
+            self._refresh_crop()
+
+    def _crop_taken_by_hand(self):
+        """A dragged crop switches the automatic one off, and says so."""
+        if getattr(self, "v_autocrop", None) is not None and self.v_autocrop.get():
+            self.v_autocrop.set(False)
+            self._set_status_extra("auto crop off -- your rectangle stands")
 
     def _refresh_crop(self):
         """Re-bake the veil for a changed crop, without re-rendering the image.
@@ -2699,6 +2751,8 @@ class ReviewPanel(tk.Frame):
                 self._refresh_crop()
                 return
         ok = self.session.set_crop_rect(rx0, ry0, rx1, ry1, iw, ih)
+        if ok:
+            self._crop_taken_by_hand()
         self._refresh_crop()
         self._set_status_extra("crop set" if ok else "crop too small, ignored")
 
