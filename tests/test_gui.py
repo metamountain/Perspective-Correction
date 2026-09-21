@@ -1037,6 +1037,52 @@ def test_phosphor_lays_a_graded_ground_and_takes_it_away_again():
         app.destroy()
 
 
+def test_the_yaw_controls_follow_the_yaw_not_the_checkbox():
+    """A control that is dead while the thing it controls is running says the
+    opposite of what is happening.
+
+    The yaw slider, its box and the detail dial were greyed from
+    `correct_horizontal` alone, while `current_yaw` gives a hand-drawn
+    horizontal precedence over that flag entirely. Measured on Platte_1: one
+    drawn horizontal with the checkbox off yaws the picture by 2.88 degrees --
+    and all three controls sat greyed out while it did. The detail dial's own
+    tooltip names three routes to a yaw; the greying followed one.
+
+    Both halves, because "always enabled" would pass the first alone."""
+    import math
+
+    app = _app()
+    try:
+        app.geometry("1200x800-4000+0")
+        app.update(); time.sleep(0.02)
+        app._add([ASSET])
+        _settle(app)
+        r = app.review
+        assert r is not None and r.session is not None
+
+        assert not r.v_correct_horizontal.get(), "this test starts with HA off"
+        assert str(r._yaw_scale.cget("state")) == "disabled", (
+            "no yaw in force: the slider must be grey")
+
+        s = r.session
+        s.add_control_line(60, 260, 450, 150, display_scale=1.0, kind="h")
+        s.refit()
+        r._sync_from_session()
+        app.update(); time.sleep(0.02)
+
+        assert abs(math.degrees(s.current_yaw())) > 0.2, (
+            "the drawn horizontal has to produce a yaw, or this proves nothing")
+        assert not r.v_correct_horizontal.get(), (
+            "one horizontal must not flip the checkbox -- that is the case "
+            "this test is about")
+        for name in ("_yaw_scale", "_yaw_spin", "_keep_px_scale"):
+            assert str(getattr(r, name).cget("state")) == "normal", (
+                f"{name} is greyed while a yaw of "
+                f"{math.degrees(s.current_yaw()):+.2f} deg is applied")
+    finally:
+        app.destroy()
+
+
 def test_the_batch_bar_has_each_setting_exactly_once():
     """The 2026-09-13 duplication bug: subfolders and overwrite originals were each
     created twice in the batch options frame -- bound to the same vars, so it was

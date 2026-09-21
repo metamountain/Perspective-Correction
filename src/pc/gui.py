@@ -1279,9 +1279,7 @@ class ReviewPanel(tk.Frame):
                                      command=self._on_slider)
         self._yaw_spin.grid(row=1, column=2, sticky="e", padx=(6, 0))
         self._yaw_spin.bind("<Return>", lambda _e: self._on_slider())
-        if not self.settings.correct_horizontal:
-            self._yaw_scale.configure(state="disabled")
-            self._yaw_spin.configure(state="disabled")
+        self._sync_yaw_controls()
 
         # Row 2: how much resolution the yaw warp may throw away.  It only
         # bites while a yaw is being applied, so it sits under the switch that
@@ -1316,11 +1314,10 @@ class ReviewPanel(tk.Frame):
                  "a bigger file and buys back detail. It never crops.\n"
                  "\n"
                  "Does nothing until a yaw is active: horizontal auto\n"
-                 "(yaw), the h-marker, or the yaw slider by hand.")
+                 "(yaw), a horizontal you drew, or the yaw slider by hand.")
         _attach_tooltip(self._keep_px_scale, _help)
         _attach_tooltip(self._keep_px_read, _help)
-        if not self.settings.correct_horizontal:
-            self._keep_px_scale.configure(state="disabled")
+        self._sync_yaw_controls()
         self._update_keep_px_read()
         # The variable outlives the session; a fresh session starts at the
         # config default.  Push the shown value through so what the slider says
@@ -1974,6 +1971,43 @@ class ReviewPanel(tk.Frame):
             self.v_focal.set(round(focal_35mm_from_px(f, self.session.w, self.session.h), 0))
         self._redraw()
         self._autocrop_follow()
+        self._sync_yaw_controls()
+
+    def _yaw_is_live(self):
+        """Is a yaw actually in force, by any of the routes that produce one?
+
+        The detail dial's own tooltip names three -- horizontal auto, a drawn
+        horizontal, and the slider by hand -- and the greying followed only the
+        first. Measured on Platte_1: one hand-drawn horizontal with the
+        checkbox off yaws the picture by 2.88 degrees, and both controls sat
+        greyed out while it did. A control that is dead while the thing it
+        controls is running is worse than no control, because it says the
+        opposite of what is happening.
+        """
+        sess = self.session
+        if sess is None:
+            return False
+        if getattr(self, "v_correct_horizontal", None) is not None \
+                and self.v_correct_horizontal.get():
+            return True
+        if sess.mode != AUTO:      # manual: the slider IS the correction
+            return True
+        return sess.marker_yaw() is not None
+
+    def _sync_yaw_controls(self):
+        """Enable or grey the yaw slider, its box and the detail dial together.
+
+        One place, because they answer one question. They were set in three,
+        each from `correct_horizontal` directly.
+        """
+        state = "normal" if self._yaw_is_live() else "disabled"
+        for w in ("_yaw_scale", "_yaw_spin", "_keep_px_scale"):
+            widget = getattr(self, w, None)
+            if widget is not None:
+                try:
+                    widget.configure(state=state)
+                except tk.TclError:
+                    pass
 
     def _on_horizontal_toggle(self):
         """Auto mode: yaw from the horizontal vanishing point.
@@ -1997,12 +2031,7 @@ class ReviewPanel(tk.Frame):
         if s is None:
             return
         s.settings = s.settings.replace(correct_horizontal=on)
-        state = "normal" if on else "disabled"
-        self._yaw_scale.configure(state=state)
-        self._yaw_spin.configure(state=state)
-        # The detail dial only has an effect while a yaw is applied, so it is
-        # greyed out with the yaw it belongs to rather than left live and inert.
-        self._keep_px_scale.configure(state=state)
+        self._sync_yaw_controls()
         if on and self.session.mode == AUTO:
             self.session.refit()
             self._sync_from_session()
@@ -3122,11 +3151,22 @@ class ReviewPanel(tk.Frame):
         # The "active" toggle moved to the line-detector row (det) in Q4 --
         # what-the-estimator-sees belongs together.  The variable is made there.
         self.v_maskinv = tk.BooleanVar(value=self.settings.mask_invert)
-        ttk.Checkbutton(msk_act, text="mask marks what to KEEP",
-                        variable=self.v_maskinv, command=self._apply_mask
-                        ).pack(side="left")
+        # Two checkboxes about inverting sat side by side, one saying "marks
+        # what to KEEP" and one "invert mask", and neither said what it acted
+        # ON. They are different things: this one is the polarity of the FILE
+        # mask alone (masks.load: white means ignore unless inverted), the
+        # other flips the finished union of every source. Named for their
+        # scope now (user, 2026-09-21: "ui hat noch einige unlogik").
+        _mi = ttk.Checkbutton(msk_act, text="file mask: white = keep",
+                              variable=self.v_maskinv, command=self._apply_mask)
+        _mi.pack(side="left")
+        _attach_tooltip(
+            _mi,
+            "The polarity of a mask PNG loaded from disk.\n"
+            "Off: white marks what to ignore. On: white marks what to keep.\n"
+            "Affects the file mask only -- not the brush, SAM or BiRefNet.")
         self.v_invert = tk.BooleanVar(value=False)
-        _cb = ttk.Checkbutton(msk_act, text="invert mask",
+        _cb = ttk.Checkbutton(msk_act, text="invert ALL sources",
                               variable=self.v_invert,
                               command=self._on_invert_toggle)
         _attach_tooltip(_cb, "Swap it: what is red becomes the part that "
@@ -3815,8 +3855,15 @@ class ReviewPanel(tk.Frame):
         # Strike slanted moved here from Q3 (2026-09-15, user): a one-shot
         # action on the before image's line evidence, so it belongs with the
         # other tools that act on the original.
+        # The tooltip said "remove all lines that are neither vertical nor
+        # horizontal". `disable_lines_by_angle` works on the VERTICAL pool
+        # alone and strikes what leans more than 18 degrees out of plumb -- it
+        # never looks at a horizontal, so it can neither keep nor remove one.
         self._strike_btn = tool("strike", None, self._strike_slanted,
-                                "Remove all lines that are neither vertical nor horizontal")
+                                "Strike vertical candidates leaning more than\n"
+                                "18 deg out of plumb -- rafters and gable edges,\n"
+                                "which drag a facade fit off. Horizontals are\n"
+                                "left alone.")
         # ROI / Facade strip: dark-light-dark vertical stripes.  Click opens a
         # popup with the two % spinboxes; the rulers on the before pane are the
         # primary interaction.

@@ -69,7 +69,12 @@ def check_entry(text):
         bodies.append(squash(raw))
         bodies.append(squash(re.sub(r"(?m)^\s*#\s?", "", raw)))
     for q in QUOTED.findall(text):
-        sq = squash(q.replace('\\"', '"').replace("\\\\", "\\"))
+        # A quote of several source lines arrives with `\n` as TWO characters,
+        # because it was written inside one string. Squashing only handles real
+        # whitespace, so those quotes could never match and were failed -- the
+        # third time this checker rejected the report rather than the finding.
+        sq = squash(q.replace('\\"', '"').replace("\\n", " ")
+                     .replace("\\t", " ").replace("\\\\", "\\"))
         if len(sq) < 8:
             continue
         if any(sq in b for b in bodies):
