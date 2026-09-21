@@ -149,6 +149,13 @@ class ReviewSession:
         # per-source flags would need an answer for what inverting two of four
         # sources means, and there isn't one.
         self.invert_mask = False
+        # "mask active": whether the union acts at all, with every layer left
+        # standing.  A flag here rather than a GUI trick, because the old switch
+        # worked by calling `set_mask("off")` -- which only replaces the SOURCE,
+        # and `_detect` re-applies the paint at the end anyway.  Measured on the
+        # test asset with a brushed quarter: wash 25.0%, pitch +0.0369, 73 of 76
+        # lines, byte for byte identical with the box ticked and unticked.
+        self.mask_enabled = True
         self.refit()
 
     # -- detection -------------------------------------------------------
@@ -262,17 +269,27 @@ class ReviewSession:
         out[:, x0:x1] = False
         return out
 
+    # The registry above names the layers; these are the attributes they live
+    # in.  Spelled out rather than guessed from the name, because guessing is
+    # what broke it: `layer()` mapped only "sam" and fell through to
+    # `getattr(self, "source")`, which does not exist -- so `layer("source")`
+    # was None for every photograph ever opened and the automatic mask (file,
+    # BiRefNet, gdino) was in the union in name only.
+    LAYER_ATTR = {"source": "source_mask", "sam": "sam_mask", "paint": "paint"}
+
     def layer(self, name):
         """One ignore layer by name, or None when it is not in force."""
         if name == "strip":
             return self._strip_layer()
-        return getattr(self, "sam_mask" if name == "sam" else name, None)
+        return getattr(self, self.LAYER_ATTR[name], None)
 
     def ignore_mask(self, pool="vh"):
         """Union of every layer that speaks for ``pool``; None when empty.
 
         ``pool`` is "v", "h", or "vh" for everything -- what the red wash shows.
         """
+        if not getattr(self, "mask_enabled", True):
+            return None            # the switch means the union stops acting
         out = None
         for name, scope in self.LAYER_SCOPE:
             if not any(p in scope for p in pool):
@@ -844,7 +861,13 @@ class ReviewSession:
         if len(self._paint_struck) == len(self.enabled):
             self.enabled[self._paint_struck] = True     # release the old claim
         self._paint_struck = np.zeros(len(self.vert), dtype=bool)
-        if paint is None or not paint.any():
+        # The switch suppresses the union, so it must suppress the strikes too:
+        # the release above has already run, which is what "off without clearing
+        # the painted region" means -- the paint stays, it stops acting.
+        # No `_refresh_mask` on this path: the first `_detect` runs from
+        # `__init__` before `self.strip` exists, and the strip layer reads it.
+        # The callers that can reach here with a live session refresh their own.
+        if paint is None or not paint.any() or not getattr(self, "mask_enabled", True):
             return
         self._refresh_mask()
         seg = self.vert.seg
@@ -861,6 +884,28 @@ class ReviewSession:
             hit = inside(seg[:, 0], seg[:, 1]) & inside(seg[:, 2], seg[:, 3])
             self._paint_struck = hit
             self.enabled[hit] = False
+
+    def clear_mask(self):
+        """Throw the hand-drawn mask away and give back the lines it struck.
+
+        Here rather than in the window because the release rule lives here:
+        `_apply_paint` hands the old claim back before it makes a new one, and
+        the GUI's own version of this zeroed `_paint_struck` by hand without
+        that line.  Measured on the test asset: brush the top half, twenty of
+        seventy-six lines go, press Clear Mask -- and fifty-six stayed, with the
+        record of which twenty they were thrown away, so nothing could ever hand
+        them back.  The red went; the correction did not move.
+
+        The automatic source is NOT touched: the button says painted mask and
+        SAM selection, and the source has its own control beside it.
+        """
+        had = self.paint is not None or self.sam_mask is not None
+        self.paint = None
+        self.sam_mask = None
+        self._apply_paint()          # releases, then returns on `paint is None`
+        self._refresh_mask()
+        self.refit()
+        return had
 
     # -- SAM2 click-to-select --------------------------------------------
     def apply_sam_mask(self, ignore: np.ndarray):

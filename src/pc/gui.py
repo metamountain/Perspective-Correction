@@ -1453,10 +1453,9 @@ class ReviewPanel(tk.Frame):
         # The palette in the picture's top-left corner can only be finished here:
         # it toggles these variables, and they do not exist until this point.
         self._build_tool_palette()
-        _b = ttk.Button(btns2, text="Clear marks",
-                        command=self._clear_marks)
-        _b.pack(side="left", padx=(6, 0))
-        _attach_tooltip(_b, "Remove all manually placed control lines")
+        # "Clear marks" moved down to the masking panel, beside "Clear Mask"
+        # (user, 2026-09-21).  Both throw away hand work on the same picture,
+        # and they sat a panel apart.
         # A SWITCH, not a one-shot (user, 2026-09-21). It was a button, and a
         # button fires once: `auto_crop_if_cheap` ran when the photograph
         # opened and never again, so turning horizontal auto on or moving the
@@ -1590,15 +1589,14 @@ class ReviewPanel(tk.Frame):
     def _apply_mask(self):
         if not self.session:
             return                     # no photo loaded; nothing to mask yet
-        if getattr(self, "_mask_enabled", True) is False:
-            # Off has to mean off.  This used to return early, which blocked new
-            # applications but left an already-applied mask in force -- the box
-            # said inactive while the fit was still missing every line the mask
-            # had removed.  `set_mask("off")` re-detects without it, and the
-            # painted region is untouched by this: `paint` lives on the session
-            # and is re-applied by refit, which is what the tooltip promises.
+        if not self.session.mask_enabled:
+            # Off has to mean off, and `set_mask("off")` was not it: it replaces
+            # the SOURCE, and `_detect` re-applies the paint at the end of the
+            # same call, so a brushed mask went on acting.  Measured on the test
+            # asset -- wash 25.0%, pitch +0.0369, 73 of 76 lines, identical with
+            # the box ticked and unticked.  `mask_enabled` on the session
+            # suppresses the union itself, which is what the box claims.
             self.lbl_mask.configure(text="mask inactive")
-            self.session.set_mask("off")
             self._sync_from_session()
             return
         mode = self.v_maskmode.get()
@@ -1647,20 +1645,28 @@ class ReviewPanel(tk.Frame):
             self._redraw()
 
     def _clear_mask(self):
-        """Remove painted mask and SAM selection; reset mode to off."""
+        """Throw away the painted mask and the SAM selection, and refit.
+
+        The session owns the release rule (`ReviewSession.clear_mask`); this
+        half only clears the SAM *prompts*, which live up here in frame
+        fractions.  It used to zero `_paint_struck` itself and skip the release,
+        so the lines the brush had struck stayed struck with no record of which
+        they were -- the red vanished and the correction never moved.
+
+        The mask SOURCE is deliberately left alone: the button says painted mask
+        and SAM selection, and setting the combobox to "off" from here left the
+        combobox and `settings.mask_mode` saying different things.
+        """
         if not self.session:
             return
-        self.session.paint = None
-        self.session._paint_struck = np.zeros(len(self.session.vert), dtype=bool)
-        self.session.sam_mask = None
+        self.session.clear_mask()
         self._sam_box = None
         self._sam_box_px = None
         self._sam_points = []
         self._sam_selection = None
-        self.v_maskmode.set("off")
         self.lbl_mask.configure(text="")
         self.c_before.delete("sam_prompts")
-        self._redraw()
+        self._sync_from_session()
 
     def _pick_birefnet_model(self, apply_now=True):
         """Point at BiRefNet weights and say what they are.
@@ -1784,7 +1790,10 @@ class ReviewPanel(tk.Frame):
         """Toggle mask active/inactive without clearing the painted region."""
         if not self.session:
             return
-        self._mask_enabled = self.v_mask_active.get()
+        self.session.mask_enabled = bool(self.v_mask_active.get())
+        self.session._apply_paint()      # release or re-strike, one rule
+        self.session._refresh_mask()     # and the wash follows the same switch
+        self.session.refit()
         self._apply_mask()
 
     def _on_invert_toggle(self):
@@ -2518,6 +2527,10 @@ class ReviewPanel(tk.Frame):
         self._apply_strip()
 
     def _clear_marks(self):
+        # The button lives in the masking panel now, which is built once and
+        # exists before a photograph is open -- so the empty case is reachable.
+        if self.session is None:
+            return
         if self.session.clear_control_lines() or \
                 self.session.clear_control_lines(kind="h"):
             self._sync_from_session()
@@ -3177,12 +3190,26 @@ class ReviewPanel(tk.Frame):
         _b = ttk.Button(msk_src, text="BiRefNet model...", command=self._pick_birefnet_model)
         _b.pack(side="left", padx=(10, 0))
         _attach_tooltip(_b, "Select the BiRefNet segmentation model to use")
-        _b = ttk.Button(msk_act, text="Mask Apply", command=self._apply_mask)
-        _b.pack(side="left", padx=(10, 0))
-        _attach_tooltip(_b, "Re-apply the current mask to filter detected lines")
+        # "Mask Apply" stood here and was removed (user, 2026-09-21: "mask
+        # apply soll weg").  It was inert: every control in this panel already
+        # calls `_apply_mask` when it changes -- the source combobox on
+        # <<ComboboxSelected>>, both invert boxes, the active box, and both file
+        # pickers after they pick.  Pressing it twice in a row over a brushed
+        # mask left enabled at 56 of 76 both times.  The METHOD stays; it has
+        # five live callers.  What went is the button that repeated them.
+        #
+        # The two clears sit together (user, 2026-09-21: "clear marks und clear
+        # mask sollten zusammen im ui sein").  They are the same gesture on the
+        # same picture -- throw away what I drew -- and they were a panel apart.
+        _b = ttk.Button(msk_act, text="Clear marks", command=self._clear_marks)
+        _b.pack(side="left", padx=(14, 0))
+        _attach_tooltip(_b, "Remove all manually placed control lines,\n"
+                            "vertical and horizontal.")
         _b = ttk.Button(msk_act, text="Clear Mask", command=self._clear_mask)
-        _b.pack(side="left", padx=(10, 0))
-        _attach_tooltip(_b, "Remove all painted mask and SAM selection")
+        _b.pack(side="left", padx=(6, 0))
+        _attach_tooltip(_b, "Remove the painted mask and the SAM selection,\n"
+                            "and give back the lines they struck out.\n"
+                            "The mask source above is left as it is.")
         self.lbl_mask = ttk.Label(msk, text="", wraplength=760, justify="left")
         self.lbl_mask.grid(row=2, column=0, columnspan=4, sticky="w", pady=(4, 0))
         self.v_alpha = tk.DoubleVar(value=0.28)

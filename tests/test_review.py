@@ -220,6 +220,101 @@ def test_the_mask_reports_how_many_lines_it_removed():
         assert f"{len(dropped)} line(s) removed" in s.status_text()
 
 
+def test_clearing_the_mask_hands_back_every_line_it_struck():
+    """The one thing "Clear Mask" has to do.
+
+    The window used to do this itself and zeroed `_paint_struck` without the
+    release line `_apply_paint` runs first, so the struck lines stayed struck
+    and the record of which ones they were was thrown away -- nothing could
+    ever hand them back.  Measured on the test asset: brush the top half,
+    twenty of seventy-six lines go, press Clear Mask, and fifty-six stayed.
+    The red went and the correction did not move.
+    """
+    s, _ = _session()
+    before = s.enabled.copy()
+    roll_before = s.model.roll
+    h, w = s.gray.shape[:2]
+    s.paint = np.zeros((h, w), dtype=bool)
+    s.paint[: h // 2, :] = True
+    s._apply_paint()
+    s.refit()
+    struck = int((~s.enabled).sum())
+    assert struck, "the brush has to strike something for this to mean anything"
+
+    assert s.clear_mask() is True
+    assert s.paint is None and s.sam_mask is None
+    assert np.array_equal(s.enabled, before), \
+        f"{struck} struck lines have to come back, {int((~s.enabled).sum())} did not"
+    assert s.ignore_mask("vh") is None, "and no layer is left in force"
+    assert abs(s.model.roll - roll_before) < 1e-9, "the fit goes back with them"
+
+
+def test_the_active_switch_suppresses_the_mask_and_keeps_the_paint():
+    """"mask active" off means the union stops acting -- not that the SOURCE
+    is replaced.
+
+    It used to call `set_mask("off")`, which swaps the source and then re-runs
+    `_detect`, which re-applies the paint at the end of the same call.  A
+    brushed mask therefore went on striking lines with the box unticked:
+    measured wash 25.0%, pitch +0.0369, 73 of 76 lines, identical either way.
+    """
+    s, _ = _session()
+    before = s.enabled.copy()
+    h, w = s.gray.shape[:2]
+    s.paint = np.zeros((h, w), dtype=bool)
+    s.paint[: h // 2, :] = True
+    s._apply_paint()
+    s.refit()
+    assert int((~s.enabled).sum()), "the brush struck something"
+
+    s.mask_enabled = False
+    s._apply_paint()
+    s._refresh_mask()
+    s.refit()
+    assert s.ignore_mask("vh") is None, "off means the union does not act"
+    assert np.array_equal(s.enabled, before), "and nothing stays struck"
+    assert s.paint is not None and s.paint.any(), \
+        "without clearing the painted region -- that is the whole promise"
+
+    s.mask_enabled = True
+    s._apply_paint()
+    s._refresh_mask()
+    s.refit()
+    assert s.ignore_mask("vh") is not None, "on puts the same region back"
+    assert int((~s.enabled).sum()), "and strikes the same lines again"
+
+
+def test_the_automatic_source_stays_in_the_union_under_a_brush():
+    """`LAYER_SCOPE` names the layer "source"; the attribute is `source_mask`.
+
+    `layer()` mapped only "sam" and fell through to `getattr(self, "source")`,
+    which does not exist -- so the automatic mask was in the registry in name
+    only.  It still reached the fit, because `L.prepare` drops lines at
+    detection time, but the moment anything called `_refresh_mask` the shown
+    wash was rebuilt from a union with no source in it: one brush stroke and
+    the file mask's red vanished from the picture (measured 27.6% -> 12.7%).
+    """
+    import synth as _synth
+    sc = _synth.Scene(pitch_deg=9, roll_deg=-3, seed=34, occluders=3)
+    with tempfile.TemporaryDirectory() as d:
+        src = _with_painted_mask(sc, d)
+        s = ReviewSession(src, Settings())
+        s.set_mask("file", d)
+        assert s.source_mask is not None and s.source_mask.any()
+        assert s.layer("source") is s.source_mask, "the registry finds it"
+        only_source = s.ignore_mask("vh")
+        assert only_source is not None and only_source.any()
+
+        h, w = s.gray.shape[:2]
+        s.paint = np.zeros((h, w), dtype=bool)
+        s.paint[:, : w // 8] = True          # a stripe the source does not cover
+        s._apply_paint()
+        both = s.ignore_mask("vh")
+        assert both.sum() > only_source.sum(), \
+            "the source has to survive a brush stroke, not be replaced by it"
+        assert np.array_equal(both, only_source | s.paint)
+
+
 # --------------------------------------------------------------------------
 # Hugin-style vertical control lines
 # --------------------------------------------------------------------------
