@@ -247,6 +247,7 @@ def max_inscribed_rect(quad: np.ndarray, aspect: float | None):
     return np.array([cx - hw, cy - hh, cx + hw, cy + hh])
 
 
+
 def _in_strip(line_segs, strip, img_w):
     """The segments whose midpoint falls inside the facade strip.
 
@@ -295,17 +296,32 @@ def _whole_frame(H, quad, img_w, img_h, settings, area_ratio,
         warped_pts = G.apply_h(H, pts)
         qx0, qy0 = quad[:, 0].min(), quad[:, 1].min()
         qx1, qy1 = quad[:, 0].max(), quad[:, 1].max()
-        # 20 %, not 5 % (user, 2026-09-21): the whole facade plus room to
-        # breathe. A box drawn tight around the detected lines cuts the roof
-        # line and the ground course, which are exactly the edges that show
-        # whether the correction worked.
-        pad = 0.20 * max(qx1 - qx0, qy1 - qy0)
+        # A TOLERANCE, not a margin: it decides which warped points count as
+        # part of the facade, and widening it only lets more far-flung points
+        # in. Raising this to 0.20 was my misreading of "facade + 20 %"; the
+        # margin is applied to the finished box below, where it belongs.
+        pad = 0.05 * max(qx1 - qx0, qy1 - qy0)
         inside = ((warped_pts[:, 0] >= qx0 - pad) & (warped_pts[:, 0] <= qx1 + pad) &
                   (warped_pts[:, 1] >= qy0 - pad) & (warped_pts[:, 1] <= qy1 + pad))
         if inside.sum() >= 4:
             wp = warped_pts[inside]
             fx0, fy0 = wp[:, 0].min(), wp[:, 1].min()
             fx1, fy1 = wp[:, 0].max(), wp[:, 1].max()
+
+            # A magnification floor was tried here and removed: measured on
+            # Platte_1 the facade runs 0.05 to 0.39 source pixels per output
+            # pixel end to end, so no threshold separates "smear" from
+            # "subject" -- the whole warp is interpolation and a cut-off that
+            # bit at all would have eaten the building.
+            # The whole facade plus 20 %, and only where there is picture to
+            # take it from (user: "wenn vorhanden"). The quad is the outline of
+            # the real picture, so the margin stops at it; the facade box
+            # itself is never shrunk by the clip.
+            mx, my = 0.20 * (fx1 - fx0), 0.20 * (fy1 - fy0)
+            gx0, gy0 = max(fx0 - mx, quad[:, 0].min()), max(fy0 - my, quad[:, 1].min())
+            gx1, gy1 = min(fx1 + mx, quad[:, 0].max()), min(fy1 + my, quad[:, 1].max())
+            fx0, fy0 = min(fx0, gx0), min(fy0, gy0)
+            fx1, fy1 = max(fx1, gx1), max(fy1, gy1)
             fw, fh = fx1 - fx0, fy1 - fy0
 
             # No downscale: the warped facade keeps its full pixel count.
