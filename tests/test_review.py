@@ -1092,3 +1092,41 @@ def test_a_hand_placed_facade_strip_stands_the_review_gate_down_but_not_the_batc
                      strip=(int(w * 0.20), int(w * 0.80))).status == P.SKIPPED, (
         "pipeline.process is the unattended run -- a strip must NOT buy a "
         "low-confidence correction there, because nobody sees the result")
+
+
+def test_a_canvas_much_bigger_than_the_source_says_so_before_the_save():
+    """Squaring a facade that runs away from the camera stretches its far end,
+    and the canvas grows to hold it -- the left facade of Platte_1 goes from
+    1320x742 to about 7000x2170, fifteen times the area. That is the correct
+    answer to a 40-degree yaw and it is not one anybody should meet for the
+    first time as a file on disk.
+
+    Both halves asserted together: a strong correction warns, an upright frame
+    does not. A warning that is always on is a warning nobody reads."""
+    import os
+
+    from pc.review import ReviewSession
+
+    here = os.path.dirname(os.path.abspath(__file__))
+    img = os.path.join(here, "assets", "Horizontal", "Platte_1.jpg")
+    if not os.path.isfile(img):
+        import pytest
+        pytest.skip("Platte_1.jpg not available")
+
+    st = Settings(correct_horizontal=True)
+    s = ReviewSession(img, st)
+    assert s.set_strip(0.02 * 1320, 0.46 * 1320, display_scale=1.0)
+
+    size = s.planned_size()
+    assert size is not None, "a real correction must have a planned size"
+    ratio = (size[0] * size[1]) / float(s.w * s.h)
+    assert ratio > 1.5, f"this asset is the case the note exists for ({ratio:.1f}x)"
+    note = s.size_note()
+    assert "saved size" in note and f"{size[0]}x{size[1]}" in note, note
+    assert note in s.status_text(), "the note has to reach the status line"
+
+    # An upright frame: nothing to warn about.
+    s.manual_roll = s.manual_pitch = 0.0
+    s.manual_yaw = 0.0
+    s.mode = "manual"
+    assert s.size_note() == "", "an unwarped frame must not warn"

@@ -1216,6 +1216,47 @@ class ReviewSession:
     def render_pair(self, max_edge=900):
         return self.render_before(max_edge), self.render_after(max_edge)
 
+    def planned_size(self):
+        """``(w, h)`` the saved file would have, or ``None`` if nothing warps.
+
+        Geometry only -- `warp.plan` works on the quad, never on the pixels --
+        so it is cheap enough to ask on every status refresh.
+        """
+        roll, pitch, f, _clamped = self.current_angles()
+        yaw = self.current_yaw()
+        if not f or (abs(roll) < 1e-9 and abs(pitch) < 1e-9 and abs(yaw) < 1e-9):
+            return None
+        H = W.build(self.w, self.h, f, roll, pitch, yaw,
+                    max_area=self.settings.max_area_ratio)
+        segs = [x.seg for x in (self.vert, self.horiz) if len(x)]
+        planned = W.plan(self.w, self.h, H, self.settings,
+                         line_segs=np.concatenate(segs, axis=0) if segs else None,
+                         yaw=yaw)
+        if planned is None:
+            return None
+        return int(planned[1]), int(planned[2])
+
+    def size_note(self):
+        """A warning when the saved frame would be much larger than the source.
+
+        Squaring a facade that runs away from the camera stretches its far end,
+        and the canvas grows to hold it: the left facade of Platte_1.jpg goes
+        from 1320x742 to 7022x2167 -- **fifteen times the area** -- and nothing
+        said so until the file was on disk. The threshold is 1.5x, from the
+        09-17 review's F3.
+
+        Not phrased as a refusal. The big canvas is the correct answer to a
+        40-degree yaw; it is just an answer somebody should see coming.
+        """
+        size = self.planned_size()
+        if not size:
+            return ""
+        ratio = (size[0] * size[1]) / float(max(self.w * self.h, 1))
+        if ratio <= 1.5:
+            return ""
+        return (f"saved size {size[0]}x{size[1]} -- {ratio:.1f}x the original "
+                f"area; crop, or lower 'detail (px kept)'")
+
     def status_text(self):
         roll, pitch, f, clamped = self.current_angles()
         f35 = M.focal_35mm_from_px(f, self.w, self.h) if f else 0.0
@@ -1282,6 +1323,9 @@ class ReviewSession:
             parts.append(f"region: horizontal evidence restricted to the "
                          f"selected strip ({n_in} of {len(self.horiz)} lines) -- "
                          f"the yaw is taken from that facade only")
+        note = self.size_note()
+        if note:
+            parts.append(note)
         if clamped:
             parts.append("correction hit the configured limit")
         # P4: warn when two horizontal VPs have meaningful support (two-facade)
