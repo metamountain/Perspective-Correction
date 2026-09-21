@@ -1205,7 +1205,7 @@ class ReviewSession:
         rather than an exception, because a preview is not the place to fail.
         """
         from . import inpaint as FILL
-        if getattr(self.settings, "fill", "none") not in FILL.LIVE_MODES:
+        if not FILL.previews_live(self.settings):
             return out
         try:
             hole = W.filled_region(H_total, sw, sh, ow, oh)
@@ -1304,9 +1304,14 @@ class ReviewSession:
         fill_mode = getattr(self.settings, "fill", "none")
         if fill_mode not in ("", "none"):
             from . import inpaint as FILL
-            parts.append(f"fill: {fill_mode}" if fill_mode in FILL.LIVE_MODES
-                         else f"fill: {fill_mode} -- too slow to preview, "
-                              f"runs on save")
+            if FILL.previews_live(self.settings):
+                slow = fill_mode not in FILL.LIVE_MODES
+                parts.append(f"fill: {fill_mode}"
+                             + (" -- live preview on, each redraw waits for it"
+                                if slow else ""))
+            else:
+                parts.append(f"fill: {fill_mode} -- runs on save; tick 'live "
+                             f"fill preview' to see it here")
         # The preview no longer cuts the crop out -- it shades it -- so the
         # crop has to be stated.  A rectangle that only exists as a dimmed area
         # on screen is exactly the kind of thing that gets forgotten before the

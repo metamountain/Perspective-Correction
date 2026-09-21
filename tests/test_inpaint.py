@@ -603,3 +603,28 @@ def test_every_shipped_workflow_exists_and_is_postable():
     # how two ComfyUI *editor* exports came to sit in there.
     on_disk = {f for f in os.listdir(FILL.WORKFLOWS) if f.endswith(".json")}
     assert on_disk == {n for n, _ in FILL.SHIPPED}, on_disk
+
+
+def test_the_live_switch_lets_a_slow_fill_into_the_preview_and_none_never_runs():
+    """`live_fill_preview` is the user overruling LIVE_MODES for the one
+    backend they are looking at.
+
+    The three cases that matter, asserted together because the switch is only
+    meaningful against the default it overrides: telea previews with or without
+    it (it costs 50 ms), lama previews only with it (1191 ms at preview size --
+    fine once, unusable per slider tick), and "none" never previews whatever
+    the switch says, because there is nothing to run.
+    """
+    from pc import inpaint as FILL
+    from pc.config import Settings
+
+    def gate(mode, live):
+        s = Settings()
+        s.fill = mode
+        s.live_fill_preview = live
+        return FILL.previews_live(s)
+
+    assert gate("telea", False) and gate("telea", True),         "telea is in LIVE_MODES; the switch must not be able to turn it off"
+    assert not gate("lama", False), "lama must stay out of the preview by default"
+    assert gate("lama", True), "the switch has to let lama in -- that is its job"
+    assert not gate("none", False) and not gate("none", True),         "there is nothing to preview when the fill is off"
