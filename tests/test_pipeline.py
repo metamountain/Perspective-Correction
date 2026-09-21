@@ -311,7 +311,7 @@ def test_a_pure_yaw_breach_warns_and_applies_not_refuses():
 
 
 # --------------------------------------------------------------------------
-# roi_x -- the vertical strip that restricts the *horizontal* evidence
+# strip -- the vertical strip that restricts the *horizontal* evidence
 #
 # A corner view shows two facades with two different horizontal vanishing
 # points, and the estimator takes whichever has more support -- not necessarily
@@ -327,19 +327,19 @@ def test_a_pure_yaw_breach_warns_and_applies_not_refuses():
 _ROI = {}
 
 
-def _roi_scene():
+def _strip_scene():
     """A corner view, built once -- rendering it is the expensive half."""
     if "scene" not in _ROI:
         _ROI["scene"] = synth.Scene(pitch_deg=7, roll_deg=-2, seed=21, corner=True)
     return _ROI["scene"]
 
 
-def _roi_padded():
+def _strip_padded():
     """The same facade with blank margins left and right.
 
     Needed for the "strip over a blank region" case: on a plain rendered scene
     there is no gap between horizontal midpoints wide enough to clear the 5 %
-    floor set_roi_x imposes, so the frame has to be widened rather than the
+    floor set_strip imposes, so the frame has to be widened rather than the
     API reached past."""
     if "padded" not in _ROI:
         sc = synth.Scene(pitch_deg=7, roll_deg=-2, seed=21)
@@ -349,7 +349,7 @@ def _roi_padded():
     return _ROI["padded"]
 
 
-def _roi_analyse(band=None, max_edge=None, padded=False):
+def _strip_analyse(band=None, max_edge=None, padded=False):
     """analyse() on the cached scene, memoized on the FULL argument tuple.
 
     The full tuple matters: a cache keyed on the image alone would hand the
@@ -359,12 +359,12 @@ def _roi_analyse(band=None, max_edge=None, padded=False):
     key = (band, max_edge, padded)
     if key not in _ROI:
         s = Settings() if max_edge is None else Settings().replace(detect_max_edge=max_edge)
-        img = _roi_padded() if padded else _roi_scene().img
-        _ROI[key] = analyse(img, s, roi_x=band)
+        img = _strip_padded() if padded else _strip_scene().img
+        _ROI[key] = analyse(img, s, strip=band)
     return _ROI[key]
 
 
-def _roi_summary(res):
+def _strip_summary(res):
     """(horizontals kept, roll, pitch, f) -- everything a strip could move."""
     m, horiz = res[0], res[2]
     return (len(horiz), round(math.degrees(m.roll), 9), round(math.degrees(m.pitch), 9),
@@ -416,7 +416,7 @@ def test_use_scheme_partitions_lines_and_is_off_by_default():
     invent a line to fit a hypothesis.  A corner view is the case it exists for:
     two facades whose horizontals the plain orientation split would otherwise mix."""
     from pc.pipeline import analyse
-    img = _roi_scene().img
+    img = _strip_scene().img
     base_m, v0, h0, _, _ = analyse(img, Settings())
     assert "scheme" not in (base_m.detect_info or {}), \
         "use_scheme defaults off, so nothing may be partitioned or reported"
@@ -438,10 +438,10 @@ def test_a_strip_thins_both_pools_not_just_the_horizontals():
     while asserting the exact opposite two lines down. A test whose name
     contradicts its own body teaches the wrong contract to everyone who greps
     for it and never runs it."""
-    _, v0, h0, _, _ = _roi_analyse()
+    _, v0, h0, _, _ = _strip_analyse()
     # A quarter of the width, as a FRACTION: line midpoints are spread across
     # the whole frame, so this must drop lines from both pools.
-    _, v1, h1, _, _ = _roi_analyse(band=(0.0, 0.25))
+    _, v1, h1, _, _ = _strip_analyse(band=(0.0, 0.25))
     assert len(h1) < len(h0), f"a strip over a quarter of the frame must drop horizontals ({len(h1)} vs {len(h0)})"
     assert len(v1) < len(v0), f"a strip must also drop verticals (corner-view fix) ({len(v1)} vs {len(v0)})"
 
@@ -452,9 +452,9 @@ def test_a_strip_barely_moves_the_roll_and_does_move_the_pitch():
     Since the corner-view fix, verticals are also restricted, and pitch damping
     at |yaw|>20° further reduces the applied pitch.  The assertion is that
     roll stays stable (< 0.5°) and pitch stays in the same ballpark (< 3°)."""
-    base = _roi_analyse()[0]
+    base = _strip_analyse()[0]
     for band in ((0.0, 480.0), (720.0, 1200.0), (300.0, 720.0)):
-        m = _roi_analyse(band=band)[0]
+        m = _strip_analyse(band=band)[0]
         d_roll = abs(math.degrees(m.roll - base.roll))
         d_pitch = abs(math.degrees(m.pitch - base.pitch))
         assert d_roll < 0.5, f"{band}: roll moved {d_roll:.3f} deg"
@@ -467,9 +467,9 @@ def test_a_strip_over_a_blank_region_falls_back_to_the_whole_frame():
     succeed on whatever the empty case degenerates to, and a batch tool cannot
     afford a correction derived from nothing. Asserted as exact equality with
     the un-restricted run: the fallback is total, not partial."""
-    base = _roi_analyse(padded=True)
-    blank = _roi_analyse(band=(1420.0, 1590.0), padded=True)
-    assert _roi_summary(blank) == _roi_summary(base), "the empty strip must fall back"
+    base = _strip_analyse(padded=True)
+    blank = _strip_analyse(band=(1420.0, 1590.0), padded=True)
+    assert _strip_summary(blank) == _strip_summary(base), "the empty strip must fall back"
     assert not math.isnan(blank[0].roll) and not math.isnan(blank[0].pitch)
 
 
@@ -484,7 +484,7 @@ def test_every_degenerate_strip_falls_back_except_a_reversed_one():
     Reversed bounds are the one input that is not a fallback: in_xband sorts, so
     (900, 300) filters exactly like (300, 900). Defensible -- but see the
     round-trip test, because the reversed pair is still what gets reported."""
-    base = _roi_summary(_roi_analyse())
+    base = _strip_summary(_strip_analyse())
     # These select no midpoint at all, so the fallback is what fires.  "Zero
     # width" belongs here only because no horizontal midpoint in this scene sits
     # exactly on 600.0: the bounds are inclusive, so a zero-width band laid over
@@ -493,17 +493,17 @@ def test_every_degenerate_strip_falls_back_except_a_reversed_one():
                        ("wholly right of the frame", (5000.0, 6000.0)),
                        ("wholly negative", (-900.0, -100.0)),
                        ("one-pixel sliver", (0.0, 1.0))):
-        assert _roi_summary(_roi_analyse(band=band)) == base,             f"{name} selects nothing, so the fit must be unchanged"
+        assert _strip_summary(_strip_analyse(band=band)) == base,             f"{name} selects nothing, so the fit must be unchanged"
     # This one is the opposite route to the same place: it selects *everything*,
     # so the subset runs and is simply the whole set.  Asserting it as a
     # "fallback" would be asserting the wrong mechanism.
-    assert _roi_summary(_roi_analyse(band=(-5000.0, 5000.0))) == base,         "a band wider than the world keeps every line, so the fit must be unchanged"
+    assert _strip_summary(_strip_analyse(band=(-5000.0, 5000.0))) == base,         "a band wider than the world keeps every line, so the fit must be unchanged"
     # Reversed bounds sort inside in_xband, so (900, 300) filters exactly like
     # (300, 900).  With vertical filtering + pitch damping the fit for this
     # band happens to be bit-identical to the un-restricted one, so we only
     # assert the sorting property, not a difference from base.
-    assert _roi_summary(_roi_analyse(band=(900.0, 300.0))) == \
-        _roi_summary(_roi_analyse(band=(300.0, 900.0))), "reversed bounds sort"
+    assert _strip_summary(_strip_analyse(band=(900.0, 300.0))) == \
+        _strip_summary(_strip_analyse(band=(300.0, 900.0))), "reversed bounds sort"
 
 
 def test_the_strip_means_the_same_thing_at_two_analysis_resolutions():
@@ -523,8 +523,8 @@ def test_the_strip_means_the_same_thing_at_two_analysis_resolutions():
 
     lo, hi = 0.30, 0.70
     for max_edge in (600, 1100):
-        _, _v, h, _sc, _d = _roi_analyse(band=(lo, hi), max_edge=max_edge)
-        full = _roi_analyse(max_edge=max_edge)
+        _, _v, h, _sc, _d = _strip_analyse(band=(lo, hi), max_edge=max_edge)
+        full = _strip_analyse(max_edge=max_edge)
         assert len(h) < len(full[2]),             f"max_edge={max_edge}: the band must restrict ({len(h)} vs {len(full[2])})"
         # Midpoints of what survived, as fractions of that analysis width.
         mid = (h.seg[:, 0] + h.seg[:, 2]) / 2.0
@@ -548,13 +548,13 @@ def test_the_strip_round_trips_onto_the_result_and_into_the_log_line():
         src = _write(synth.Scene(pitch_deg=8, roll_deg=-2, seed=21, corner=True),
                      os.path.join(d, "a.jpg"))
         r = process(src, os.path.join(d, "o.jpg"), Settings(), dry_run=True,
-                    roi_x=(120, 900))
+                    strip=(120, 900))
         assert r.status == OK, r.line()
-        assert isinstance(r.roi_x, tuple) and r.roi_x == (120.0, 900.0)
-        assert all(isinstance(v, float) for v in r.roi_x), "stored as floats, not ints"
-        assert "roi=x[120-900]" in r.line(), r.line()
+        assert isinstance(r.strip, tuple) and r.strip == (120.0, 900.0)
+        assert all(isinstance(v, float) for v in r.strip), "stored as floats, not ints"
+        assert "strip=12000-90000%" in r.line(), r.line()
         plain = process(src, os.path.join(d, "o.jpg"), Settings(), dry_run=True)
-        assert plain.roi_x is None and "roi=" not in plain.line()
+        assert plain.strip is None and "strip=" not in plain.line()
     finally:
         shutil.rmtree(d, ignore_errors=True)
 
@@ -562,55 +562,59 @@ def test_the_strip_round_trips_onto_the_result_and_into_the_log_line():
 def test_the_log_line_reports_a_strip_that_was_silently_ignored():
     """DOCUMENTS CURRENT BEHAVIOUR, WHICH LOOKS WRONG. Reported, not fixed.
 
-    process() files roi_x onto the Result from its own argument, before analyse
+    process() files strip onto the Result from its own argument, before analyse
     runs, and analyse returns nothing about whether the strip held any
     horizontals. So a strip that fell back to the full frame is still reported
-    as though it had been used: the log line below claims roi=x[5000-6000] for a
+    as though it had been used: the log line below still reports the strip for a
     run that used every horizontal in the picture, and a reversed pair is
-    printed as the impossible range roi=x[900-300].
+    printed as the impossible range it was given.
 
     This is the shape of failure this project has already fixed once, for masks
     -- "a mask covering 0.0 % of the frame was indistinguishable from a working
     one" -- and the answer there was a diagnostic, not a hidden number. The
-    roi_x seam has the same hole and no diagnostic. When one is added, this is
+    strip seam has the same hole and no diagnostic. When one is added, this is
     the test to change."""
     d = _tmp()
     try:
         src = _write(synth.Scene(pitch_deg=8, roll_deg=-2, seed=21, corner=True),
                      os.path.join(d, "a.jpg"))
         ignored = process(src, os.path.join(d, "o.jpg"), Settings(), dry_run=True,
-                          roi_x=(5000.0, 6000.0))
+                          strip=(5000.0, 6000.0))
         plain = process(src, os.path.join(d, "o.jpg"), Settings(), dry_run=True)
         assert abs(ignored.pitch_deg - plain.pitch_deg) < 1e-9, \
             "the strip really was ignored -- the fit is the un-restricted one"
-        assert ignored.roi_x == (5000.0, 6000.0), "...and it is reported anyway"
-        assert "roi=x[5000-6000]" in ignored.line(), ignored.line()
+        assert ignored.strip == (5000.0, 6000.0), "...and it is reported anyway"
+        assert "strip=500000-600000%" in ignored.line(), ignored.line()
         backwards = process(src, os.path.join(d, "o.jpg"), Settings(), dry_run=True,
-                            roi_x=(900.0, 300.0))
-        assert "roi=x[900-300]" in backwards.line(), backwards.line()
+                            strip=(900.0, 300.0))
+        assert "strip=90000-30000%" in backwards.line(), backwards.line()
     finally:
         shutil.rmtree(d, ignore_errors=True)
 
 
-def test_set_roi_x_converts_from_display_pixels_and_clear_says_whether_it_cleared():
-    """The band is dragged on a preview a few hundred pixels wide, while the
-    evidence lives in the analysis image, so the conversion is the whole method.
-    And clear_roi_x returns whether there was anything to clear: a control that
+def test_set_strip_converts_from_display_pixels_and_clear_says_whether_it_cleared():
+    """The band is dragged on a preview a few hundred pixels wide, and is
+    stored as FRACTIONS of the image width, so the conversion is the whole
+    method. Fractions because that is the one unit a strip is kept in -- it
+    used to be analysis pixels here and fractions on the Result, two fields of
+    one name holding two different things.
+    And clear_strip returns whether there was anything to clear: a control that
     reports success on a no-op is how a window comes to disagree with the state
     it is showing."""
     from pc.review import ReviewSession
-    s = ReviewSession("mem.jpg", Settings(), image=_roi_scene().img)
-    assert s.roi_x is None and s.scale == 1.0
-    assert s.set_roi_x(100, 700, 1.0) is True
-    assert s.roi_x == (100.0, 700.0)
-    assert s.clear_roi_x() is True and s.roi_x is None
-    assert s.clear_roi_x() is False, "nothing to clear must report nothing cleared"
+    s = ReviewSession("mem.jpg", Settings(), image=_strip_scene().img)
+    assert s.strip is None and s.scale == 1.0
+    gw = s.gray.shape[1]
+    assert s.set_strip(100, 700, 1.0) is True
+    assert s.strip == (100.0 / gw, 700.0 / gw)
+    assert s.clear_strip() is True and s.strip is None
+    assert s.clear_strip() is False, "nothing to clear must report nothing cleared"
     # a preview at half size: the same drag means twice as many analysis pixels
-    assert s.set_roi_x(100, 400, 0.5) is True
-    assert s.roi_x == (200.0, 800.0), s.roi_x
+    assert s.set_strip(100, 400, 0.5) is True
+    assert s.strip == (200.0 / gw, 800.0 / gw), s.strip
 
 
-def test_set_roi_x_refuses_a_strip_too_narrow_to_have_been_meant():
+def test_set_strip_refuses_a_strip_too_narrow_to_have_been_meant():
     """A mis-click is a drag of a few pixels, and a few pixels of facade is not
     a choice of facade -- it is a selection that would fall back to the full
     frame anyway, while the status line claimed a restriction. Refusing at 5 %
@@ -618,23 +622,23 @@ def test_set_roi_x_refuses_a_strip_too_narrow_to_have_been_meant():
     it was rather than clearing it, which is the right answer for a stray click
     during a review."""
     from pc.review import ReviewSession
-    s = ReviewSession("mem.jpg", Settings(), image=_roi_scene().img)
+    s = ReviewSession("mem.jpg", Settings(), image=_strip_scene().img)
     for name, args in (("narrow", (100, 130)), ("zero width", (600, 600)),
                        ("wholly right of the frame", (5000, 6000)),
                        ("wholly negative", (-900, -100))):
-        assert s.set_roi_x(args[0], args[1], 1.0) is False, name
-        assert s.roi_x is None, f"{name} must not store a band"
+        assert s.set_strip(args[0], args[1], 1.0) is False, name
+        assert s.strip is None, f"{name} must not store a band"
     # NOTE the mechanism, because it is accidental rather than designed: the two
     # out-of-frame bands are refused by the *width* floor, not by a bounds
     # check.  Clamping leaves ax0 > ax1, the width comes out negative, and a
     # negative number is below 5 % of anything.  Right answer, by luck; anyone
     # reordering or widening that guard has to keep it.
     # one that merely overlaps the frame edge is clamped to it, not refused
-    assert s.set_roi_x(-500, 600, 1.0) is True
-    assert s.roi_x == (0.0, 600.0), s.roi_x
+    assert s.set_strip(-500, 600, 1.0) is True
+    assert s.strip == (0.0, 600.0 / s.gray.shape[1]), s.strip
     # and a backwards drag is sorted, like in_xband
-    assert s.set_roi_x(900, 300, 1.0) is True
-    assert s.roi_x == (300.0, 900.0), s.roi_x
+    assert s.set_strip(900, 300, 1.0) is True
+    assert s.strip == (300.0 / s.gray.shape[1], 900.0 / s.gray.shape[1]), s.strip
 
 
 def test_the_status_line_says_zero_lines_while_the_fit_quietly_used_them_all():
@@ -649,9 +653,9 @@ def test_the_status_line_says_zero_lines_while_the_fit_quietly_used_them_all():
     worse than saying nothing, and it is the user-facing half of the same
     missing diagnostic as the log line above."""
     from pc.review import ReviewSession
-    s = ReviewSession("mem.jpg", Settings(), image=_roi_padded())
+    s = ReviewSession("mem.jpg", Settings(), image=_strip_padded())
     before = (s.model.roll, s.model.pitch)
-    assert s.set_roi_x(1420, 1590, 1.0) is True, "the blank margin clears the 5 % floor"
+    assert s.set_strip(1420, 1590, 1.0) is True, "the blank margin clears the 5 % floor"
     assert (s.model.roll, s.model.pitch) == before, \
         "the fit fell back to the full frame, exactly as refit intends"
     region = [ln for ln in s.status_text().splitlines() if ln.startswith("region:")]

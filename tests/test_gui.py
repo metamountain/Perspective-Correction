@@ -269,49 +269,52 @@ def test_loading_a_photograph_reports_no_failure():
         app.destroy()
 
 
-def test_roi_x_control_restricts_horizontal_evidence_and_defaults_off():
-    """The find column's ROI x strip is the GUI half of ``--roi-x``: off by
+def test_strip_control_restricts_horizontal_evidence_and_defaults_off():
+    """The find column's facade strip is the GUI half of ``--strip``: off by
     default (the frame stays unfiltered), and a valid strip sets
-    ``session.roi_x`` in analysis pixels so refit can restrict horizontals to
+    ``session.strip`` as fractions of the width so refit can restrict horizontals to
     one facade on a corner view.  An inverted or empty strip is refused."""
     app = _app()
     try:
         _loaded(app, 1280, 800)
         r = app.review
         s = r.session
-        assert s is not None and s.roi_x is None, "no strip by default"
-        # Facade strip removed from Q4 (2026-09-17): v_roi no longer exists.
-        if getattr(r, "v_roi", None) is None:
+        assert s is not None and s.strip is None, "no strip by default"
+        # Facade strip removed from Q4 (2026-09-17): v_strip no longer exists.
+        if getattr(r, "v_strip", None) is None:
             raise pytest.skip("facade strip removed from Q4")
-        assert not r.v_roi.get(), "ROI x must start off"
+        assert not r.v_strip.get(), "facade strip must start off"
 
         aw = s.gray.shape[1]
-        r.v_roi.set(True)
-        r.v_roi_x0.set(10.0)
-        r.v_roi_x1.set(50.0)
-        r._apply_roi()
-        assert s.roi_x is not None, "a valid strip must set roi_x"
-        x0, x1 = s.roi_x
-        assert abs(x0 - 0.10 * aw) < 1e-6 and abs(x1 - 0.50 * aw) < 1e-6, (x0, x1, aw)
+        r.v_strip.set(True)
+        r.v_strip_x0.set(10.0)
+        r.v_strip_x1.set(50.0)
+        r._apply_strip()
+        assert s.strip is not None, "a valid strip must set strip"
+        x0, x1 = s.strip
+        # Fractions, not pixels: one unit for the strip from the spinbox to the
+        # Result to the saved record, so no stored number needs its frame
+        # guessed. The spinboxes are percentages, so 10 and 50 arrive as such.
+        assert abs(x0 - 0.10) < 1e-6 and abs(x1 - 0.50) < 1e-6, (x0, x1)
 
         # x0 >= x1 is not a strip -- the frame stays unfiltered.
-        r.v_roi_x0.set(80.0)
-        r.v_roi_x1.set(20.0)
-        r._apply_roi()
-        assert s.roi_x is None, "x0 >= x1 must not restrict anything"
+        r.v_strip_x0.set(80.0)
+        r.v_strip_x1.set(20.0)
+        r._apply_strip()
+        assert s.strip is None, "x0 >= x1 must not restrict anything"
 
         # Unchecking always clears it, whatever the spinboxes hold.
-        r.v_roi_x0.set(10.0); r.v_roi_x1.set(50.0)
-        r._apply_roi()
-        assert s.roi_x is not None
-        r.v_roi.set(False)
-        r._apply_roi()
-        assert s.roi_x is None, "unchecking must clear the strip"
+        r.v_strip_x0.set(10.0); r.v_strip_x1.set(50.0)
+        r._apply_strip()
+        assert s.strip is not None
+        r.v_strip.set(False)
+        r._apply_strip()
+        assert s.strip is None, "unchecking must clear the strip"
     finally:
         app.destroy()
 
 
-def test_enabling_an_roi_strip_turns_on_horizontal_correction():
+def test_enabling_a_strip_turns_on_horizontal_correction():
     """The strip only shapes the yaw, and the yaw is gated on correct_horizontal
     (off by default) -- so a strip that left the flag off would show rulers and
     change nothing.  Enabling it therefore turns horizontal correction on with it;
@@ -322,30 +325,30 @@ def test_enabling_an_roi_strip_turns_on_horizontal_correction():
         r = app.review
         s = r.session
         assert not s.settings.correct_horizontal, "horizontal is off by default"
-        if getattr(r, "v_roi", None) is None:
+        if getattr(r, "v_strip", None) is None:
             raise pytest.skip("facade strip removed from Q4")
 
-        r.v_roi.set(True)
-        r.v_roi_x0.set(10.0)
-        r.v_roi_x1.set(50.0)
-        r._apply_roi()
-        assert s.roi_x is not None, "the strip is set"
+        r.v_strip.set(True)
+        r.v_strip_x0.set(10.0)
+        r.v_strip_x1.set(50.0)
+        r._apply_strip()
+        assert s.strip is not None, "the strip is set"
         assert s.settings.correct_horizontal, \
             "a valid strip must turn on the horizontal correction it shapes"
         assert r.v_correct_horizontal.get(), "the checkbox shows the flag that turned on"
 
         # Clearing the strip leaves a deliberate yaw choice alone.
-        r.v_roi.set(False)
-        r._apply_roi()
-        assert s.roi_x is None, "unchecking clears the strip"
+        r.v_strip.set(False)
+        r._apply_strip()
+        assert s.strip is None, "unchecking clears the strip"
         assert s.settings.correct_horizontal, \
             "clearing the strip must not force horizontal correction back off"
     finally:
         app.destroy()
 
 
-def test_roi_x_draws_two_draggable_rulers_defaulting_to_20_and_80():
-    """ROI x is set by hand, not blind percentages: ticking it on draws two
+def test_strip_draws_two_draggable_rulers_defaulting_to_20_and_80():
+    """facade strip is set by hand, not blind percentages: ticking it on draws two
     draggable vertical rulers on the before pane -- default 20/80 %, not the
     useless full-frame 0/100 -- and greys out the sides that get ignored.  A drag
     moves a ruler, clamped to the frame edge and to its neighbour so the strip can
@@ -354,18 +357,18 @@ def test_roi_x_draws_two_draggable_rulers_defaulting_to_20_and_80():
     try:
         _loaded(app, 1280, 800)
         r = app.review
-        if getattr(r, "v_roi", None) is None:
+        if getattr(r, "v_strip", None) is None:
             raise pytest.skip("facade strip removed from Q4")
         # The spinboxes default to a real strip, not the whole frame.
-        assert r.v_roi_x0.get() == 20.0 and r.v_roi_x1.get() == 80.0, \
+        assert r.v_strip_x0.get() == 20.0 and r.v_strip_x1.get() == 80.0, \
             "the default must restrict something, not cover the whole frame"
 
         # Off: no rulers on the canvas.
-        assert r.c_before.find_withtag("roi_ruler") == (), "no rulers while off"
+        assert r.c_before.find_withtag("strip_ruler") == (), "no rulers while off"
 
-        r.v_roi.set(True)
-        r._apply_roi()
-        items = r.c_before.find_withtag("roi_ruler")
+        r.v_strip.set(True)
+        r._apply_strip()
+        items = r.c_before.find_withtag("strip_ruler")
         rects = [i for i in items if r.c_before.type(i) == "rectangle"]
         assert len(rects) == 2, "both excluded sides must be washed"
 
@@ -382,24 +385,24 @@ def test_roi_x_draws_two_draggable_rulers_defaulting_to_20_and_80():
         # A drag moves the grabbed ruler and clamps it: pulling the left one far
         # right stops at a 2 % gap from the right ruler, not a crossing; far left
         # clamps to the frame edge.
-        r._on_roi_drag_start(0)
+        r._on_strip_drag_start(0)
 
         class _E:                       # a minimal motion event
             pass
         e = _E()
         e.x = ox + iw                   # far right: must clamp, not cross
-        r._on_roi_drag_move(e)
-        assert r.v_roi_x0.get() <= r.v_roi_x1.get() - 2.0, \
+        r._on_strip_drag_move(e)
+        assert r.v_strip_x0.get() <= r.v_strip_x1.get() - 2.0, \
             "the left ruler must not cross the right one"
         e.x = ox                        # far left: clamps to the frame edge
-        r._on_roi_drag_move(e)
-        assert r.v_roi_x0.get() == 0.0, "a ruler clamps to the frame edge"
-        r._on_roi_drag_release()
+        r._on_strip_drag_move(e)
+        assert r.v_strip_x0.get() == 0.0, "a ruler clamps to the frame edge"
+        r._on_strip_drag_release()
 
         # Off again: the rulers disappear with the toggle.
-        r.v_roi.set(False)
-        r._apply_roi()
-        assert r.c_before.find_withtag("roi_ruler") == (), \
+        r.v_strip.set(False)
+        r._apply_strip()
+        assert r.c_before.find_withtag("strip_ruler") == (), \
             "unchecking must remove the rulers"
     finally:
         app.destroy()
@@ -1295,25 +1298,25 @@ def test_the_facade_strip_still_works_after_a_second_photograph_loads():
     try:
         _loaded(app, 1280, 800)
         r = app.review
-        if getattr(r, "v_roi", None) is None:
+        if getattr(r, "v_strip", None) is None:
             raise pytest.skip("facade strip not present")
-        first = (r.v_roi, r.v_roi_x0, r.v_roi_x1)
+        first = (r.v_strip, r.v_strip_x0, r.v_strip_x1)
         r.load(r.session.path, r.settings, r.dest_path)   # a second photograph
         _settle(app)
-        assert (r.v_roi, r.v_roi_x0, r.v_roi_x1) == first, (
+        assert (r.v_strip, r.v_strip_x0, r.v_strip_x1) == first, (
             "the strip's variables were rebuilt by the second load -- the "
             "checkbox now sets one nobody reads")
-        # The ROI is now an icon + popup, not a checkbox. Drive it via the var.
-        r.v_roi.set(True)
-        r._apply_roi()
+        # The facade strip is now an icon + popup, not a checkbox. Drive it via the var.
+        r.v_strip.set(True)
+        r._apply_strip()
         _settle(app)
-        assert r.v_roi.get(), "setting the var must turn the strip on"
-        assert r.session.roi_x is not None, (
+        assert r.v_strip.get(), "setting the var must turn the strip on"
+        assert r.session.strip is not None, (
             "the strip is on, so the session must be restricted")
-        r.v_roi.set(False)
-        r._apply_roi()
+        r.v_strip.set(False)
+        r._apply_strip()
         _settle(app)
-        assert r.session.roi_x is None, "turning it off must lift the restriction"
+        assert r.session.strip is None, "turning it off must lift the restriction"
     finally:
         app.destroy()
 

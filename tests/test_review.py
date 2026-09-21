@@ -441,7 +441,7 @@ def test_a_hand_drawn_crop_is_kept_in_fractions_not_pixels():
     big = s.render_after(700)
     a = small.shape[1] / small.shape[0]
     b = big.shape[1] / big.shape[0]
-    # The facade-ROI crop in _whole_frame can shift the aspect ratio slightly
+    # The facade-strip crop in _whole_frame can shift the aspect ratio slightly
     # depending on preview size (the line-segment bounding box is computed at
     # full resolution, then scaled).  Allow a wider tolerance.
     assert abs(a - b) < 0.25, f"the crop changed shape with the preview size: {a} vs {b}"
@@ -991,7 +991,7 @@ def test_every_mask_source_is_one_kind_of_layer_and_they_add():
     assert s.ignore_mask("vh") is None, "nothing painted, nothing masked"
 
     # The strip speaks for horizontals only.
-    s.roi_x = (0.20 * s.w, 0.80 * s.w)
+    s.strip = (0.20, 0.80)          # fractions of the width, the one unit
     assert s.ignore_mask("v") is None, (
         "the facade strip must not touch the verticals -- they are what the "
         "correction is built on, and restricting them only costs confidence")
@@ -1004,7 +1004,7 @@ def test_every_mask_source_is_one_kind_of_layer_and_they_add():
     s.sam_mask = np.zeros((gh, gw), dtype=bool)
     s.sam_mask[-gh // 10:, :] = True
     union = s.ignore_mask("vh")
-    for name in ("paint", "sam", "roi"):
+    for name in ("paint", "sam", "strip"):
         layer = s.layer(name)
         assert not (layer & ~union).any(), (
             f"the {name} layer is not inside the union -- sources must add, "
@@ -1013,7 +1013,7 @@ def test_every_mask_source_is_one_kind_of_layer_and_they_add():
     # And removing them leaves nothing behind.
     s.paint = None
     s.sam_mask = None
-    s.roi_x = None
+    s.strip = None
     assert s.ignore_mask("vh") is None, "clearing every layer must clear the mask"
 
 
@@ -1072,7 +1072,7 @@ def test_a_hand_placed_facade_strip_stands_the_review_gate_down_but_not_the_batc
     assert before is not None and "conf" in before, (
         f"the gate is meant to be engaged at min_confidence=0.95 (got {before!r})")
 
-    assert s.set_roi_x(int(s.w * 0.20), int(s.w * 0.80), display_scale=1.0)
+    assert s.set_strip(int(s.w * 0.20), int(s.w * 0.80), display_scale=1.0)
     assert s.model is not None and s.model.confidence < st.min_confidence, (
         "premise: the strip must not have lifted this over the gate, or the "
         "next assertion proves nothing")
@@ -1080,7 +1080,7 @@ def test_a_hand_placed_facade_strip_stands_the_review_gate_down_but_not_the_batc
         "a strip the user drew by hand is a decision, and the review gate must "
         "stand down for it the way it already does for control lines")
 
-    s.clear_roi_x()
+    s.clear_strip()
     assert s.would_skip() is not None, (
         "clearing the strip removes the decision, so the gate comes back")
 
@@ -1089,6 +1089,6 @@ def test_a_hand_placed_facade_strip_stands_the_review_gate_down_but_not_the_batc
     batch = Settings(correct_horizontal=True)
     assert P.process(src, "", batch, dry_run=True).status == P.SKIPPED
     assert P.process(src, "", batch, dry_run=True,
-                     roi_x=(int(w * 0.20), int(w * 0.80))).status == P.SKIPPED, (
+                     strip=(int(w * 0.20), int(w * 0.80))).status == P.SKIPPED, (
         "pipeline.process is the unattended run -- a strip must NOT buy a "
         "low-confidence correction there, because nobody sees the result")

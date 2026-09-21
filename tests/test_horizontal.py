@@ -243,8 +243,8 @@ def test_a_corrected_facade_actually_comes_out_square():
     st = _settings(min_horizontal_support=0.15)
     dst = os.path.join(os.environ.get("TEMP", "."), "_test_facade_square.jpg")
     # The left facade runs from the frame edge to the building corner at
-    # x ~ 660 of 1320. roi_x is in full-resolution pixels.
-    res = P.process(img, dst, st, roi_x=(0.02 * 1320, 0.46 * 1320))
+    # x ~ 660 of 1320. strip is in full-resolution pixels.
+    res = P.process(img, dst, st, strip=(0.02 * 1320, 0.46 * 1320))
     assert res.status == "OK", f"refused the correction: {res.reason}"
     assert os.path.isfile(dst), "no output written"
 
