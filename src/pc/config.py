@@ -184,6 +184,12 @@ class Settings:
     # why that is defensible here and why "none" is one flag away.
     fill: str = "telea"                 # none | telea | lama | comfyui
     fill_max_edge: int = 2048           # generate at this size, paste back full res
+    # Let the SLOW fills into the preview too. Off by default and deliberately
+    # a switch rather than a mode list: measured on Platte_1 at preview size,
+    # telea costs 50 ms and lama 1191 ms. A second per redraw is unusable while
+    # a slider moves and perfectly reasonable once, to see what you picked --
+    # which is a decision only the person at the window can make.
+    live_fill_preview: bool = False
     fill_max_share: float = 0.40        # refuse to invent more of the frame than this
     fill_device: str = ""               # torch device for lama; "" = its default
     comfy_url: str = "http://127.0.0.1:8188"

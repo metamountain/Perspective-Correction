@@ -1354,6 +1354,19 @@ class ReviewPanel(tk.Frame):
                             state="readonly", values=["none", "telea", "lama", "comfyui"])
         fbox.grid(row=0, column=1, sticky="w", padx=(6, 6))
         fbox.bind("<<ComboboxSelected>>", lambda e: self._apply_fill())
+        # Made once, like the other preferences: which backend you want to
+        # watch is a habit, not a property of this photograph.
+        if getattr(self, "v_livefill", None) is None:
+            self.v_livefill = tk.BooleanVar(value=self._cfg().live_fill_preview)
+        _lf = ttk.Checkbutton(fill_row, text="live", variable=self.v_livefill,
+                              command=self._apply_fill)
+        _lf.grid(row=0, column=2, sticky="w")
+        _attach_tooltip(
+            _lf,
+            "Run the fill in the preview as well as on save.\n"
+            "telea is instant; lama costs about a second per redraw\n"
+            "(measured at preview size), which is fine once and\n"
+            "unusable while a slider moves. Off by default.")
         # The pad colour picker, its swatch and the "edge" button left this row
         # (2026-09-14, user). `pad` only shows through when the fill is off, and
         # the fill defaults to `telea`, so three controls were competing for
@@ -1868,7 +1881,10 @@ class ReviewPanel(tk.Frame):
     def _apply_fill(self):
         """The session owns the settings the save reads; the window only shows
         them.  Writing ``self.settings`` here made the whole control a no-op."""
-        self.session.settings = self.session.settings.replace(fill=self.v_fill.get())
+        self.session.settings = self.session.settings.replace(
+            fill=self.v_fill.get(),
+            live_fill_preview=bool(getattr(self, "v_livefill", None)
+                                   and self.v_livefill.get()))
         if self.v_fill.get() == "comfyui":
             # Choosing it is asking for it -- the same rule the batch panel
             # follows. A mode that silently needs six settings nobody was shown

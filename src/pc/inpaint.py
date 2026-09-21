@@ -65,6 +65,19 @@ MODES = ("none", "telea", "lama", "comfyui")
 # see it happen; a user dragging a slider should not wait for a model.
 LIVE_MODES = ("telea",)
 
+
+def previews_live(settings) -> bool:
+    """Whether the current fill may run on a redraw.
+
+    The mode list is the default answer; ``live_fill_preview`` is the user
+    overruling it for the one backend they are actually looking at. Kept here,
+    beside the list it overrides, so the two cannot drift apart.
+    """
+    mode = getattr(settings, "fill", "none")
+    if mode in ("", "none"):
+        return False
+    return mode in LIVE_MODES or bool(getattr(settings, "live_fill_preview", False))
+
 # And how large it may generate while doing so.  ``--fill-max-edge`` (2048) is
 # the setting for the file being saved; on a 900 px preview it costs 211 ms per
 # redraw, which is four frames a second while a slider is moving.  At 480 px the
