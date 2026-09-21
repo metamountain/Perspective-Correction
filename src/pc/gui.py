@@ -957,6 +957,7 @@ class ReviewPanel(tk.Frame):
         self.v_overwrite.set(bool(overwrite))
         self._refresh_file_names()
         self.v_alpha.set(self.session.mask_alpha)
+        self._show_mask_state()
         # Small correction, small band: take the crop rather than leave a band
         # that would otherwise need a generative model to fill.  Visible, shaded
         # and undoable with "Reset crop" -- see `auto_crop_if_cheap`.
@@ -1785,6 +1786,35 @@ class ReviewPanel(tk.Frame):
             if self.session is not None:
                 self.session.mask_color = (b, g, r)  # BGR for OpenCV
         self._schedule_redraw()
+
+    def _show_mask_state(self):
+        """Make the mask panel show what the NEW session actually has.
+
+        One rule, one direction: on load the boxes follow the session.  They
+        were set once when the panel was built and never touched again, while
+        every photograph brings a fresh `ReviewSession` with `mask_enabled`
+        True and `invert_mask` False.  Measured over two photographs: untick
+        "mask active", tick "invert ALL sources", load the next image --
+        boxes said active=False invert=True, session said True and False.
+        Both boxes lied about the picture in front of them.
+
+        Resetting rather than carrying the choices over is the honest reading:
+        the paint and the SAM selection belong to one photograph and are gone
+        at this point anyway, so the switches over them start fresh too.  The
+        SOURCE is different -- it lives in Settings, which the batch panel owns
+        -- so the combobox is shown from there rather than reset.
+        """
+        s = self.session
+        if s is None:
+            return
+        if getattr(self, "v_mask_active", None) is not None:
+            self.v_mask_active.set(bool(s.mask_enabled))
+        if getattr(self, "v_invert", None) is not None:
+            self.v_invert.set(bool(s.invert_mask))
+        if getattr(self, "v_maskmode", None) is not None:
+            self.v_maskmode.set(s.settings.mask_mode)
+        if getattr(self, "v_maskinv", None) is not None:
+            self.v_maskinv.set(bool(s.settings.mask_invert))
 
     def _on_mask_active_toggle(self):
         """Toggle mask active/inactive without clearing the painted region."""
