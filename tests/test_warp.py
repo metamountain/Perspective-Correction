@@ -192,10 +192,30 @@ def test_the_keep_pixels_dial_trades_canvas_for_detail_and_one_loses_none():
             seen.append((W.min_magnification(plan[0], w, h, plan[1], plan[2]),
                          plan[1] * plan[2]))
 
-        assert seen[0][0] >= 0.99, (
+        # keep_pixels=1 keeps every pixel UP TO the canvas ceiling. The two
+        # promises collide at a strong yaw -- holding the near edge at 1:1
+        # through 50 deg would ask for roughly 35x the source area, which on a
+        # 24 MP original is a failed allocation rather than a large file -- and
+        # max_area_ratio is the one that wins, because a plan that cannot be
+        # executed is not a plan. So: either the sampling is kept, or the
+        # ceiling is the reason it was not.
+        capped = seen[0][1] >= 0.99 * Settings.max_area_ratio * w * h
+        assert seen[0][0] >= 0.99 or capped, (
             f"yaw {yaw_deg} deg at keep_pixels=1.0: the near edge is sampled "
-            f"at {seen[0][0]:.3f}. keep_pixels=1 means keep every pixel, so "
-            f"that is photographed detail being discarded")
+            f"at {seen[0][0]:.3f} and the canvas is {seen[0][1] / (w * h):.1f}x "
+            f"the source, under the {Settings.max_area_ratio}x ceiling. Detail "
+            f"was discarded with room to spare")
+
+        if capped:
+            # Where the ceiling binds, IT decides the canvas and the dial stops
+            # having an effect -- all three settings land on the same plan.
+            # That is the price of the ceiling and it is better said than
+            # discovered: a dial that silently stops working is worse than one
+            # documented to saturate.
+            assert max(a for a, _ in seen) - min(a for a, _ in seen) < 1e-3, (
+                f"yaw {yaw_deg} deg: the canvas is at the ceiling, so the dial "
+                f"cannot move the sampling: {[round(a, 3) for a, _ in seen]}")
+            continue
 
         if seen[2][0] < 0.99:          # this yaw actually exercises the trade
             bit = True

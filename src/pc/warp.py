@@ -247,6 +247,21 @@ def max_inscribed_rect(quad: np.ndarray, aspect: float | None):
     return np.array([cx - hw, cy - hh, cx + hw, cy + hh])
 
 
+def _in_strip(line_segs, strip, img_w):
+    """The segments whose midpoint falls inside the facade strip.
+
+    Returns *line_segs* untouched when there is no strip, or when too few
+    survive to describe a facade -- four is the floor `_whole_frame` already
+    works to, and a box around three lines is not a facade.
+    """
+    if strip is None or line_segs is None or len(line_segs) < 4:
+        return line_segs
+    x0, x1 = float(strip[0]) * img_w, float(strip[1]) * img_w
+    mid = (line_segs[:, 0] + line_segs[:, 2]) / 2.0
+    keep = (mid >= min(x0, x1)) & (mid <= max(x0, x1))
+    return line_segs[keep] if int(keep.sum()) >= 4 else line_segs
+
+
 def _whole_frame(H, quad, img_w, img_h, settings, area_ratio,
                  line_segs: np.ndarray | None = None):
     """The full warped quad on a canvas big enough to hold it.
@@ -280,7 +295,11 @@ def _whole_frame(H, quad, img_w, img_h, settings, area_ratio,
         warped_pts = G.apply_h(H, pts)
         qx0, qy0 = quad[:, 0].min(), quad[:, 1].min()
         qx1, qy1 = quad[:, 0].max(), quad[:, 1].max()
-        pad = 0.05 * max(qx1 - qx0, qy1 - qy0)
+        # 20 %, not 5 % (user, 2026-09-21): the whole facade plus room to
+        # breathe. A box drawn tight around the detected lines cuts the roof
+        # line and the ground course, which are exactly the edges that show
+        # whether the correction worked.
+        pad = 0.20 * max(qx1 - qx0, qy1 - qy0)
         inside = ((warped_pts[:, 0] >= qx0 - pad) & (warped_pts[:, 0] <= qx1 + pad) &
                   (warped_pts[:, 1] >= qy0 - pad) & (warped_pts[:, 1] <= qy1 + pad))
         if inside.sum() >= 4:
@@ -429,8 +448,41 @@ def _keep_near_edge(H_total, out_w, out_h, img_w, img_h, settings, yaw):
     return S @ H_total, max(1, int(round(out_w * s))), max(1, int(round(out_h * s)))
 
 
+def _cap_canvas(result, img_w: int, img_h: int, settings):
+    """Scale a finished plan down when the canvas runs past ``max_area_ratio``.
+
+    config.py describes that setting as "crop canvas to this x source area",
+    and until now it bounded only the near-edge upscale -- a different
+    quantity. The canvas itself had no ceiling: squaring the left facade of
+    Platte_1.jpg (1320x742) produced 6985x2170, FIFTEEN times the source area.
+    The same warp on a 24 MP original asks for roughly 360 megapixels, which is
+    not a large file but a failed allocation.
+
+    Scaled, not cropped. The framing was decided above by code that went to
+    some trouble to keep the facade; throwing part of it away here would undo
+    that. A photograph that needs more canvas than the bound allows gets the
+    whole picture at lower magnification, which is the answer a person would
+    give.
+    """
+    if result is None:
+        return None
+    cap = float(getattr(settings, "max_area_ratio", 0.0) or 0.0)
+    if cap <= 0:
+        return result
+    H_total, ow, oh = result[0], int(result[1]), int(result[2])
+    limit = cap * float(img_w) * float(img_h)
+    area = float(ow) * float(oh)
+    if area <= limit or area <= 0:
+        return result
+    s = math.sqrt(limit / area)
+    S = np.array([[s, 0.0, 0.0], [0.0, s, 0.0], [0.0, 0.0, 1.0]], dtype=float)
+    return ((S @ H_total, max(1, int(round(ow * s))), max(1, int(round(oh * s))))
+            + tuple(result[3:]))
+
+
 def plan(img_w: int, img_h: int, H: np.ndarray, settings,
-         line_segs: np.ndarray | None = None, yaw: float = 0.0):
+         line_segs: np.ndarray | None = None, yaw: float = 0.0,
+         strip=None):
     """Work out the output canvas.
 
     Returns ``(H_total, out_w, out_h, coverage, area_ratio)`` where ``coverage``
@@ -451,13 +503,21 @@ def plan(img_w: int, img_h: int, H: np.ndarray, settings,
     instead crops to the bounding box of the detected lines plus a margin.
     This targets the architectural subject and discards the pad zones that a
     large yaw warp opens up (grass, sky, inpainted fill).
+
+    ``strip`` is the facade strip as fractions of the width. On a corner view
+    it is the only thing that knows WHICH facade was meant: the strip restricts
+    the horizontals, but the verticals still span both faces, so a bounding box
+    over all the lines frames the whole building and the crop keeps the face
+    nobody chose. Given a strip, the box is taken over the lines inside it.
     """
     quad = warped_quad(H, img_w, img_h)
     area_ratio = quad_area(quad) / float(img_w * img_h)
 
     if settings.crop == "none":
-        wf = _whole_frame(H, quad, img_w, img_h, settings, area_ratio, line_segs)
-        return _wf_keep_near_edge(wf, img_w, img_h, settings, yaw)
+        wf = _whole_frame(H, quad, img_w, img_h, settings, area_ratio,
+                          _in_strip(line_segs, strip, img_w))
+        return _cap_canvas(_wf_keep_near_edge(wf, img_w, img_h, settings, yaw),
+                           img_w, img_h, settings)
 
     centre = G.apply_h(H, np.array([[img_w / 2.0, img_h / 2.0]]))[0]
     aspect = (img_w / img_h) if settings.crop in ("aspect", "auto") else None
@@ -474,8 +534,10 @@ def plan(img_w: int, img_h: int, H: np.ndarray, settings,
         # fill band cover what the warp invented.  A reframe that scales the
         # facade down to fit a source-sized canvas would shrink the image,
         # which is forbidden: the output must never be smaller than the input.
-        wf = _whole_frame(H, quad, img_w, img_h, settings, area_ratio, line_segs)
-        return _wf_keep_near_edge(wf, img_w, img_h, settings, yaw)
+        wf = _whole_frame(H, quad, img_w, img_h, settings, area_ratio,
+                          _in_strip(line_segs, strip, img_w))
+        return _cap_canvas(_wf_keep_near_edge(wf, img_w, img_h, settings, yaw),
+                           img_w, img_h, settings)
 
     if settings.keep_size:
         s = min(img_w / rw, img_h / rh)
@@ -486,7 +548,8 @@ def plan(img_w: int, img_h: int, H: np.ndarray, settings,
     S = np.array([[s, 0, -rect[0] * s], [0, s, -rect[1] * s], [0, 0, 1]], dtype=float)
     Ht, ow, oh = _keep_near_edge(S @ H, max(ow, 1), max(oh, 1), img_w, img_h,
                                  settings, yaw)
-    return Ht, ow, oh, float(coverage), area_ratio
+    return _cap_canvas((Ht, ow, oh, float(coverage), area_ratio),
+                       img_w, img_h, settings)
 
 
 def pad_colour(spec: str):
