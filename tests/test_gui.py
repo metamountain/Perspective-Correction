@@ -173,6 +173,54 @@ def test_the_mask_brush_still_works_after_a_second_photograph_loads():
         app.destroy()
 
 
+def test_the_mask_boxes_tell_the_truth_about_the_second_photograph():
+    """Every photograph brings a fresh session; the boxes were built once.
+
+    Measured over two loads before this was fixed: untick "mask active", tick
+    "invert ALL sources", load the next image -- the boxes still read
+    active=False invert=True while the new session said mask_enabled=True and
+    invert_mask=False.  Both switches lied about the picture in front of them,
+    which is the same stale-variable trap as `v_stroke` above, one level up:
+    there the variable was rebuilt and the widget was not, here the widget
+    keeps a variable that no longer describes anything.
+    """
+    app = _app()
+    try:
+        _loaded(app, 1600, 1000)
+        r = app.review
+        if r.session is None:
+            raise SkipTest("no session")                          # noqa: F821
+        second = os.path.join(HERE, "assets", "1070912stkzg.jpg")
+        if not os.path.exists(second):
+            raise SkipTest("second asset missing")                # noqa: F821
+        r.v_mask_active.set(False)
+        r._on_mask_active_toggle()
+        r.v_invert.set(True)
+        r._on_invert_toggle()
+        _settle(app, 5)
+        assert r.session.mask_enabled is False and r.session.invert_mask is True
+
+        # `ReviewPanel` is built once on the App and every photograph after the
+        # first arrives through `load` -- which is why `_add` of the same file
+        # would not reach this: it returns early when the session is already on
+        # that path.  This is the batch's own call, from `_open_review_for`.
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            r.load(second, r.settings, os.path.join(d, "out.jpg"))
+            _settle(app)
+        s = r.session
+        if s is None:
+            raise SkipTest("no session")                          # noqa: F821
+        assert r.v_mask_active.get() == bool(s.mask_enabled), \
+            "the active box has to describe the photograph now in front of it"
+        assert r.v_invert.get() == bool(s.invert_mask), \
+            "and so does the invert box"
+        assert r.v_maskmode.get() == s.settings.mask_mode, \
+            "and the source combobox"
+    finally:
+        app.destroy()
+
+
 def test_the_mask_brush_paints_the_ignore_region_and_erases_it_again():
     """The mask brush, off-screen: a drag paints a live preview, and on release
     it adds what was swept to the ignore mask -- the manual answer to a segmenter
