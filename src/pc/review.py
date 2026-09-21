@@ -1472,8 +1472,19 @@ class ReviewSession:
         IO.save(dst_path, out, self.src, self.settings)
         return dst_path
 
-    def save(self, dst_path: str):
-        """Write the corrected image using whatever is currently in force."""
+    def save(self, dst_path: str, on_stage=None):
+        """Write the corrected image using whatever is currently in force.
+
+        ``on_stage(name, canvas_mpx)`` is called before each slow step. This
+        work runs on the caller's thread -- the window is frozen while it does
+        -- so the callback exists to let a GUI paint one line saying what is
+        happening before it stops answering. Measured on a 12 MPx photograph:
+        the warp is 30 ms and the fill 3 to 13 seconds, so "which stage" is the
+        whole of the information.
+        """
+        def _stage(name, mpx=0.0):
+            if on_stage is not None:
+                on_stage(name, mpx)
         roll, pitch, f, _ = self.current_angles()
         yaw = self.current_yaw()
         if (abs(roll) < 1e-12 and abs(pitch) < 1e-12 and abs(yaw) < 1e-12
@@ -1505,12 +1516,16 @@ class ReviewSession:
             IO.copy_through(self.path, dst_path)
             return dst_path
         H_total, ow, oh, _, _ = planned
+        mpx = ow * oh / 1e6
+        _stage("warping", mpx)
         out = W.apply(self.bgr, H_total, ow, oh, save_settings)
         if getattr(save_settings, "fill", "none") not in ("", "none"):
             from . import inpaint as FILL
             hole = W.filled_region(H_total, self.w, self.h, ow, oh)
+            _stage("fill:" + str(save_settings.fill), mpx)
             out, _note = FILL.fill(out, hole, save_settings)
         out = self._apply_crop(out)
+        _stage("writing", mpx)
         os.makedirs(os.path.dirname(dst_path) or ".", exist_ok=True)
         IO.save(dst_path, out, self.src, self.settings)
         return dst_path

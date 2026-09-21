@@ -256,3 +256,36 @@ def test_the_near_edge_floor_leaves_a_pure_roll_and_pitch_warp_alone():
     assert a is not None and c is not None
     assert (a[1], a[2]) == (c[1], c[2]), (
         "the near-edge floor changed a zero-yaw plan; it is scoped to yaw")
+
+
+def test_the_time_estimate_is_honest_about_what_it_does_not_know():
+    """`progress` exists so the window can say how long, and a progress
+    indicator that lies teaches people to ignore progress indicators. Four
+    properties, all of them about honesty rather than accuracy:
+
+      * an unknown stage returns 0.0, not a guess -- the caller then shows a
+        working indicator with no time on it;
+      * under two seconds there is no message at all, because a box that
+        appears and vanishes reads as a fault;
+      * the estimate grows with the canvas, or it is not an estimate;
+      * telea costs MORE than lama at full size. That is the reverse of the
+        preview and it is measured: telea works on the real hole and grows
+        with it, lama generates at fill_max_edge and pastes back. The
+        constants must keep that ordering or they have drifted from the
+        measurement they came from.
+    """
+    from pc import progress as PR
+
+    assert PR.estimate("no-such-stage", 100.0) == 0.0
+    assert PR.humanise(PR.estimate("no-such-stage", 100.0)) == ""
+    assert PR.humanise(1.4) == "", "a sub-two-second job must say nothing"
+    assert PR.humanise(11.0) == "about 11 s"
+    assert PR.humanise(95.0) == "about 1:35 min"
+
+    small = PR.estimate("fill:telea", 9.0)
+    large = PR.estimate("fill:telea", 108.0)
+    assert large > small, "the estimate must grow with the canvas"
+
+    assert PR.estimate("fill:telea", 108.0) > PR.estimate("fill:lama", 108.0), (
+        "measured 13.1 s against 4.5 s on a 108 MPx canvas -- telea is the "
+        "slow one at full size, however cheap it is in the preview")
