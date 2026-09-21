@@ -22,7 +22,7 @@ class Result:
     __slots__ = ("status", "reason", "src", "dst", "roll_deg", "pitch_deg",
                  "yaw_deg", "confidence", "focal_35mm", "focal_source",
                  "coverage", "n_lines", "n_inliers", "seconds", "detector",
-                 "clamped", "out_size", "diagnostics", "fill", "roi_x")
+                 "clamped", "out_size", "diagnostics", "fill", "strip")
 
     def __init__(self, **kw):
         for k in self.__slots__:
@@ -42,13 +42,13 @@ class Result:
             mask = (f" mask={d.get('mask_share', 0.0) * 100:.0f}%"
                     f"(-{d.get('evidence_lost', 0.0) * 100:.0f}% lines)")
         yaw = (f" yaw={self.yaw_deg:+.2f}deg" if abs(self.yaw_deg or 0.0) > 1e-9 else "")
-        roi = (f" roi=x[{self.roi_x[0]:.0f}-{self.roi_x[1]:.0f}]"
-               if self.roi_x else "")
+        strip = (f" strip={self.strip[0] * 100:.0f}-{self.strip[1] * 100:.0f}%"
+                 if self.strip else "")
         return (f"OK      {name}  roll={self.roll_deg:+.2f}deg pitch={self.pitch_deg:+.2f}deg{yaw} "
                 f"conf={self.confidence:.2f} f={self.focal_35mm:.0f}mm({self.focal_source}) "
                 f"keep={self.coverage * 100:.0f}%{mask} {self.out_size[0]}x{self.out_size[1]} "
                 f"{self.seconds:.2f}s" + (f"  [{self.fill}]" if self.fill else "")
-                + ("  [clamped]" if self.clamped else "") + roi)
+                + ("  [clamped]" if self.clamped else "") + strip)
 
     def as_dict(self):
         return {k: getattr(self, k) for k in self.__slots__ if k != "diagnostics"}
@@ -62,12 +62,12 @@ def _match_scale(bgr, gray):
     return cv2.resize(bgr, (gray.shape[1], gray.shape[0]), interpolation=cv2.INTER_AREA)
 
 
-def analyse(bgr, settings, exif_focal_px=None, image_path="", roi_x=None):
+def analyse(bgr, settings, exif_focal_px=None, image_path="", strip=None):
     """Detection + model for an already loaded image.  Returns
     ``(model, vert, horiz, scale, detector)`` with the focal length in
     full-resolution pixels.
 
-    ``roi_x`` is a vertical strip ``(x0, x1)`` as FRACTIONS OF THE WIDTH, 0..1,
+    ``strip`` is a vertical strip ``(x0, x1)`` as FRACTIONS OF THE WIDTH, 0..1,
     restricting the evidence to one facade on a corner view.  Fractions because
     they are the only unit that still means the same thing at another analysis
     resolution -- and the only one a caller outside this function can state,
@@ -95,14 +95,14 @@ def analyse(bgr, settings, exif_focal_px=None, image_path="", roi_x=None):
                 relevant, settings.vertical_window_deg,
                 settings.horizontal_window_deg, settings.angular_softness)
         info["scheme"] = sc.summary()
-    if roi_x is not None:
+    if strip is not None:
         # Fractions in, analysis pixels out: the ONE place the conversion
         # happens, because this is the one place that knows the analysis width.
         # The bounds used to be taken as analysis pixels directly while both the
-        # docstring and --roi-x promised full-resolution ones, so a strip given
+        # docstring and --strip promised full-resolution ones, so a strip given
         # from outside was wrong by the scale factor on every downsampled photo.
         gwid = gray.shape[1]
-        rx0, rx1 = float(roi_x[0]) * gwid, float(roi_x[1]) * gwid
+        rx0, rx1 = float(strip[0]) * gwid, float(strip[1]) * gwid
         keep_h = L.in_xband(horiz.seg, rx0, rx1)
         if keep_h.any():
             horiz = horiz.subset(keep_h)
@@ -118,7 +118,7 @@ def analyse(bgr, settings, exif_focal_px=None, image_path="", roi_x=None):
     # A strip means the caller has pointed at one facade, which is exactly the
     # precondition the two-vanishing-point rotation needs.
     m = M.estimate(vert, horiz, gw, gh, settings, exif_small,
-                   single_facade=roi_x is not None)
+                   single_facade=strip is not None)
     if m.f:
         m.f = m.f / scale                       # back to full resolution pixels
     m.detect_info = info
@@ -178,13 +178,13 @@ def measure_horizontals(bgr, settings, focal_px):
 
 
 def process(src_path, dst_path, settings, debug_dir=None, dry_run=False,
-            roi_x=None):
+            strip=None):
     t0 = time.time()
     base = dict(src=src_path, dst=dst_path, roll_deg=0.0, pitch_deg=0.0,
                 yaw_deg=0.0, confidence=0.0, focal_35mm=0.0, focal_source="none",
                 coverage=1.0, n_lines=0, n_inliers=0, detector="-", clamped=False,
                 out_size=(0, 0), diagnostics={},
-                roi_x=tuple(float(v) for v in roi_x) if roi_x else None)
+                strip=tuple(float(v) for v in strip) if strip else None)
     try:
         src = io.load(src_path)
     except Exception as exc:
@@ -197,7 +197,7 @@ def process(src_path, dst_path, settings, debug_dir=None, dry_run=False,
     try:
         exif_f = io.focal_px_from_exif(src, w, h) if settings.use_exif_focal else None
         m, vert, horiz, scale, detector = analyse(bgr, settings, exif_f, src_path,
-                                                  roi_x=base["roi_x"])
+                                                  strip=base["strip"])
         info = m.detect_info
     except Exception as exc:
         return Result(status=ERROR, reason=f"analysis failed ({exc})",

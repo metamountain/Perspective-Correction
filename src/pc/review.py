@@ -133,7 +133,7 @@ class ReviewSession:
         # The strip says "the yaw comes from the horizontals in here"; the
         # verticals stay global on purpose, because both facades share the
         # world-vertical VP and restricting them would only burn evidence.
-        self.roi_x = None
+        self.strip = None
         # Every automatic source lands here and STAYS here, separate from the
         # union, so that switching source replaces only the source and the hand
         # work underneath it survives.  Merging them into one array was what made
@@ -237,9 +237,9 @@ class ReviewSession:
     # multiplicative and counts verticals.  It would refuse photographs that are
     # corrected today and buy nothing for it.  One string here flips that back.
     LAYER_SCOPE = (("source", "vh"), ("paint", "vh"),
-                   ("sam", "vh"), ("roi", "h"))
+                   ("sam", "vh"), ("strip", "h"))
 
-    def _roi_layer(self):
+    def _strip_layer(self):
         """The facade strip as an ignore layer: everything outside it.
 
         The strip used to be a filter on line midpoints, which made it the one
@@ -247,17 +247,14 @@ class ReviewSession:
         its own failure mode.  As a layer it is just another claim about which
         pixels do not count.
         """
-        if self.roi_x is None:
+        if self.strip is None:
             return None
         gh, gw = self.gray.shape[:2]
-        # roi_x is ALREADY in analysis coordinates -- `set_roi_x` says so and
-        # clamps it to gw, and gui._apply_roi stores `fraction * analysis width`.
-        # Scaling it again by w/gw narrowed the strip by the analysis factor on
-        # every downsampled photograph: a 20..80% strip of a 6000 px frame came
-        # out as roughly 4..17%, so the band a user drew was not the band that
-        # filtered the lines. Invisible on a small test image, where scale is 1.
-        x0 = int(round(self.roi_x[0]))
-        x1 = int(round(self.roi_x[1]))
+        # Fractions in, analysis pixels out. The conversion lives at the two
+        # points that need pixels and nowhere else, so there is never a stored
+        # number whose frame has to be guessed.
+        x0 = int(round(self.strip[0] * gw))
+        x1 = int(round(self.strip[1] * gw))
         x0, x1 = max(0, min(x0, gw)), max(0, min(x1, gw))
         if x1 <= x0:
             return None
@@ -267,8 +264,8 @@ class ReviewSession:
 
     def layer(self, name):
         """One ignore layer by name, or None when it is not in force."""
-        if name == "roi":
-            return self._roi_layer()
+        if name == "strip":
+            return self._strip_layer()
         return getattr(self, "sam_mask" if name == "sam" else name, None)
 
     def ignore_mask(self, pool="vh"):
@@ -349,7 +346,7 @@ class ReviewSession:
         # for building the rotation from that facade's own two vanishing points.
         m = M.estimate(vert, horiz, gw, gh, settings,
                        exif_px * self.scale if exif_px else None,
-                       single_facade=self.roi_x is not None)
+                       single_facade=self.strip is not None)
         if m.f:
             m.f = m.f / self.scale
             # Sanity clamp: focal below 5% of frame width is unphysical
@@ -409,7 +406,7 @@ class ReviewSession:
         self.control_lines = np.zeros((0, 4))
         self.control_hlines = np.zeros((0, 4))
         self._crop_edges = {k: (False, 0.0) for k in self._crop_edges}
-        self.roi_x = None
+        self.strip = None
         self.refit()
 
     @property
@@ -1052,7 +1049,7 @@ class ReviewSession:
         when a person did.
 
         **A hand-placed facade strip is on that list too** (2026-09-20,
-        user-directed, measured). ``roi_x`` restricts the horizontals to one
+        user-directed, measured). ``strip`` restricts the horizontals to one
         wall, which on a corner view *is* the correction -- one camera rotation
         can level one facade, never two. Measured over 11 corner views: a strip
         read off the photograph by eye beats the blanket 20-80% default
@@ -1070,7 +1067,7 @@ class ReviewSession:
         run -- keeps its veto, and the comment there says why it must.
         """
         if self.mode == MANUAL or self.control_active \
-                or len(self.control_hlines) >= 2 or self.roi_x is not None:
+                or len(self.control_hlines) >= 2 or self.strip is not None:
             return None
         if self.model is None:
             return "no model"
@@ -1278,8 +1275,10 @@ class ReviewSession:
             if fill_mode not in ("", "none"):
                 parts.append("fill and crop are two answers to the same band; "
                              "the crop discards what the fill invents")
-        if self.roi_x is not None:
-            n_in = int(L.in_xband(self.horiz.seg, *self.roi_x).sum())
+        if self.strip is not None:
+            gw_s = self.gray.shape[1]
+            n_in = int(L.in_xband(self.horiz.seg, self.strip[0] * gw_s,
+                                  self.strip[1] * gw_s).sum())
             parts.append(f"region: horizontal evidence restricted to the "
                          f"selected strip ({n_in} of {len(self.horiz)} lines) -- "
                          f"the yaw is taken from that facade only")
@@ -1290,33 +1289,40 @@ class ReviewSession:
             supports = self.model.diagnostics.get("horiz_supports", [])
             if sum(1 for s in supports[:2] if s > 0.2) >= 2:
                 parts.append("two horizontal directions detected — yaw follows "
-                             "the dominant facade; use ROI strip to choose")
+                             "the dominant facade; use facade strip to choose")
         if skip:
             parts.append(f"would skip: {skip}")
         return "\n".join(parts)
 
     # -- output ----------------------------------------------------------
     # -- horizontal-evidence region (x-band) -----------------------------
-    def set_roi_x(self, x0, x1, display_scale: float = 1.0) -> bool:
+    def set_strip(self, x0, x1, display_scale: float = 1.0) -> bool:
         """Restrict the *horizontal* line evidence to a vertical strip.
 
-        ``x0``/``x1`` are displayed-image pixels; the band is stored in
-        analysis-image coordinates (like the control lines).  A strip narrower
-        than 5 % of the frame is refused -- a mis-drag that selects almost
-        nothing should not pass as a deliberate choice."""
+        ``x0``/``x1`` are displayed-image pixels; the band is stored as
+        FRACTIONS of the image width, 0..1.
+
+        One unit for the strip, everywhere. It used to be analysis pixels here
+        and fractions on the Result -- two fields of the same name holding two
+        different things, which is the shape that produced two of this
+        project's unit bugs. Fractions are the only form that survives a change
+        of analysis resolution, and they are what the rulers already display.
+
+        A strip narrower than 5 % of the frame is refused -- a mis-drag that
+        selects almost nothing should not pass as a deliberate choice."""
         inv = self.scale / max(display_scale, 1e-9)
         gh, gw = self.gray.shape[:2]
         ax0, ax1 = sorted((float(x0) * inv, float(x1) * inv))
         ax0, ax1 = max(0.0, ax0), min(float(gw), ax1)
         if (ax1 - ax0) < 0.05 * gw:
             return False
-        self.roi_x = (ax0, ax1)
+        self.strip = (ax0 / gw, ax1 / gw)
         self.refit()
         return True
 
-    def clear_roi_x(self) -> bool:
-        had = self.roi_x is not None
-        self.roi_x = None
+    def clear_strip(self) -> bool:
+        had = self.strip is not None
+        self.strip = None
         if had:
             self.refit()
         return had

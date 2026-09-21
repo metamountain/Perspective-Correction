@@ -27,26 +27,12 @@ CSV_HEADER = [
 ]
 
 
-def _strip_fractions(strip, width):
-    """A facade strip as two fractions of the width, or ``None``.
 
-    *strip* and *width* must be in the SAME frame -- both full-resolution, or
-    both analysis-resolution. The fraction is the same either way, which is the
-    point of storing fractions: it is the only form that still means the same
-    thing after the analysis resolution changes. (This used to say
-    "full-resolution pixels in", which its GUI caller does not do and does not
-    need to.)
-    """
-    if not strip or not width:
-        return None
-    return [float(strip[0]) / float(width), float(strip[1]) / float(width)]
-
-
-def remember_strip(folder: str, stem: str, strip, width) -> str:
+def remember_strip(folder: str, stem: str, strip) -> str:
     """Keep the facade strip beside the photograph it was drawn on.
 
     A strip is a statement about ONE picture -- where that building's corner
-    falls -- so it belongs with that picture. The CLI's ``--roi-x`` cannot serve:
+    falls -- so it belongs with that picture. The CLI's ``--strip`` cannot serve:
     it is one pair of numbers for a whole run, and thirty facades have thirty
     different corners.
 
@@ -64,7 +50,9 @@ def remember_strip(folder: str, stem: str, strip, width) -> str:
         except (OSError, ValueError):
             rec = {}                    # unreadable: replace rather than refuse
     rec["file"] = stem
-    rec["strip"] = _strip_fractions(strip, width)
+    # Already fractions: that is the one unit a strip is kept in, from the
+    # session through the Result to this file.
+    rec["strip"] = [float(strip[0]), float(strip[1])] if strip else None
     with open(path, "w", encoding="utf-8") as fh:
         json.dump(rec, fh, indent=2)
     return path
@@ -108,10 +96,10 @@ def build_record(result, before: dict, after: dict, version: str) -> dict:
             "focal_source": result.focal_source,
             "clamped": bool(result.clamped),
         },
-        # Already fractions on the Result -- that is the unit --roi-x takes
+        # Already fractions on the Result -- that is the unit --strip takes
         # and the unit this file stores, so there is nothing to convert.
-        "strip": ([float(v) for v in result.roi_x]
-                  if getattr(result, "roi_x", None) else None),
+        "strip": ([float(v) for v in result.strip]
+                  if getattr(result, "strip", None) else None),
     }
 
 

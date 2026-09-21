@@ -113,11 +113,11 @@ def scene_strip(app, r):
     """The facade strip: each ruler must carry its own percentage, because the
     strip has to be placed exactly and the spinboxes are on the far side of the
     window from the line being dragged."""
-    r.v_roi.set(True)
-    r._on_roi_icon_click()
-    r.v_roi_x0.set(18.0)
-    r.v_roi_x1.set(63.0)
-    r._apply_roi()
+    r.v_strip.set(True)
+    r._on_strip_icon_click()
+    r.v_strip_x0.set(18.0)
+    r.v_strip_x1.set(63.0)
+    r._apply_strip()
     _pump(app, 8)
 
 

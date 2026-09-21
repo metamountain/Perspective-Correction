@@ -1127,7 +1127,7 @@ class ReviewPanel(tk.Frame):
         self._pending_mark = None
         self._after_off = (0, 0)
         self._crop_drag_start = None
-        self._roi_drag = None         # which ROI ruler is grabbed: 0=left, 1=right
+        self._strip_drag = None         # which ROI ruler is grabbed: 0=left, 1=right
         if getattr(self, "_loupe", None) is not None:   # _build re-runs on load
             self._loupe.destroy()
         self._loupe = None            # magnifying-glass canvas over the cross, or None
@@ -1510,9 +1510,9 @@ class ReviewPanel(tk.Frame):
         else:
             self._redraw()
 
-    def _apply_roi(self, _event=None):
+    def _apply_strip(self, _event=None):
         """Restrict horizontal evidence to an x-strip (corner views).  Off or an
-        empty/invalid strip leaves ``roi_x`` at None -- the unfiltered frame.
+        empty/invalid strip leaves ``strip`` at None -- the unfiltered frame.
         Re-estimates only in AUTO; a manual take-over keeps its angles until the
         user returns to Auto, so the strip cannot yank a correction they set.
 
@@ -1523,21 +1523,20 @@ class ReviewPanel(tk.Frame):
         s = self.session
         if s is None:
             return
-        aw = s.gray.shape[1]
-        roi = None
-        if self.v_roi.get():
+        strip = None
+        if self.v_strip.get():
             try:
-                x0 = float(self.v_roi_x0.get()) / 100.0
-                x1 = float(self.v_roi_x1.get()) / 100.0
+                x0 = float(self.v_strip_x0.get()) / 100.0
+                x1 = float(self.v_strip_x1.get()) / 100.0
             except ValueError:
                 return
             if 0.0 <= x0 < x1 <= 1.0 and (x1 - x0) >= 0.02:
-                roi = (x0 * aw, x1 * aw)
-        s.roi_x = roi
-        if roi is not None and not s.settings.correct_horizontal:
+                strip = (x0, x1)          # fractions, the one unit for a strip
+        s.strip = strip
+        if strip is not None and not s.settings.correct_horizontal:
             self.v_correct_horizontal.set(True)
             # Sets the flag, enables the yaw slider, and refits in AUTO -- with
-            # roi_x already in place above, so the strip is what gets applied.
+            # strip already in place above, so the strip is what gets applied.
             self._on_horizontal_toggle()
             return
         if s.mode == AUTO:
@@ -2152,9 +2151,9 @@ class ReviewPanel(tk.Frame):
             self.v_correct_horizontal.set(False)
             s.settings = s.settings.replace(correct_horizontal=False)
             gone.append("horizontal auto")
-        if getattr(self, "v_roi", None) is not None and self.v_roi.get():
-            self.v_roi.set(False)
-            s.roi_x = None
+        if getattr(self, "v_strip", None) is not None and self.v_strip.get():
+            self.v_strip.set(False)
+            s.strip = None
             gone.append("facade strip")
         if gone:
             self._set_status("PC Rectangle takes over: " + " and ".join(gone)
@@ -2208,7 +2207,7 @@ class ReviewPanel(tk.Frame):
         if getattr(self, "_loupe", None) is not None:
             self._loupe_move(event)
         self._rect_rubber(event)
-        if getattr(self, "v_roi", None) is not None and self.v_roi.get() \
+        if getattr(self, "v_strip", None) is not None and self.v_strip.get() \
                 and getattr(self, "_ph_b", None) is not None:
             oy = self._before_off[1]
             ih = self._ph_b.height()
@@ -2378,9 +2377,9 @@ class ReviewPanel(tk.Frame):
         # every time.
         c.place(**dict(zip(("x", "y"), self._loupe_park(size))))
 
-    def _on_roi_icon_click(self, event=None):
+    def _on_strip_icon_click(self, event=None):
         """Toggle ROI on/off; apply the strip from the rulers."""
-        self._apply_roi()
+        self._apply_strip()
 
     def _clear_marks(self):
         if self.session.clear_control_lines() or \
@@ -2718,10 +2717,10 @@ class ReviewPanel(tk.Frame):
         # falling through to line-picking: the strip is set by hand, so its edges
         # must be reachable wherever they land.  Checked first -- it is the most
         # specific gesture (a click on a drawn line).
-        if getattr(self, "v_roi", None) is not None and self.v_roi.get():
-            hit = self._roi_ruler_at(event.x, event.y)
+        if getattr(self, "v_strip", None) is not None and self.v_strip.get():
+            hit = self._strip_ruler_at(event.x, event.y)
             if hit is not None:
-                self._on_roi_drag_start(hit)
+                self._on_strip_drag_start(hit)
                 return
         if getattr(self, "v_sam", None) is not None and self.v_sam.get():
             self._on_sam_press(event)
@@ -3036,8 +3035,8 @@ class ReviewPanel(tk.Frame):
         if getattr(self, "_rect_drag", None) is not None:
             self._rect_drag_move(event)
             return
-        if getattr(self, "_roi_drag", None) is not None:
-            self._on_roi_drag_move(event)
+        if getattr(self, "_strip_drag", None) is not None:
+            self._on_strip_drag_move(event)
             return
         if getattr(self, "_mark_drag", None) is not None:
             self._on_mark_drag(event)
@@ -3055,8 +3054,8 @@ class ReviewPanel(tk.Frame):
         if getattr(self, "_rect_drag", None) is not None:
             self._rect_drag_release()
             return
-        if getattr(self, "_roi_drag", None) is not None:
-            self._on_roi_drag_release()
+        if getattr(self, "_strip_drag", None) is not None:
+            self._on_strip_drag_release()
             return
         if getattr(self, "_pending_mark", None) is not None and getattr(self, "_mark_moved", False):
             self._mark_commit(event)
@@ -3071,17 +3070,17 @@ class ReviewPanel(tk.Frame):
             self._on_stroke_release(event)
 
     # -- roi x rulers ----------------------------------------------------
-    def _roi_strip(self):
-        """The ROI strip as fractions of frame width, or None when off/invalid.
+    def _strip_bounds(self):
+        """The facade strip as fractions of frame width, or None when off/invalid.
 
-        Mirrors `_apply_roi`'s validity test so the rulers and the estimator
+        Mirrors `_apply_strip`'s validity test so the rulers and the estimator
         never disagree about whether a strip is in force."""
-        v = getattr(self, "v_roi", None)
+        v = getattr(self, "v_strip", None)
         if v is None or not v.get():
             return None
         try:
-            x0 = float(self.v_roi_x0.get()) / 100.0
-            x1 = float(self.v_roi_x1.get()) / 100.0
+            x0 = float(self.v_strip_x0.get()) / 100.0
+            x1 = float(self.v_strip_x1.get()) / 100.0
         except ValueError:
             return None
         if not (0.0 <= x0 < x1 <= 1.0 and (x1 - x0) >= 0.02):
@@ -3112,8 +3111,8 @@ class ReviewPanel(tk.Frame):
                                       fill=col if i == 0 else "",
                                       tags="horiz_vp")
 
-    def _draw_roi_rulers(self):
-        """Two draggable vertical rulers on the before pane marking the ROI strip.
+    def _draw_strip_rulers(self):
+        """Two draggable vertical rulers on the before pane marking the facade strip.
 
         The spinboxes are a numeric fine-tune; these are the visual way to see
         where the strip falls and drag it.  Only the sides *outside* the strip get
@@ -3121,8 +3120,8 @@ class ReviewPanel(tk.Frame):
         look (stipple, #9fd8ff, tick + label) differs from the reference guides
         on the after pane (`_draw_after_guides`); these are handles, so the lines
         are solid and a touch heavier than a grid line."""
-        self.c_before.delete("roi_ruler")
-        strip = self._roi_strip()
+        self.c_before.delete("strip_ruler")
+        strip = self._strip_bounds()
         if strip is None:
             return
         x0f, x1f = strip
@@ -3131,8 +3130,8 @@ class ReviewPanel(tk.Frame):
         px0 = ox + x0f * iw
         px1 = ox + x1f * iw
         wash = dict(fill=INK["field"], stipple="gray50")
-        self.c_before.create_rectangle(ox, oy, px0, oy + ih, **wash, tags="roi_ruler")
-        self.c_before.create_rectangle(px1, oy, ox + iw, oy + ih, **wash, tags="roi_ruler")
+        self.c_before.create_rectangle(ox, oy, px0, oy + ih, **wash, tags="strip_ruler")
+        self.c_before.create_rectangle(px1, oy, ox + iw, oy + ih, **wash, tags="strip_ruler")
         # Each ruler carries its own reading. The spinboxes hold the same two
         # numbers, but they are on the far side of the window from the line you
         # are dragging, and a strip has to be placed EXACTLY -- the value belongs
@@ -3140,24 +3139,24 @@ class ReviewPanel(tk.Frame):
         # into the strip so neither falls off the frame edge.
         for pxf, frac, side in ((px0, x0f, 1), (px1, x1f, -1)):
             self.c_before.create_line(pxf, oy, pxf, oy + ih, fill=OVERLAY["strip"],
-                                      width=2, tags="roi_ruler")
+                                      width=2, tags="strip_ruler")
             cy = oy + ih // 2
             self.c_before.create_oval(pxf - 7, cy - 7, pxf + 7, cy + 7,
                                       outline=OVERLAY["strip"], width=2, fill=INK["field"],
-                                      tags="roi_ruler")
+                                      tags="strip_ruler")
             self.c_before.create_text(pxf + side * 9, oy + 12,
                                       text=f"{frac * 100:.0f}%",
                                       fill=OVERLAY["strip"], font=("TkDefaultFont", 8),
                                       anchor="w" if side > 0 else "e",
-                                      tags="roi_ruler")
+                                      tags="strip_ruler")
 
-    def _roi_ruler_at(self, x, y=None):
+    def _strip_ruler_at(self, x, y=None):
         """Which ROI ruler (0=left, 1=right) sits near the handle, or None.
 
         The grab zone is the small circle in the middle of each line, not the
         whole line: a click meant for the picture does not accidentally drag
         the strip."""
-        strip = self._roi_strip()
+        strip = self._strip_bounds()
         if strip is None or getattr(self, "_ph_b", None) is None:
             return None
         ox, oy = self._before_off
@@ -3170,20 +3169,20 @@ class ReviewPanel(tk.Frame):
                     return i
         return None
 
-    def _on_roi_drag_start(self, idx):
-        self._roi_drag = idx
+    def _on_strip_drag_start(self, idx):
+        self._strip_drag = idx
         try:
             self.c_before.grab_set()
         except tk.TclError:
             pass
 
-    def _on_roi_drag_move(self, event):
+    def _on_strip_drag_move(self, event):
         """Move the grabbed ruler, clamped to the frame and to the other edge.
 
-        The strip must stay >= 2 % wide (the same floor `_apply_roi` enforces) so a
+        The strip must stay >= 2 % wide (the same floor `_apply_strip` enforces) so a
         drag can never collapse it into an invalid, ignored state.  Updates the
         spinbox vars live; the refit happens once, on release."""
-        if self._roi_drag is None or self.session is None:
+        if self._strip_drag is None or self.session is None:
             return
         ox = self._before_off[0]
         iw = self._ph_b.width()
@@ -3191,23 +3190,23 @@ class ReviewPanel(tk.Frame):
             return
         f = (event.x - ox) / iw
         gap = 0.02
-        if self._roi_drag == 0:
-            f = min(max(f, 0.0), float(self.v_roi_x1.get()) / 100.0 - gap)
-            self.v_roi_x0.set(round(f * 100.0, 1))
+        if self._strip_drag == 0:
+            f = min(max(f, 0.0), float(self.v_strip_x1.get()) / 100.0 - gap)
+            self.v_strip_x0.set(round(f * 100.0, 1))
         else:
-            f = max(min(f, 1.0), float(self.v_roi_x0.get()) / 100.0 + gap)
-            self.v_roi_x1.set(round(f * 100.0, 1))
-        self._draw_roi_rulers()
+            f = max(min(f, 1.0), float(self.v_strip_x0.get()) / 100.0 + gap)
+            self.v_strip_x1.set(round(f * 100.0, 1))
+        self._draw_strip_rulers()
 
-    def _on_roi_drag_release(self):
-        if self._roi_drag is None:
+    def _on_strip_drag_release(self):
+        if self._strip_drag is None:
             return
-        self._roi_drag = None
+        self._strip_drag = None
         try:
             self.c_before.grab_release()
         except tk.TclError:
             pass
-        self._apply_roi()
+        self._apply_strip()
 
     def _on_stroke_toggle(self):
         # Leaving the mode clears any half-painted stroke so it never lingers.
@@ -3513,7 +3512,7 @@ class ReviewPanel(tk.Frame):
             # the original it measures nothing and only competes with the lines
             # the detector drew, which is what this pane is for.
             self._draw_marks()
-            self._draw_roi_rulers()
+            self._draw_strip_rulers()
             self._draw_sam_prompts()
             # P3: horizontal VP markers on the before pane
             if (self.session.model is not None
@@ -3680,15 +3679,15 @@ class ReviewPanel(tk.Frame):
         # ROI / Facade strip: dark-light-dark vertical stripes.  Click opens a
         # popup with the two % spinboxes; the rulers on the before pane are the
         # primary interaction.
-        if getattr(self, "v_roi", None) is None:
-            self.v_roi = tk.BooleanVar(value=False)
-            self.v_roi_x0 = tk.DoubleVar(value=20.0)
-            self.v_roi_x1 = tk.DoubleVar(value=80.0)
+        if getattr(self, "v_strip", None) is None:
+            self.v_strip = tk.BooleanVar(value=False)
+            self.v_strip_x0 = tk.DoubleVar(value=20.0)
+            self.v_strip_x1 = tk.DoubleVar(value=80.0)
         # It was three solid bars, light-dark-light, which read as a barcode
         # and said nothing about measuring. Two rulers with the span between
         # them is the actual idea, and it is now in the same pen as the rest.
-        _roi_btn = tool("strip", self.v_roi, self._on_roi_icon_click,
-                        "Facade strip (ROI): restrict horizontal\n"
+        _strip_btn = tool("strip", self.v_strip, self._on_strip_icon_click,
+                        "Facade strip : restrict horizontal\n"
                         "evidence to one facade on corner views.")
         # NOTE: this used to say the quad had left the palette and that
         # nothing in the window pointed at it -- sitting directly above
@@ -4248,14 +4247,13 @@ class ReviewPanel(tk.Frame):
         exception thrown on top of a completed action.
         """
         s = self.session
-        strip = getattr(s, "roi_x", None) if s is not None else None
+        strip = getattr(s, "strip", None) if s is not None else None
         if not strip:
             return
         try:
             from . import hpc_log as HPC
-            gw = s.gray.shape[1]        # roi_x is in ANALYSIS pixels
             stem = os.path.splitext(os.path.basename(s.path))[0]
-            HPC.remember_strip("hpc_save", stem, strip, gw)
+            HPC.remember_strip("hpc_save", stem, strip)
         except Exception as exc:        # never break a finished save
             self._set_status(f"strip not stored: {exc}")
 

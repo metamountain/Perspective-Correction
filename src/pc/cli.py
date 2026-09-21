@@ -103,7 +103,7 @@ def build_parser():
                    help="scale the horizontal (yaw) correction (0 = none, 1 = full)")
     g.add_argument("--max-horizontal", type=float, default=Settings.max_horizontal_deg,
                     help="cap on the horizontal (yaw) correction, degrees")
-    g.add_argument("--roi-x", type=float, nargs=2, metavar=("X0", "X1"), default=None,
+    g.add_argument("--strip", type=float, nargs=2, metavar=("X0", "X1"), default=None,
                    help="restrict the evidence to the vertical strip X0..X1, "
                         "given as FRACTIONS of the image width (0..1) -- e.g. "
                         "0.02 0.46 for the left facade of a corner view. Both "
@@ -374,8 +374,8 @@ class _Log:
 
 
 def _job(item):
-    src, dst, settings, debug_dir, dry, roi_x = item
-    return process(src, dst, settings, debug_dir=debug_dir, dry_run=dry, roi_x=roi_x)
+    src, dst, settings, debug_dir, dry, strip = item
+    return process(src, dst, settings, debug_dir=debug_dir, dry_run=dry, strip=strip)
 
 
 def _hpc_save(results, settings, log):
@@ -707,7 +707,7 @@ def main(argv=None) -> int:
         if args.skip_existing and not args.overwrite and os.path.exists(dst):
             skipped_existing += 1
             continue
-        jobs.append((src, dst, settings, args.debug_dir, args.dry_run, args.roi_x))
+        jobs.append((src, dst, settings, args.debug_dir, args.dry_run, args.strip))
 
     workers = args.workers or min(8, (os.cpu_count() or 1))
     if not args.workers and settings.mask_mode == "birefnet" and workers > 2:
