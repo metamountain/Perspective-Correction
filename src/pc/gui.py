@@ -2225,6 +2225,57 @@ class ReviewPanel(tk.Frame):
         """
         return "v" if abs(y1 - y0) >= abs(x1 - x0) else "h"
 
+    def _wait_show(self, text):
+        """One line over the picture saying what is running, and roughly how long.
+
+        No animated bar, and that is deliberate rather than lazy: the work it
+        reports runs on THIS thread, so nothing of ours would move while it
+        ran. A bar frozen mid-sweep reads as a hang; a sentence that says
+        "filling the band -- about 9 s" and then sits there reads as work.
+        Threading the save to animate a bar would buy motion and cost a whole
+        class of half-written-file bugs.
+        """
+        if getattr(self, "_wait", None) is None:
+            self._wait = tk.Frame(self, bg=INK["panel"],
+                                  highlightbackground=INK["line"],
+                                  highlightthickness=1)
+            self._wait_lbl = tk.Label(self._wait, text="", bg=INK["panel"],
+                                      fg=INK["text"], padx=18, pady=10)
+            self._wait_lbl.pack()
+        self._wait_lbl.configure(text=text)
+        # Level with the PICTURES, not the middle of the panel. The panel is
+        # pictures on top and controls underneath, so its centre is the seam
+        # between them and a box placed there sits half over each -- the same
+        # mistake the loupe made before `_loupe_park` was written.
+        try:
+            y = (self.c_before.winfo_rooty() - self.winfo_rooty()
+                 + self.c_before.winfo_height() // 2)
+            self._wait.place(relx=0.5, y=y, anchor="center")
+        except tk.TclError:
+            self._wait.place(relx=0.5, rely=0.35, anchor="center")
+        self._wait.lift()
+        try:
+            self.update_idletasks()      # paint it BEFORE we stop answering
+        except tk.TclError:
+            pass
+
+    def _wait_stage(self, name, mpx=0.0):
+        """Callback for a long job: name the stage and estimate what is left."""
+        from . import progress as PR
+        pretty = {"warping": "straightening", "writing": "writing the file"}
+        label = pretty.get(name, name.replace("fill:", "filling the band, "))
+        eta = PR.humanise(PR.estimate(name, mpx,
+                                      share=0.5 if name.startswith("fill:") else 1.0))
+        self._wait_show(f"{label}{'  --  ' + eta if eta else ''}")
+
+    def _wait_hide(self):
+        w = getattr(self, "_wait", None)
+        if w is not None:
+            try:
+                w.place_forget()
+            except tk.TclError:
+                pass
+
     def _set_busy(self, busy: bool):
         """Hourglass over both previews while a model is working.
 
@@ -4159,6 +4210,9 @@ class ReviewPanel(tk.Frame):
         pts = getattr(self, '_sam_points', None) or None
         self._busy_sam = True
         self._set_busy(True)
+        # SAM2 runs in a thread, so the watch cursor does move -- but a cursor
+        # says "busy" and not "with what, and for how long".
+        self._wait_stage("sam")
 
         def _run():
             try:
@@ -4181,6 +4235,7 @@ class ReviewPanel(tk.Frame):
     def _on_sam_done(self, png_path):
         self._busy_sam = False
         self._set_busy(False)
+        self._wait_hide()
         from . import sam2seg
         ignore = sam2seg.load_mask_png(png_path, (self.session.h, self.session.w))
         self._sam_selection = ~ignore
@@ -4197,6 +4252,7 @@ class ReviewPanel(tk.Frame):
     def _on_sam_fail(self, exc):
         self._busy_sam = False
         self._set_busy(False)
+        self._wait_hide()
         log.error("SAM failed: %s", exc)
         self._set_status(f"SAM error: {exc}")
 
@@ -4261,12 +4317,15 @@ class ReviewPanel(tk.Frame):
             # PC Rectangle (planar) takes priority over the rotation path:
             # if four corners are set, save the rectified facade.
             if len(self.session.planar_quad) >= 4:
+                self._wait_show("rectifying the facade")
                 self.session.save_planar(dst)
             else:
-                self.session.save(dst)
+                self.session.save(dst, on_stage=self._wait_stage)
         except Exception as exc:
+            self._wait_hide()
             messagebox.showerror("Save", str(exc), parent=self)
             return
+        self._wait_hide()
         # A hand-placed strip is the one thing in this window that cannot be
         # recovered by looking at the result: it says where THIS building's
         # corner falls, and it was gone the moment the photograph closed.
@@ -4307,12 +4366,15 @@ class ReviewPanel(tk.Frame):
         self._sync_comfy()
         try:
             if len(self.session.planar_quad) >= 4:
+                self._wait_show("rectifying the facade")
                 self.session.save_planar(dst)
             else:
-                self.session.save(dst)
+                self.session.save(dst, on_stage=self._wait_stage)
         except Exception as exc:
+            self._wait_hide()
             messagebox.showerror("Save As", str(exc), parent=self)
             return
+        self._wait_hide()
         self._remember_strip()
         if self.on_saved:
             self.on_saved(self.session.path, dst)
