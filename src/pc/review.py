@@ -503,7 +503,8 @@ class ReviewSession:
             _parts = [x.seg for x in (self.vert, self.horiz) if len(x)]
             if _parts:
                 _segs = np.concatenate(_parts, axis=0)
-        planned = W.plan(self.w, self.h, H, self.settings, line_segs=_segs, yaw=yaw)
+        planned = W.plan(self.w, self.h, H, self.settings, line_segs=_segs, yaw=yaw,
+                         strip=self.strip)
         if planned is None:
             return False
         H_total, ow, oh, _, _ = planned
@@ -1153,7 +1154,8 @@ class ReviewSession:
             _parts = [x.seg for x in (self.vert, self.horiz) if len(x)]
             if _parts:
                 _segs = np.concatenate(_parts, axis=0)
-        planned = W.plan(sw, sh, H, self.settings, line_segs=_segs, yaw=yaw)
+        planned = W.plan(sw, sh, H, self.settings, line_segs=_segs, yaw=yaw,
+                         strip=self.strip)
         if planned is None:
             return _fit(self.bgr, max_edge)
         H_total, ow, oh, _, _ = planned
@@ -1231,7 +1233,7 @@ class ReviewSession:
         segs = [x.seg for x in (self.vert, self.horiz) if len(x)]
         planned = W.plan(self.w, self.h, H, self.settings,
                          line_segs=np.concatenate(segs, axis=0) if segs else None,
-                         yaw=yaw)
+                         yaw=yaw, strip=self.strip)
         if planned is None:
             return None
         return int(planned[1]), int(planned[2])
@@ -1492,7 +1494,8 @@ class ReviewSession:
             _parts = [x.seg for x in (self.vert, self.horiz) if len(x)]
             if _parts:
                 _segs = np.concatenate(_parts, axis=0)
-        planned = W.plan(self.w, self.h, H, save_settings, line_segs=_segs, yaw=yaw)
+        planned = W.plan(self.w, self.h, H, save_settings, line_segs=_segs, yaw=yaw,
+                         strip=self.strip)
         if planned is None:
             IO.copy_through(self.path, dst_path)
             return dst_path

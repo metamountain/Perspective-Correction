@@ -1510,6 +1510,19 @@ class ReviewPanel(tk.Frame):
         else:
             self._redraw()
 
+    def _finish_strip(self):
+        """Put the facade strip away and say so, if one was up."""
+        s = self.session
+        had = s is not None and s.strip is not None
+        if getattr(self, "v_strip", None) is not None and self.v_strip.get():
+            self.v_strip.set(False)
+        if s is not None and s.strip is not None:
+            s.clear_strip()
+        self.c_before.delete("strip_ruler")
+        if had:
+            self._set_status("facade strip cleared -- it only shapes the yaw")
+        return had
+
     def _apply_strip(self, _event=None):
         """Restrict horizontal evidence to an x-strip (corner views).  Off or an
         empty/invalid strip leaves ``strip`` at None -- the unfiltered frame.
@@ -1959,6 +1972,13 @@ class ReviewPanel(tk.Frame):
             self._sync_from_session()
         elif not on and self.session.mode == AUTO:
             self.v_yaw.set(0.0)
+        if not on:
+            # Switching horizontal auto off leaves nothing behind (user,
+            # 2026-09-21). The strip exists only to choose which facade the
+            # YAW is taken from; with no yaw it filters horizontal evidence
+            # for a correction that is not running, and its two rulers still
+            # sit on the picture claiming to do something.
+            self._finish_strip()
             self._schedule_redraw()
 
     def _on_slider(self):
