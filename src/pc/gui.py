@@ -3307,7 +3307,7 @@ class ReviewPanel(tk.Frame):
         if getattr(self, "v_stroke", None) is not None and self.v_stroke.get():
             self._on_stroke_release(event)
 
-    # -- roi x rulers ----------------------------------------------------
+    # -- facade strip rulers ----------------------------------------------------
     def _strip_bounds(self):
         """The facade strip as fractions of frame width, or None when off/invalid.
 

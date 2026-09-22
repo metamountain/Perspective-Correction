@@ -237,7 +237,7 @@ class ReviewSession:
     # pixel is ignored when any layer ignores it, because each layer is an
     # independent claim and ignoring twice costs nothing.
     #
-    # `roi` is the only layer that does not speak for both pools.  That is a
+    # `strip` is the only layer that does not speak for both pools.  That is a
     # measurement, not a carve-out: a strip that also cut verticals left the
     # angles alone (pitch within 0.4 deg on every asset tried) and dropped
     # confidence by about 0.11 every single time, because confidence is
