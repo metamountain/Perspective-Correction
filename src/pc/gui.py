@@ -835,6 +835,17 @@ def _brand_header(parent, on_select=None):
     # Which copy of this repo is actually running: a stale second copy shows an
     # older number and gives the whole exercise away.
     ttk.Label(bar, text=f"v{__version__}", style="Dim.TLabel").pack(side="right", padx=(8, 6))
+    # Beside the version, because that is the number it changes.  Built here
+    # and handed back on the frame so the App can wire it: this function draws
+    # the bar and knows nothing about git.
+    bar._update_btn = ttk.Button(bar, text="update", width=8)
+    bar._update_btn.pack(side="right", padx=(0, 4))
+    _attach_tooltip(
+        bar._update_btn,
+        "Fetch the newer version of this program and fast-forward to it.\n"
+        "Only ever a fast-forward: uncommitted changes, commits of your\n"
+        "own, or a rewritten remote stop it with an explanation -- never\n"
+        "a merge and never a discard. A restart is needed afterwards.")
     theme_var = tk.StringVar(value="Minimal Black")
     if on_select is not None:
         theme_var.trace_add("write", lambda *_: on_select(theme_var.get()))
@@ -4792,7 +4803,10 @@ class App(_ROOT_CLASS):
 
     def _build(self):
         pad = dict(padx=6, pady=2)
-        _, self._theme_var, self._theme_combo = _brand_header(self, on_select=self._switch_theme)
+        _bar, self._theme_var, self._theme_combo = _brand_header(
+            self, on_select=self._switch_theme)
+        self.btn_update = _bar._update_btn
+        self.btn_update.configure(command=self._check_for_update)
 
         # Both are read by the review panel's <Configure>, which fires while
         # `ReviewPanel(self)` is still constructing, so they exist before it.
@@ -5083,6 +5097,75 @@ class App(_ROOT_CLASS):
         if not FILL.available(mode, s):
             text = "fill will FAIL on every image -- " + text
         self.lbl_fill.configure(text=text)
+
+    def _check_for_update(self):
+        """The `update` button beside the version number.
+
+        Same shape as `_download_models` below, for the same reason: a network
+        call behind a button. The work happens on a daemon thread so the window
+        keeps answering, the label carries the state instead of a second
+        widget, and every return to Tk goes through `self.after(0, ...)` --
+        touching a widget from the worker thread is the bug this pattern
+        exists to avoid.
+
+        Two steps, and the user decides between them. `selfupdate.check` only
+        looks; nothing moves until they say yes to what it found. A button that
+        changes the program under you without showing you what it is taking is
+        not something to press twice.
+        """
+        if getattr(self, "_upd_busy", False):
+            return
+        from . import selfupdate as SU
+        self._upd_busy = True
+        btn = self.btn_update
+        # The label is the indicator, the way `_download_models` does it below:
+        # a second widget for two seconds of network is not worth the width.
+        btn.configure(text="checking")
+
+        def done():
+            btn.configure(text="update")
+            self._upd_busy = False
+
+        def found(info):
+            done()
+            if not info.get("can_update"):
+                # Not an error: "already up to date" arrives here too, and so
+                # does every refusal. They are all answers to what was asked.
+                messagebox.showinfo("Update", info["message"], parent=self)
+                return
+            detail = info.get("log", "")
+            ask = info["message"]
+            if detail:
+                ask += "\n\n" + "\n".join("   " + ln
+                                          for ln in detail.splitlines()[:12])
+            ask += "\n\nTake them now?"
+            if not messagebox.askyesno("Update", ask, parent=self):
+                return
+            self._upd_busy = True
+            btn.configure(text="updating")
+
+            def pulled(ok, text):
+                done()
+                (messagebox.showinfo if ok else messagebox.showerror)(
+                    "Update", text, parent=self)
+
+            def pull():
+                try:
+                    ok, text = SU.apply()
+                except Exception as exc:               # never lose the button
+                    ok, text = False, str(exc)
+                self.after(0, lambda: pulled(ok, text))
+
+            threading.Thread(target=pull, daemon=True).start()
+
+        def look():
+            try:
+                info = SU.check()
+            except Exception as exc:
+                info = {"can_update": False, "message": str(exc)}
+            self.after(0, lambda: found(info))
+
+        threading.Thread(target=look, daemon=True).start()
 
     def _download_models(self):
         """Fetch the DeepLSD weights (98 MB) into models/.
