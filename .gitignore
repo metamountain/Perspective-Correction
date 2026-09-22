@@ -106,7 +106,7 @@ tests/assets/**
 !tests/assets/masks/
 !tests/assets/sam2_masks/
 !tests/assets/1070912stkzg.jpg
-!tests/assets/39079116-ein-augenmerk-muessen-immobilienbesitzer-auf-die-fassaden-inklusive-der-werbung-daran-legen-wie-hier-an-der-muenzstrasse-3Rec.jpg
+!tests/assets/39079116-muenzstrasse-fassadenwerbung.jpg
 !tests/assets/79cb33878fd0ed76d368e7cfa8827e15.jpg
 !tests/assets/Alte_Scheune.jpg
 !tests/assets/Horizontal/Mariánské_Hory,_panelové_domy_4.jpg
@@ -118,7 +118,7 @@ tests/assets/**
 !tests/assets/hospital-nikon-d60_f27.jpg
 !tests/assets/lochfassade.jpg
 !tests/assets/masks/1070912stkzg.png
-!tests/assets/masks/39079116-ein-augenmerk-muessen-immobilienbesitzer-auf-die-fassaden-inklusive-der-werbung-daran-legen-wie-hier-an-der-muenzstrasse-3Rec.png
+!tests/assets/masks/39079116-muenzstrasse-fassadenwerbung.png
 !tests/assets/masks/79cb33878fd0ed76d368e7cfa8827e15.png
 !tests/assets/masks/Alte_Scheune.png
 !tests/assets/masks/README.md
