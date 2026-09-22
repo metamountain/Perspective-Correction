@@ -26,20 +26,57 @@ def _photo(h=80, w=120):
     return rng.integers(0, 256, (h, w, 3), dtype=np.uint8)
 
 
-def test_the_default_fill_is_the_one_that_needs_nothing():
-    """The default is a decision, not a knob, and it changed once: from "none"
-    to "telea".  What makes that defensible is not that telea invents less --
-    a pixel nobody photographed is invented either way -- but that it is the
-    only backend that is deterministic, needs no model, no download and no
-    network, and therefore behaves identically on every machine that runs this.
+def test_the_default_fill_is_the_one_that_produces_the_better_band():
+    """The default is a decision, not a knob, and it has changed twice: "none"
+    to "telea", then telea to "lama" (user, 2026-09-22).
 
-    The two that pull in a model must stay off by default.  A batch that
-    silently waits on a 196 MB download, or on a server that is not running, is
-    the failure this project is built against."""
-    assert Settings.fill == "telea"
-    assert Settings.fill in F.LIVE_MODES, "the default must be cheap enough to preview"
-    for heavy in ("lama", "comfyui"):
-        assert Settings.fill != heavy, "a default may not require a download"
+    Telea was chosen for needing no model, no download and no network -- an
+    argument about INSTALLING a backend, not about the band it produces. Two
+    measurements moved it: telea costs 13.1 s on a 108 MPx canvas against
+    lama's 4.5 s, because telea works on the real hole and grows with it while
+    lama generates at `fill_max_edge` and pastes back; and what telea puts in a
+    facade band is smeared edge colour. The slower one was winning on a cost it
+    does not have.
+
+    What made the old default safe is kept by a different mechanism rather than
+    abandoned: a backend that cannot run is an error for that image, never a
+    silent fall-back to the padded version, so a heavy default cannot quietly
+    write un-filled frames. That rule is asserted in its own test below.
+    """
+    assert Settings.fill == "lama"
+    assert Settings.fill in F.MODES
+    # It is NOT in LIVE_MODES, and that is the point of the stand-in: the
+    # preview stays cheap while the saved file gets the better band.
+    assert Settings.fill not in F.LIVE_MODES
+    assert F.PREVIEW_STANDIN in F.LIVE_MODES, \
+        "whatever stands in for the preview has to be cheap enough to redraw"
+
+
+def test_the_step_callback_reports_finished_work_and_never_breaks_a_fill():
+    """`fill(..., on_step=)` drives the loader bar.
+
+    Two properties, because a progress indicator that lies teaches people to
+    ignore progress indicators: every call reports a fraction in 0..1, and the
+    last one is exactly 1.0 -- the bar reaches the end when the work is done,
+    not before. And a listener that raises must not take the fill down: the
+    picture is the job, the bar is a courtesy.
+    """
+    img = _photo()
+    hole = _hole()
+
+    seen = []
+    out, _note = F.fill(img, hole, Settings().replace(fill="telea"),
+                        on_step=lambda label, done: seen.append((label, done)))
+    assert seen, "a fill that does work has to report at least once"
+    assert all(0.0 <= d <= 1.0 for _l, d in seen), seen
+    assert seen[-1][1] == 1.0, f"the last step must be 100%, got {seen[-1]}"
+    assert out.shape == img.shape
+
+    def angry(_label, _done):
+        raise RuntimeError("the listener is broken")
+
+    out2, _ = F.fill(img, hole, Settings().replace(fill="telea"), on_step=angry)
+    assert out2.shape == img.shape, "a broken listener must not stop the fill"
 
 
 def test_the_fill_touches_nothing_that_was_photographed():

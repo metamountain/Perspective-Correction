@@ -239,11 +239,12 @@ def build_parser():
                         "as a name (black, white, grey), #rrggbb, or r,g,b")
     g.add_argument("--fill", choices=["none", "telea", "lama", "comfyui"], default=Settings.fill,
                    help="generate the padded band instead of leaving it padded. "
-                        "'telea' needs nothing, 'lama' needs "
-                        "simple-lama-inpainting, 'comfyui' a running "
-                        "ComfyUI. Off by default: these pixels were never "
-                        "photographed, and only the padded band is ever touched. "
-                        "Each -j worker loads its own copy of the model")
+                        "'lama' is the default and needs simple-lama-inpainting; "
+                        "'telea' needs nothing but smears the edge inwards and "
+                        "costs MORE at full size; 'comfyui' needs a running "
+                        "ComfyUI. '--fill none' keeps the pad. Only the padded "
+                        "band is ever touched -- these pixels were never "
+                        "photographed. Each -j worker loads its own copy of the model")
     g.add_argument("--fill-max-edge", type=int, default=Settings.fill_max_edge,
                    help="generate at this long edge and paste back at full "
                         "resolution; 0 generates at full size")

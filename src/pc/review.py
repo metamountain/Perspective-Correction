@@ -156,6 +156,13 @@ class ReviewSession:
         # test asset with a brushed quarter: wash 25.0%, pitch +0.0369, 73 of 76
         # lines, byte for byte identical with the box ticked and unticked.
         self.mask_enabled = True
+        # Who to tell while a fill is working: ``on_fill_step(label, done)``,
+        # set by the window, None under the CLI. An attribute rather than a
+        # parameter threaded through `render_after` -> `_fill_preview`, because
+        # it is the same kind of thing as `mask_alpha` and `show_mask` -- how
+        # this session is being LOOKED at, which the batch path has no opinion
+        # about.
+        self.on_fill_step = None
         self.refit()
 
     # -- detection -------------------------------------------------------
@@ -1270,26 +1277,43 @@ class ReviewSession:
         return out
 
     def _fill_preview(self, out, H_total, sw, sh, ow, oh):
-        """Fill the band in the preview, for a backend cheap enough to redraw.
+        """Fill the band in the preview -- with the chosen backend, or a stand-in.
 
-        The save path fills unconditionally; this one does not, and the split is
-        about cost rather than correctness.  ``telea`` needs no model and costs
-        milliseconds at preview size, so a user who picks it sees what they are
-        choosing.  ``lama`` and ``comfyui`` load a model and take seconds -- per
-        slider tick that is unusable, so the preview keeps the pad and
-        ``status_text`` says the fill happens on save.
+        The save path fills unconditionally.  This one has a cost limit, and
+        the question is what to show while a slow backend is the chosen one.
+        It used to show the raw band: a grey pad where the saved file will have
+        picture, on every redraw, with only a line of status text to explain the
+        difference.  Now telea stands in (user, 2026-09-22).  It costs 38 ms at
+        ``PREVIEW_MAX_EDGE`` against lama's seconds, and it answers the question
+        the preview is actually being asked -- *how much is being invented, and
+        where* -- which is a question about the HOLE, not about the backend.
+        It does not answer *what will it look like*; ``status_text`` says which
+        backend is on screen and which one writes the file, so the stand-in is
+        never mistaken for the output.
+
+        ``live_fill_preview`` remains the way to see the real thing: then the
+        chosen backend runs here and each redraw waits for it, which is what
+        ticking that box asks for.
 
         Order matters and matches ``save()``: warp, then fill, then crop.  A
         refusal above ``--fill-max-share`` comes back as the un-filled band
         rather than an exception, because a preview is not the place to fail.
         """
         from . import inpaint as FILL
-        if not FILL.previews_live(self.settings):
+        mode = getattr(self.settings, "fill", "none")
+        if mode in ("", "none"):
             return out
+        preview = self.settings.replace(fill_max_edge=FILL.PREVIEW_MAX_EDGE)
+        if not FILL.previews_live(self.settings):
+            preview = preview.replace(fill=FILL.PREVIEW_STANDIN)
+        # A stand-in is 38 ms and wants no indicator; the real backend on the
+        # live path is seconds and does. Only the slow case gets the listener,
+        # so a slider tick does not flash a bar at every redraw.
+        step = (getattr(self, "on_fill_step", None)
+                if preview.fill not in FILL.LIVE_MODES else None)
         try:
             hole = W.filled_region(H_total, sw, sh, ow, oh)
-            preview = self.settings.replace(fill_max_edge=FILL.PREVIEW_MAX_EDGE)
-            filled, _note = FILL.fill(out, hole, preview)
+            filled, _note = FILL.fill(out, hole, preview, on_step=step)
             return filled
         except FILL.FillUnavailable:
             return out
@@ -1389,8 +1413,13 @@ class ReviewSession:
                              + (" -- live preview on, each redraw waits for it"
                                 if slow else ""))
             else:
-                parts.append(f"fill: {fill_mode} -- runs on save; tick 'live "
-                             f"fill preview' to see it here")
+                # Name BOTH backends. The preview is filled either way now, so
+                # "runs on save" alone would read as a promise that what is on
+                # screen is what gets written -- and it is not: the band you
+                # see was drawn by the stand-in.
+                parts.append(f"fill: {fill_mode} on save -- the band shown here "
+                             f"is {FILL.PREVIEW_STANDIN}, standing in for it; "
+                             f"tick 'live' to preview {fill_mode} itself")
         # The preview no longer cuts the crop out -- it shades it -- so the
         # crop has to be stated.  A rectangle that only exists as a dimmed area
         # on screen is exactly the kind of thing that gets forgotten before the
@@ -1602,7 +1631,12 @@ class ReviewSession:
             from . import inpaint as FILL
             hole = W.filled_region(H_total, self.w, self.h, ow, oh)
             _stage("fill:" + str(save_settings.fill), mpx)
-            out, _note = FILL.fill(out, hole, save_settings)
+            # The fill is the whole of the wait on a save -- 3 to 13 s against
+            # 30 ms for the warp -- so it is the one stage worth a bar rather
+            # than a sentence. `on_fill_step` is the same listener the live
+            # preview uses, so both paths show one indicator, not two.
+            out, _note = FILL.fill(out, hole, save_settings,
+                                   on_step=getattr(self, "on_fill_step", None))
         out = self._apply_crop(out)
         _stage("writing", mpx)
         os.makedirs(os.path.dirname(dst_path) or ".", exist_ok=True)

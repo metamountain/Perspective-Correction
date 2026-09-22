@@ -711,7 +711,11 @@ def test_single_image_save_runs_the_fill_when_a_mode_is_set():
     s.set_manual(roll_deg=-3.0, pitch_deg=9.0, focal_35mm=24.0)   # a real correction
 
     calls = {}
-    def fake_fill(img, hole, settings):
+    # The stub takes `on_step` because the real `fill` does. A stub with a
+    # narrower signature than the thing it replaces passes until the real one
+    # grows an argument, and then fails inside the code under test rather than
+    # here -- which is what happened when the loader bar was added.
+    def fake_fill(img, hole, settings, on_step=None):
         calls["hole"] = hole
         return img.copy(), "stub"
     orig = FILL.fill
@@ -760,7 +764,7 @@ def test_single_image_save_does_not_load_a_backend_when_fill_is_off():
     assert s.settings.fill == "none"
 
     called = {}
-    def fake_fill(img, hole, settings):
+    def fake_fill(img, hole, settings, on_step=None):
         called["yes"] = True
         return img.copy(), "stub"
     orig = FILL.fill
