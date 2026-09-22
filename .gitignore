@@ -79,3 +79,51 @@ hpc_save/
 # suite reads them. 15 MB of output reproducible from one command does not
 # belong in history -- run the generator instead.
 tests/assets/Synthetic/
+
+# Test photographs: 22 of them are TRACKED, the rest stay on the machine
+# that collected them (user, 2026-09-22: "es reichen die 10 groessten...
+# rest der bilder kann lokal bleiben").
+#
+# 46.3 MB in 101 files became 5.4 MB in 22. What is kept is not the
+# largest -- those are 29.2 MB and include almost nothing any test names.
+# It is: every file a test or tool opens BY NAME, the two `_ALWAYS`
+# patterns `test_assets._sample` refuses to drop, four more so the pool
+# sweeps still see a cross-section of real photographs (four container
+# formats and one non-ASCII filename, which is the `_imread_unicode`
+# path), and the cached mask beside each one.
+#
+# Checked by running the whole suite against a stripped clone, not by
+# grepping: `test_assets:375` finds its photograph by SUBSTRING
+# ("hospital"), so no search for a filename would have pointed at it, and
+# dropping it turned a test that pins a real measurement into a silent
+# skip. The stripped clone reports 350 passed, 2 skipped -- the same as a
+# full one, and those two skips are older than this change.
+#
+# To track another: add a `!` line here. Everything else in the folder
+# still works locally -- the sweeps simply see more here than CI does.
+tests/assets/**
+!tests/assets/Horizontal/
+!tests/assets/masks/
+!tests/assets/sam2_masks/
+!tests/assets/1070912stkzg.jpg
+!tests/assets/39079116-ein-augenmerk-muessen-immobilienbesitzer-auf-die-fassaden-inklusive-der-werbung-daran-legen-wie-hier-an-der-muenzstrasse-3Rec.jpg
+!tests/assets/79cb33878fd0ed76d368e7cfa8827e15.jpg
+!tests/assets/Alte_Scheune.jpg
+!tests/assets/Horizontal/Mariánské_Hory,_panelové_domy_4.jpg
+!tests/assets/Horizontal/Platte_1.jpg
+!tests/assets/Horizontal/ultra-weitwinkelfassade-von-antibesrathaus-alias-hotel-de-ville-121561796.webp
+!tests/assets/README.md
+!tests/assets/Z6TgJJbqstJ9-T43_168_6869_r1.avif
+!tests/assets/cedric-vilim-branding-bucerius-kunst-forum-34-eroeffnungskampagne-rathausmarkt.webp
+!tests/assets/hospital-nikon-d60_f27.jpg
+!tests/assets/lochfassade.jpg
+!tests/assets/masks/1070912stkzg.png
+!tests/assets/masks/39079116-ein-augenmerk-muessen-immobilienbesitzer-auf-die-fassaden-inklusive-der-werbung-daran-legen-wie-hier-an-der-muenzstrasse-3Rec.png
+!tests/assets/masks/79cb33878fd0ed76d368e7cfa8827e15.png
+!tests/assets/masks/Alte_Scheune.png
+!tests/assets/masks/README.md
+!tests/assets/masks/cedric-vilim-branding-bucerius-kunst-forum-34-eroeffnungskampagne-rathausmarkt.png
+!tests/assets/masks/hospital-nikon-d60_f27.png
+!tests/assets/masks/lochfassade.png
+!tests/assets/roi.json
+!tests/assets/sam2_masks/1070912stkzg.png
