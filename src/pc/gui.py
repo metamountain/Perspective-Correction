@@ -928,6 +928,9 @@ class ReviewPanel(tk.Frame):
 
     def load(self, path, settings, dest_path, overwrite=False, on_saved=None,
              on_closed=None, position=""):
+        # Before the old session goes: each tool leaves by its own handler, and
+        # those handlers clean up against the picture the work belongs to.
+        self._put_down_tools()
         self.settings = settings
         self.dest_path = dest_path
         self.on_saved = on_saved
@@ -957,6 +960,7 @@ class ReviewPanel(tk.Frame):
         self.v_overwrite.set(bool(overwrite))
         self._refresh_file_names()
         self.v_alpha.set(self.session.mask_alpha)
+        self.session.on_fill_step = self._fill_step
         self._show_mask_state()
         # Small correction, small band: take the crop rather than leave a band
         # that would otherwise need a generative model to fill.  Visible, shaded
@@ -1361,13 +1365,16 @@ class ReviewPanel(tk.Frame):
         _lf.grid(row=0, column=2, sticky="w")
         _attach_tooltip(
             _lf,
-            "Run the fill in the preview as well as on save.\n"
-            "telea is instant; lama costs about a second per redraw\n"
-            "(measured at preview size), which is fine once and\n"
-            "unusable while a slider moves. Off by default.")
+            "Preview the fill you CHOSE, instead of the telea stand-in.\n"
+            "The band is always filled here -- telea draws it in 38 ms\n"
+            "so you can see how much is being invented. Tick this to\n"
+            "see what lama will actually put there: about a second per\n"
+            "redraw (measured at preview size), fine once and unusable\n"
+            "while a slider moves. Off by default.")
         # The pad colour picker, its swatch and the "edge" button left this row
         # (2026-09-14, user). `pad` only shows through when the fill is off, and
-        # the fill defaults to `telea`, so three controls were competing for
+        # the fill defaults to a backend rather than to `none`, so three controls
+        # were competing for
         # width in the busiest row in the window to set something almost nobody
         # ever sees. `--pad` and `Settings.pad` are untouched -- the setting is
         # still there for anyone who runs with `--fill none`, it simply has no
@@ -2123,6 +2130,33 @@ class ReviewPanel(tk.Frame):
                    ("v_stroke", "_on_stroke_toggle"),
                    ("v_sam", "_on_sam_toggle"))
 
+    def _put_down_tools(self):
+        """Put every drawing tool down.  For a new photograph (user, 2026-09-22).
+
+        A tool is a statement about the picture in front of you -- "I am placing
+        corners on this facade" -- and the next photograph is a different
+        facade.  The palette is built once and its variables outlive the
+        session, so the rectangle tool stayed armed across a load: measured,
+        `v_rect` True before and after, which means the button still looked
+        pressed, the loupe was still up, and the first click on the new picture
+        placed a corner nobody asked for.
+
+        Through `_exclusive`, so each tool leaves by its own handler -- a half
+        drawn polygon, a pointer grab and a dangling first point all get
+        cleaned up rather than stranded behind a cleared flag.
+
+        The facade strip is put down here too, though it is not in
+        `_TOOL_MODES`: that registry is about which tool wins a CLICK, and the
+        strip takes no clicks.  It is still a statement about one facade in one
+        photograph, and a fresh session starts with `strip = None` regardless,
+        so leaving its button lit would show an armed ruler over a session that
+        has no strip.
+        """
+        self._exclusive(keep=None)
+        v = getattr(self, "v_strip", None)
+        if v is not None and v.get():
+            v.set(False)
+
     def _exclusive(self, keep):
         """Put down every tool except ``keep``.
 
@@ -2347,6 +2381,61 @@ class ReviewPanel(tk.Frame):
         except tk.TclError:
             pass
 
+    # The loader bar: a hairline at the right edge of the AFTER pane, filling
+    # upward.  Four px wide, inset from the frame, drawn straight onto the
+    # canvas rather than as a widget -- Canvas has no alpha and no gradient, so
+    # two flat rectangles in the palette's own `line` and `text` is the whole
+    # thing, and it recolours with the theme because both are read at draw time.
+    _BAR_W = 4
+    _BAR_PAD = 12
+
+    def _bar_show(self, done, label=""):
+        """Fill the loader to ``done`` (0..1) and repaint it now.
+
+        Positions come from `inpaint.fill`'s step callback, which fires when a
+        piece of work has FINISHED.  Nothing interpolates between them: the bar
+        sits still while the model loads and jumps when it is loaded, because
+        that is the truth about where the time went.  `update_idletasks` is
+        what makes it visible at all -- the fill runs on this thread, so the
+        only chance to paint is inside the callback.
+        """
+        c = getattr(self, "c_after", None)
+        if c is None:
+            return
+        try:
+            w, h = c.winfo_width(), c.winfo_height()
+            if min(w, h) < 40:
+                return
+            x1 = w - self._BAR_PAD
+            x0 = x1 - self._BAR_W
+            y0, y1 = self._BAR_PAD, h - self._BAR_PAD
+            c.delete("loadbar")
+            c.create_rectangle(x0, y0, x1, y1, outline="", fill=INK["line"],
+                               tags="loadbar")
+            frac = min(max(float(done), 0.0), 1.0)
+            top = y1 - (y1 - y0) * frac
+            if y1 - top >= 1:
+                c.create_rectangle(x0, top, x1, y1, outline="",
+                                   fill=INK["text"], tags="loadbar")
+            c.tag_raise("loadbar")
+            self.update_idletasks()
+        except tk.TclError:
+            pass
+
+    def _bar_hide(self):
+        c = getattr(self, "c_after", None)
+        if c is None:
+            return
+        try:
+            c.delete("loadbar")
+        except tk.TclError:
+            pass
+
+    def _fill_step(self, label, done):
+        """`inpaint.fill`'s step callback: move the bar, say the step."""
+        self._bar_show(done, label)
+        self._wait_show(f"{label}  --  {int(round(done * 100)):d}%")
+
     def _wait_stage(self, name, mpx=0.0):
         """Callback for a long job: name the stage and estimate what is left."""
         from . import progress as PR
@@ -2357,6 +2446,7 @@ class ReviewPanel(tk.Frame):
         self._wait_show(f"{label}{'  --  ' + eta if eta else ''}")
 
     def _wait_hide(self):
+        self._bar_hide()
         w = getattr(self, "_wait", None)
         if w is not None:
             try:
@@ -4793,9 +4883,11 @@ class App(_ROOT_CLASS):
         _b = ttk.Button(opt, text="mask source...", command=self._pick_mask_source)
         _b.grid(row=0, column=9, sticky="w", padx=(6, 0))
         _attach_tooltip(_b, "Choose the folder containing mask PNG files (one per image)")
-        # Generating the band a rotation opens up is off by default and says so
-        # when it cannot run: a batch that quietly writes padded frames because
-        # the backend was missing is the silent failure this tool avoids.
+        # Generating the band a rotation opens up is ON by default (lama, user
+        # 2026-09-22) and says so when it cannot run: a batch that quietly
+        # writes padded frames because the backend was missing is the silent
+        # failure this tool avoids. This comment said "off by default" while
+        # config.py had read `fill = "telea"` for a long time.
         ttk.Label(opt, text="fill gaps").grid(row=1, column=7, sticky="e", padx=4)
         self.v_fill = tk.StringVar(value=Settings.fill)
         fbox = ttk.Combobox(opt, textvariable=self.v_fill,

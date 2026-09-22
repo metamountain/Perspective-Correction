@@ -178,11 +178,26 @@ class Settings:
     pad: str = "edge"                   # edge | black | white | #rrggbb | r,g,b
     # What to do with the band the rotation opens up, once padding has put
     # something there.  "none" keeps the pad; the rest put pixels there that
-    # the camera never saw.  The default is "telea" -- the only one of the
-    # three that needs no model, no download and no network, and is the same
-    # every run.  It is still invention: see the fill section of CLAUDE.md for
-    # why that is defensible here and why "none" is one flag away.
-    fill: str = "telea"                 # none | telea | lama | comfyui
+    # the camera never saw.
+    #
+    # The default is "lama" (user, 2026-09-22).  It was "telea", chosen for
+    # needing no model, no download and no network -- an argument about
+    # INSTALLING it rather than about the result.  Two measurements moved the
+    # choice: on a 108 MPx canvas telea costs 13.1 s against lama's 4.5 s,
+    # because telea works on the real hole and grows with it while lama
+    # generates at `fill_max_edge` and pastes back; and what telea puts in a
+    # facade band is smeared edge colour.  The slower one was winning on a cost
+    # it does not have.  `deps` reports a missing simple-lama-inpainting, and a
+    # backend that cannot run is an error for that image, never a silent
+    # fall-back -- so the heavier default cannot quietly write padded frames.
+    #
+    # The PREVIEW still shows telea -- `inpaint.PREVIEW_STANDIN` -- because at
+    # preview size it is 38 ms, and what a preview is asked is how much of the
+    # frame is invented and where, not what the invention will look like.
+    #
+    # It is still invention: see the fill section of CLAUDE.md for why that is
+    # defensible here and why "none" is one flag away.
+    fill: str = "lama"                  # none | telea | lama | comfyui
     fill_max_edge: int = 2048           # generate at this size, paste back full res
     # Let the SLOW fills into the preview too. Off by default and deliberately
     # a switch rather than a mode list: measured on Platte_1 at preview size,

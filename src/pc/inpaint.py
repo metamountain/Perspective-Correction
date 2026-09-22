@@ -12,7 +12,10 @@ Read that sentence against the first line of CLAUDE.md.  The metric here is how
 many photographs the tool ruins, and a generated band is, by construction,
 content the camera never saw.  So:
 
-* the default is `none`, and it stays `none`;
+* nothing is generated unless a fill is CHOSEN, and `none` is one flag away.
+  This said "the default is `none`, and it stays `none`" while `config.py` had
+  read `fill = "telea"` for a long time -- a rule the code had already stopped
+  keeping, in the one file whose job is to state the rule;
 * the fill only ever touches pixels `warp.filled_region` marks as having no
   source behind them -- never a pixel that came off the sensor;
 * a backend that is missing, or a ComfyUI that is not running, is an **error
@@ -64,6 +67,14 @@ MODES = ("none", "telea", "lama", "comfyui")
 # learned backends load a model and take seconds.  A user choosing a fill should
 # see it happen; a user dragging a slider should not wait for a model.
 LIVE_MODES = ("telea",)
+
+# What the preview shows INSTEAD when the chosen backend is not one of those.
+# The same member of LIVE_MODES, used as a stand-in rather than as a choice:
+# it costs 38 ms at PREVIEW_MAX_EDGE, and it answers what a preview is really
+# asked -- how much of this frame is invented, and where -- which is a question
+# about the hole and not about the backend. `review._fill_preview` says the
+# rest, and `status_text` names both backends so the two are never confused.
+PREVIEW_STANDIN = "telea"
 
 
 def previews_live(settings) -> bool:
@@ -228,12 +239,30 @@ def _lama_model(device: str = ""):
         return _LAMA
 
 
-def _fill_lama(bgr: np.ndarray, hole: np.ndarray, settings) -> np.ndarray:
+def _fill_lama(bgr: np.ndarray, hole: np.ndarray, settings, step=None) -> np.ndarray:
+    """Four pieces of work, and `step` is called as each one finishes.
+
+    They are wildly uneven and that is the point: loading the model is seconds
+    on the first fill of a session and free on every one after, because
+    `_lama_model` caches it. The fractions below are where the *time* goes on a
+    first run -- measured 3.5 s of the cost model's base against 0.008 s per
+    megapixel of generate -- so a bar driven by them moves once, slowly, and
+    then finishes. That is what actually happens.
+    """
     from PIL import Image
+
+    def mark(label, done):
+        if step is not None:
+            step(label, done)
+
+    mark("loading LaMa", 0.0)
     model = _lama_model(getattr(settings, "fill_device", ""))
+    mark("preparing the band", 0.55)
     small, m = _prepare(bgr, hole, int(getattr(settings, "fill_max_edge", 2048)))
     img = Image.fromarray(cv2.cvtColor(small, cv2.COLOR_BGR2RGB))
+    mark("generating", 0.65)
     out = model(img, Image.fromarray(m))
+    mark("pasting it back", 0.90)
     gen = cv2.cvtColor(np.array(out.convert("RGB")), cv2.COLOR_RGB2BGR)
     if gen.shape[:2] != small.shape[:2]:      # LaMa pads to a multiple of 8
         gen = gen[:small.shape[0], :small.shape[1]]
@@ -669,11 +698,18 @@ def _fill_comfy(bgr: np.ndarray, hole: np.ndarray, settings) -> np.ndarray:
 # --------------------------------------------------------------------------
 # the seam
 # --------------------------------------------------------------------------
-def fill(bgr: np.ndarray, hole: np.ndarray, settings) -> tuple:
+def fill(bgr: np.ndarray, hole: np.ndarray, settings, on_step=None) -> tuple:
     """``(image, note)``.  Raises ``FillUnavailable`` rather than falling back.
 
     ``hole`` is ``warp.filled_region``: True where the output has no source
     pixel behind it.  Nothing else is ever modified.
+
+    ``on_step(label, done)`` is called as each real piece of work FINISHES,
+    with ``done`` in 0..1.  Each call therefore marks something that has
+    actually happened -- the model is loaded, the tiles are generated -- rather
+    than a timer pretending to know the future.  There is no interpolation
+    between the steps and there is not meant to be: a bar that slides on a
+    guess is the thing this project's wait indicator already refuses to be.
     """
     mode = getattr(settings, "fill", "none")
     if mode in ("", "none"):
@@ -694,13 +730,26 @@ def fill(bgr: np.ndarray, hole: np.ndarray, settings) -> tuple:
         note = (f"fill skipped — hole is {share:.0%} of the frame "
                 f"(over --fill-max-share {cap:.0%}); consider cropping first")
         return bgr, note
+    def step(label, done):
+        """Report a finished piece of work; a broken listener must not stop a fill."""
+        if on_step is None:
+            return
+        try:
+            on_step(label, float(done))
+        except Exception:
+            pass
+
     t0 = time.time()
     if mode == "telea":
+        # One indivisible OpenCV call: there is no honest midpoint to report.
+        step("filling the band", 0.0)
         out = _fill_telea(bgr, hole, settings)
     elif mode == "lama":
-        out = _fill_lama(bgr, hole, settings)
+        out = _fill_lama(bgr, hole, settings, step)
     else:
+        step("asking ComfyUI", 0.0)
         out = _fill_comfy(bgr, hole, settings)
+    step("filled", 1.0)
     return out, f"{mode} filled {share:.1%} in {time.time() - t0:.1f}s"
 
 
