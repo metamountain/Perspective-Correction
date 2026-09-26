@@ -643,6 +643,25 @@ features ahead of everything else.*
   per facade from the segments.
 - **Open, noticed on the way**: the CLI does not bound output size like the
   review save does (`keep_size=True` only in `ReviewSession.save`).
+- **`tools/drive_review.py` — remote control of the REAL window.** Opens the
+  actual `App` off-screen with the user's remembered settings, loads each
+  photograph into the review panel, presses horizontal auto / facade strip /
+  Auto crop / Save and writes `debug_out/<stem>_corr.jpg` + `summary.csv`
+  (dialogs are recorded, not shown). This is how HA results are checked now —
+  not hand-rebuilt pipelines (user: "idiotische Tests"). Verified identical
+  angles against the CLI on five photographs.
+- **Auto crop fixed ("freaked")**: it searched the source-aspect rectangle in
+  the whole warped quad and clamped afterwards — a 10%-wide sliver on a strip,
+  the bottom-right quarter of csm_klassik. Now clipped to the canvas, with a
+  strip to strip +20%, and free aspect once a yaw is in play (`max_free_rect`).
+- **Save no longer copies the original silently when the plan fails** — it
+  raises with the reason (Mariánské Hory at yaw 60: the warp folds past the
+  vanishing line, quad ~500x source).
+- **M-LSD reads exact verticals as −0.62°** (synthetic grid; LSD 0.001°),
+  horizontals fine. The correction log therefore keeps both segment sets and
+  reports LSD, length-weighted (a plain median of four segments once read a
+  level facade as 13.8°). Anything else that trusts M-LSD verticals — the
+  check-lines cyan pass, `--detector mlsd` — inherits that bias; not fixed.
 
 - **[feature, user-directed] Auto-crop now respects the facade strip, bounded
   to strip + 20%.** User's request: "wenn ROI aktiv ist sollte das der auto

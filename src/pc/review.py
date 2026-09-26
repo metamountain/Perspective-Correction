@@ -538,7 +538,24 @@ class ReviewSession:
             return False
         H_total, ow, oh, _, _ = planned
         quad = W.warped_quad(H_total, self.w, self.h)
-        rect = W.max_inscribed_rect(quad, self.w / float(self.h))
+        # Search only where a crop can land (2026-09-26, user-caught "auto
+        # crop freaked"): the canvas, and with a facade strip placed, the
+        # strip + 20% -- the same band `plan` bounds itself to. Searching the
+        # whole quad and clamping afterwards returned a rectangle that fitted
+        # the quad somewhere off-canvas and was then cut to a sliver.
+        region = W.clip_to_box(quad, 0.0, 0.0, float(ow), float(oh))
+        yawed = abs(yaw) > 1e-9
+        if self.strip is not None and yawed and len(region) >= 3:
+            band = W._strip_band(H_total, quad, self.strip, self.w, self.h)
+            if band is not None:
+                region = W._clip_quad_to_x_band(region, band[0], band[1])
+        if len(region) < 3:
+            return False
+        # Free aspect once a yaw is in play: the output's proportions are not
+        # the photograph's any more, and the source aspect on a steep
+        # trapezoid parks the rectangle in its tallest corner.
+        rect = (W.max_free_rect(region) if yawed
+                else W.max_inscribed_rect(region, self.w / float(self.h)))
         if rect is None:
             return False
         x0, y0, x1, y1 = (float(t) for t in rect)
@@ -1678,8 +1695,16 @@ class ReviewSession:
         planned = W.plan(self.w, self.h, H, save_settings, line_segs=_segs, yaw=yaw,
                          strip=self.strip)
         if planned is None:
-            IO.copy_through(self.path, dst_path)
-            return dst_path
+            # Was a silent copy of the ORIGINAL (found 2026-09-26 by driving
+            # the real window over the Horizontal pool): Save "succeeded" and
+            # wrote an uncorrected file. `plan` gives up when the warp folds --
+            # at a large yaw part of the frame lies past the vanishing line
+            # (Mariánské Hory at 60 deg: quad ~500x the source). Not trimmed
+            # to a safe yaw either: that would be a damping. Say so instead.
+            raise ValueError(
+                f"This correction cannot be drawn: at yaw {math.degrees(yaw):.1f} deg "
+                f"the photograph folds past its vanishing line. Lower the yaw, "
+                f"or place the facade strip on one wall.")
         H_total, ow, oh, _, _ = planned
         mpx = ow * oh / 1e6
         _stage("warping", mpx)
@@ -1728,12 +1753,12 @@ class ReviewSession:
                      else {"n_lines": 0, "yaw_deg": None, "support": 0.0})
             # M-LSD segments of both images, user-directed 2026-09-26: the
             # sidecar holds every segment, the record only the summary.
-            lines_before = CLOG.line_record(self.bgr, settings)
-            lines_after = (CLOG.line_record(out_bgr, settings) if out_bgr is not None
+            lines_before = CLOG.line_records(self.bgr, settings)
+            lines_after = (CLOG.line_records(out_bgr, settings) if out_bgr is not None
                            else None)
-            before["lines"] = {k: v for k, v in lines_before.items() if k != "segments"}
+            before["lines"] = CLOG.line_summary(lines_before)
             if lines_after is not None:
-                after["lines"] = {k: v for k, v in lines_after.items() if k != "segments"}
+                after["lines"] = CLOG.line_summary(lines_after)
             result = SimpleNamespace(
                 src=self.path, status="OK",
                 roll_deg=math.degrees(roll), pitch_deg=math.degrees(pitch),

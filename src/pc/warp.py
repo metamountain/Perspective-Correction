@@ -372,6 +372,45 @@ def _clip_quad_to_x_band(quad, x0, x1):
     return clip(poly, lambda x, b: x <= b, x1)
 
 
+def clip_to_box(poly, x0, y0, x1, y1):
+    """Clip a convex polygon to the axis-aligned box ``[x0,x1] x [y0,y1]``."""
+    p = _clip_quad_to_x_band(poly, x0, x1)
+    if len(p) < 3:
+        return p
+    p = _clip_quad_to_x_band(np.asarray(p)[:, ::-1], y0, y1)
+    return np.asarray(p)[:, ::-1] if len(p) else p
+
+
+def max_free_rect(poly, lo: float = 0.15, hi: float = 6.0):
+    """Largest axis-aligned rectangle of ANY aspect inside a convex polygon.
+
+    After a yaw correction the output's proportions are no longer the
+    photograph's (the rotation and `yaw_x_scale` both change them), so
+    forcing the source aspect onto a steep trapezoid parks the rectangle in
+    whichever corner is tallest -- a 10%-wide sliver on a facade strip, or
+    the bottom-right quarter of a whole corner view (measured 2026-09-26 on
+    altbau.jpeg / csm_klassik.jpg). A coarse log sweep over aspect, then a
+    fine one around the winner; each step is the exact solver.
+    """
+    def best_of(aspects):
+        best, area = None, 0.0
+        for a in aspects:
+            r = max_inscribed_rect(poly, float(a))
+            if r is None:
+                continue
+            ar = (r[2] - r[0]) * (r[3] - r[1])
+            if ar > area:
+                best, area = (r, float(a)), ar
+        return best
+    coarse = np.geomspace(lo, hi, 60)
+    got = best_of(coarse)
+    if got is None:
+        return None
+    step = coarse[1] / coarse[0]
+    fine = best_of(np.geomspace(got[1] / step, got[1] * step, 21))
+    return (fine or got)[0]
+
+
 def _strip_bounded_rect(quad, H, strip, img_w, img_h, aspect):
     """The largest ``aspect`` rectangle inside the strip band, or ``None``.
 

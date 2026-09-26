@@ -128,3 +128,6 @@ tests/assets/**
 !tests/assets/masks/lochfassade.png
 !tests/assets/roi.json
 !tests/assets/sam2_masks/1070912stkzg.png
+
+# tools/drive_review.py output
+debug_out/

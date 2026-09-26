@@ -396,8 +396,8 @@ def _hpc_save(results, settings, log):
         try:
             src_loaded = io.load(r.src)
             before = measure_horizontals(src_loaded.bgr, settings, _focal_px(r))
-            lines_before = CLOG.line_record(src_loaded.bgr, settings)
-            before["lines"] = {k: v for k, v in lines_before.items() if k != "segments"}
+            lines_before = CLOG.line_records(src_loaded.bgr, settings)
+            before["lines"] = CLOG.line_summary(lines_before)
         except Exception:
             before = {"n_lines": 0, "yaw_deg": None, "support": 0.0}
         # after: re-measure on the output
@@ -407,8 +407,8 @@ def _hpc_save(results, settings, log):
             if out_bgr is None:
                 raise ValueError("unreadable")
             after = measure_horizontals(out_bgr, settings, _focal_px(r))
-            lines_after = CLOG.line_record(out_bgr, settings)
-            after["lines"] = {k: v for k, v in lines_after.items() if k != "segments"}
+            lines_after = CLOG.line_records(out_bgr, settings)
+            after["lines"] = CLOG.line_summary(lines_after)
         except Exception:
             after = {"n_lines": 0, "yaw_deg": None, "support": 0.0}
         rec = CLOG.build_record(r, before, after, __version__)
