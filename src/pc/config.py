@@ -85,6 +85,11 @@ class Settings:
     # person reviewing, full correction is the default. Kept as a setting
     # (and --uncertain-damping) so the old behaviour is one flag away.
     uncertain_pitch_damping: float = 1.0
+    # Half-normal sigma (deg) of the camera tilt a photographer plausibly used.
+    # Only consulted when no EXIF/manual focal exists: it then shares the
+    # focal decision with the 28 mm default (model._tilt_prior_focal), so an
+    # ultra-wide shot is not forced to a 50 deg tilt. 0 = off.
+    tilt_prior_deg: float = 15.0
     refine: bool = True                 # joint (roll, pitch, f) refinement
 
     # ---- correction ----

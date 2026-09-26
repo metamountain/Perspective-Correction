@@ -156,3 +156,24 @@ def test_yaw_is_gated_on_horizontal_support():
     m, _, _, _, _ = analyse(sc.img, Settings().replace(
         correct_horizontal=True, focal_35mm=28, min_horizontal_support=1.01))
     assert m.yaw == 0.0
+
+
+def test_the_tilt_prior_trades_an_implausible_tilt_for_a_wider_lens():
+    """Without EXIF one vertical vanishing point fixes only f : tilt. The
+    Antibes facade (2026-09-26) needed 50 deg of tilt at the 28 mm default --
+    past the cap -- and straightened cleanly at ~12 mm. The tilt prior must
+    slide such a case toward a wider lens, and leave a moderate tilt alone."""
+    from pc import geometry as G
+    from pc import model as M
+    w, h = 1200, 1800
+    cx, cy = w / 2.0, h / 2.0
+    f28 = M.focal_px_from_35mm(28.0, w, h)
+    for tilt, must_move in ((50.0, True), (8.0, False)):
+        up = G.up_from_roll_pitch(0.0, math.radians(tilt))
+        vp = G.intrinsics(f28, cx, cy) @ up
+        f = M._tilt_prior_focal(vp, f28, 0.60, cx, cy, 15.0)
+        _, pitch = G.roll_pitch_from_up(G.up_vector(vp, G.intrinsics(f, cx, cy)))
+        if must_move:
+            assert f < 0.7 * f28 and abs(math.degrees(pitch)) < 30.0, (f, math.degrees(pitch))
+        else:
+            assert abs(math.log(f / f28)) < 0.35, f

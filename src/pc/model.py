@@ -231,7 +231,96 @@ def _focal_sensitivity(vp_vert, horiz_hyps, cx, cy, f0, lo, hi, probe_deg=0.5):
             out.append(float(np.median(vals)))
     if not out:
         return 1.0
-    return float(np.max(np.abs(np.log(np.asarray(out) / f0))))
+    s_z = float(np.max(np.abs(np.log(np.asarray(out) / f0))))
+    return max(s_z, _horizontal_sensitivity(vp_vert, horiz_hyps, cx, cy, f0, lo, hi,
+                                            probe_deg))
+
+
+def _horizontal_sensitivity(vp_vert, horiz_hyps, cx, cy, f0, lo, hi, probe_deg=0.5):
+    """The same probe, applied to the HORIZONTAL vanishing points.
+
+    Added 2026-09-26: only ``v_z`` was ever wobbled, and on a frontal facade
+    the horizontal vanishing point is the ill-conditioned one -- the
+    horizontals are nearly parallel, the point sits tens of thousands of
+    pixels out, and ``f**2 = -(v_z - c).(v_h - c)`` becomes the product of a
+    tiny and a huge number. Measured on the ultra-wide Antibes facade: the
+    estimator reported 37 mm at sigma 0.26 (i.e. "measured") for a photograph
+    taken at about 12 mm, pushing the pitch to 50 deg. The wobble here is a
+    true angular one -- the bearing ``K^-1 v_h`` rotated by ``probe_deg`` -- and
+    a wobble that leaves no usable estimate at all makes the estimate
+    worthless (infinite sigma, so `_blend_focal` drops it), not a probe to
+    skip: losing the answer to half a degree is the strongest possible
+    evidence that it was never there. (A first version returned 1.0 there;
+    the Antibes facade then still blended to 37 mm on a number that did not
+    exist.)
+    """
+    if f0 <= 0 or not horiz_hyps:
+        return 0.0
+    K = G.intrinsics(f0, cx, cy)
+    Ki = np.linalg.inv(K)
+    d = math.radians(probe_deg)
+    bases = []
+    for hy in horiz_hyps:
+        b = Ki @ np.asarray(hy.vp, dtype=float)
+        n = np.linalg.norm(b)
+        if n < 1e-12:
+            continue
+        b = b / n
+        tmp = np.array([0.0, 1.0, 0.0]) if abs(b[1]) < 0.9 else np.array([1.0, 0.0, 0.0])
+        e1 = np.cross(b, tmp)
+        e1 /= max(np.linalg.norm(e1), 1e-12)
+        bases.append((b, e1, np.cross(b, e1)))
+    if not bases:
+        return 0.0
+    for k in range(4):
+        vals = []
+        for b, e1, e2 in bases:
+            pert = (e1, -e1, e2, -e2)[k]
+            vp = K @ (b * math.cos(d) + pert * math.sin(d))
+            f = G.focal_from_orthogonal(vp_vert, vp, cx, cy)
+            if f is not None and lo <= f <= hi:
+                vals.append(f)
+        if not vals:
+            return float("inf")
+    # Only the TOTAL loss is acted on. A graded version (the log spread of
+    # the four wobbled answers) was measured the same day and moved
+    # well-conditioned photographs for no shown gain: Struktur-Graubeige-2's
+    # confidence fell 0.50 -> 0.32 and altbau's focal 117 -> 112 mm, which
+    # would silently re-scale the HA results the user calibrated the x-
+    # compression against. The loss case is the only one that is certain.
+    return 0.0
+
+
+def _tilt_prior_focal(vp_vert, f_center, sigma_f, cx, cy, sigma_pitch_deg):
+    """Resolve the focal/tilt degeneracy with a prior on BOTH, not on f alone.
+
+    Without EXIF, and without a horizontal vanishing point that constrains it,
+    one vertical vanishing point fixes only the RATIO of focal length to tilt:
+    12 mm tilted 24 deg and 28 mm tilted 50 deg explain the same converging
+    lines, and either straightens them. Holding f at the 28 mm default then
+    picks whatever tilt that implies -- 50 deg on the ultra-wide Antibes
+    facade, past the 30 deg cap, so it is clamped and the verticals stay
+    converging (user, 2026-09-26: "geht HA wenn man Objektiv auf 12 mm
+    runterzieht, warum schafft es das Programm nicht automatisch?").
+
+    So walk the curve of equally good (f, pitch) pairs and take the most
+    plausible point: the focal prior (log-normal around the blended value,
+    its own sigma) times a tilt prior (half-normal, ``sigma_pitch_deg``). A
+    photograph with a moderate tilt barely moves; one that would need an
+    implausible tilt at 28 mm slides toward a wider lens instead.
+    """
+    if vp_vert is None or abs(vp_vert[2]) < 1e-12 or sigma_pitch_deg <= 0:
+        return f_center                 # parallel verticals: no tilt to trade
+    sp = math.radians(sigma_pitch_deg)
+    best_f, best_cost = f_center, None
+    for t in np.linspace(-3.0, 3.0, 241):
+        f = f_center * math.exp(t * sigma_f)
+        u = G.up_vector(vp_vert, G.intrinsics(f, cx, cy))
+        _, pitch = G.roll_pitch_from_up(u)
+        cost = 0.5 * t * t + 0.5 * (pitch / sp) ** 2
+        if best_cost is None or cost < best_cost:
+            best_f, best_cost = f, cost
+    return best_f
 
 
 def _combine(f1, s1, f2, s2):
@@ -377,6 +466,22 @@ def estimate(vert, horiz, w: int, h: int, settings, exif_focal_px=None,
                     f_quality * (0.5 + 0.5 * share), sigma_geo)
 
     _, hy, f_use, f_src, support, f_quality, sigma_geo = best
+    diag["focal_blend"] = {"prior_35mm": round(focal_35mm_from_px(f_prior, w, h), 1),
+                           "blended_35mm": round(focal_35mm_from_px(f_use, w, h), 1),
+                           "sigma_geo": (round(sigma_geo, 3) if math.isfinite(sigma_geo)
+                                         else None),
+                           "source": f_src}
+    # Nothing but the 28 mm default (plus at most a vague geometric hint)
+    # knows the focal length here, so let a tilt prior share the decision --
+    # see `_tilt_prior_focal`. EXIF and a hand-set focal are knowledge and are
+    # left alone.
+    if f_source == "default" and getattr(settings, "tilt_prior_deg", 0) > 0:
+        s_use = (f_sigma if not math.isfinite(sigma_geo)
+                 else 1.0 / math.sqrt(1.0 / f_sigma ** 2 + 1.0 / max(sigma_geo, 1e-3) ** 2))
+        f_tp = _tilt_prior_focal(hy.vp, f_use, s_use, cx, cy, settings.tilt_prior_deg)
+        if abs(math.log(f_tp / f_use)) > 0.02:
+            diag["focal_blend"]["tilt_prior_35mm"] = round(focal_35mm_from_px(f_tp, w, h), 1)
+            f_use, f_src = f_tp, "tilt prior"
     u = G.up_vector(hy.vp, G.intrinsics(f_use, cx, cy))
     roll, pitch = G.roll_pitch_from_up(u)
 
