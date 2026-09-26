@@ -263,8 +263,103 @@ def _in_strip(line_segs, strip, img_w):
     return line_segs[keep] if int(keep.sum()) >= 4 else line_segs
 
 
+STRIP_CROP_MARGIN = 0.20
+"""Margin left/right of the facade strip when it bounds an auto-crop.
+
+Distinct from ``settings.reframe_margin`` (0.30 by default) -- that is a
+different, general line-motif margin ``_whole_frame`` applies for a different
+reason (how much surrounding scene to keep around a detected facade box, not a
+hard user-drawn boundary). This is the number Ledger A.4 measured 2026-09-20:
+strip+20% beat strip+30% by 8x. Pinned to that finding, not the configurable
+dial, on purpose -- widening it would quietly re-import the worse ratio.
+"""
+
+
+def _strip_x_range_warped(H, strip, img_w, img_h):
+    """The facade strip's x-extent, warped into the same space as ``quad``.
+
+    ``strip`` is ORIGINAL-image-space fractions of width; ``quad`` (and the
+    rectangles ``inscribed_rect``/``max_inscribed_rect`` return) live in
+    WARPED/output space, which under a real yaw is not a scaled copy of the
+    original x-axis -- a large yaw can inflate the canvas to several times the
+    source width on one side and compress it on the other. Warping the strip's
+    four corners through ``H`` and taking the x-extent of the result is the
+    only way to compare the two honestly.
+    """
+    x0, x1 = float(min(strip)) * img_w, float(max(strip)) * img_w
+    corners = np.array([[x0, 0.0], [x0, float(img_h)],
+                        [x1, 0.0], [x1, float(img_h)]])
+    warped = G.apply_h(H, corners)
+    return float(warped[:, 0].min()), float(warped[:, 0].max())
+
+
+def _strip_band(H, quad, strip, img_w, img_h):
+    """The strip plus :data:`STRIP_CROP_MARGIN`, warped and clipped to ``quad``.
+
+    Returns ``(x0, x1)`` in warped space, or ``None`` when the strip is
+    degenerate or the band collapses. The clip mirrors ``_whole_frame``'s own
+    rule for its facade-box margin: the margin only ever eats into picture
+    that exists, never into the fill zones a warp opened up.
+    """
+    wx0, wx1 = _strip_x_range_warped(H, strip, img_w, img_h)
+    if wx1 <= wx0:
+        return None
+    margin = STRIP_CROP_MARGIN * (wx1 - wx0)
+    x0 = max(wx0 - margin, float(quad[:, 0].min()))
+    x1 = min(wx1 + margin, float(quad[:, 0].max()))
+    return (x0, x1) if x1 > x0 else None
+
+
+def _clip_quad_to_x_band(quad, x0, x1):
+    """Sutherland-Hodgman clip of the convex ``quad`` to ``x0 <= x <= x1``.
+
+    The result stays convex (an intersection of convex sets), so it is a
+    legal input to ``_inside``/``inscribed_rect``/``max_inscribed_rect``
+    unchanged -- clipping to a vertical band can only add at most two
+    vertices to a quadrilateral.
+    """
+    def clip(pts, keep, bound):
+        if len(pts) == 0:
+            return pts
+        out, n = [], len(pts)
+        for i in range(n):
+            cur, nxt = pts[i], pts[(i + 1) % n]
+            ci, ni = keep(cur[0], bound), keep(nxt[0], bound)
+            if ci:
+                out.append(cur)
+            if ci != ni:
+                t = (bound - cur[0]) / (nxt[0] - cur[0])
+                out.append(np.array([bound, cur[1] + t * (nxt[1] - cur[1])]))
+        return np.array(out)
+    poly = clip(np.asarray(quad, dtype=float), lambda x, b: x >= b, x0)
+    return clip(poly, lambda x, b: x <= b, x1)
+
+
+def _strip_bounded_rect(quad, H, strip, img_w, img_h, aspect):
+    """The largest ``aspect`` rectangle inside the strip band, or ``None``.
+
+    Deliberately :func:`max_inscribed_rect`, not :func:`inscribed_rect`: the
+    latter anchors on the original frame's mapped centre, which on a corner
+    view sits outside the user's chosen strip more often than not (that is
+    the whole reason strips exist) and the anchored search then degenerates
+    to a zero-area rectangle at that boundary. Once a strip has been placed,
+    the strip -- not the original centre -- is the composition intent.
+    """
+    band = _strip_band(H, quad, strip, img_w, img_h)
+    if band is None:
+        return None
+    clipped = _clip_quad_to_x_band(quad, band[0], band[1])
+    if len(clipped) < 3:
+        return None
+    rect = max_inscribed_rect(clipped, aspect)
+    if rect is None:
+        return None
+    rw, rh = rect[2] - rect[0], rect[3] - rect[1]
+    return rect if rw >= 8 and rh >= 8 else None
+
+
 def _whole_frame(H, quad, img_w, img_h, settings, area_ratio,
-                 line_segs: np.ndarray | None = None):
+                 line_segs: np.ndarray | None = None, strip=None):
     """The full warped quad on a canvas big enough to hold it.
 
     Nothing of the photograph is discarded; the corners the rotation opens up
@@ -277,12 +372,20 @@ def _whole_frame(H, quad, img_w, img_h, settings, area_ratio,
     inflates the facade (500px → 1200px); we scale the output back so the
     facade is ~the same size as in the source.  The output canvas is then
     sized to fit the scaled facade + margin, never smaller than source.
+
+    ``strip`` (already gated by the caller to "a strip was placed and a real
+    yaw fired") narrows the result to :data:`STRIP_CROP_MARGIN` around the
+    facade the user pointed at.  This is the path that actually matters for a
+    real horizontal-auto correction: ``crop="auto"`` falls back to here at
+    essentially every yaw large enough for a strip to matter, because the
+    coverage loss blows through ``crop_max_loss`` long before that.
     """
     x0, y0 = quad.min(axis=0)
     x1, y1 = quad.max(axis=0)
     ow, oh = int(round(x1 - x0)), int(round(y1 - y0))
     if ow < 8 or oh < 8:
         return None
+    band = _strip_band(H, quad, strip, img_w, img_h) if strip is not None else None
 
     # If we have line segments, crop to the facade bounding box + margin.
     # The front edge (nearest vertical building edge) keeps its source pixel
@@ -338,10 +441,22 @@ def _whole_frame(H, quad, img_w, img_h, settings, area_ratio,
             cy0 = max(y0, fy0 - my)
             cx1 = min(x1, fx1 + mx)
             cy1 = min(y1, fy1 + my)
+            # A facade strip narrows the x-range further: the user pointed at
+            # ONE facade, and the box above was built from every line in
+            # `line_segs` regardless of which facade it belongs to.
+            if band is not None:
+                cx0, cx1 = max(cx0, band[0]), min(cx1, band[1])
             ow_c, oh_c = int(round(cx1 - cx0)), int(round(cy1 - cy0))
 
-            # Never smaller than source (max quality: no reduction)
-            ow_c = max(ow_c, img_w)
+            # Never smaller than source (max quality: no reduction) --
+            # EXCEPT on the axis a strip band just restricted: the user asked
+            # for that facade specifically, and re-widening back to img_w
+            # would quietly re-admit the region the strip was meant to
+            # exclude (measured: the band is narrower than img_w in most
+            # corner-view/yaw combinations, so this is the common case once
+            # a strip is in play, not an edge case).
+            if band is None:
+                ow_c = max(ow_c, img_w)
             oh_c = max(oh_c, img_h)
 
             # Transform: translate to crop origin only (no scale-back)
@@ -354,7 +469,21 @@ def _whole_frame(H, quad, img_w, img_h, settings, area_ratio,
                 return S2 @ H_out, img_w, img_h, 1.0, area_ratio
             return H_out, ow_c, oh_c, 1.0, area_ratio
 
-    # Fallback: no line segments, use the full quad
+    # Fallback: no line segments -- use the full quad, or the strip band when
+    # one is active. This is the branch that matters most in practice: a real
+    # horizontal-auto yaw blows through `crop_max_loss` and lands here even
+    # without any detected lines to build a facade box from, and until now it
+    # had no way to know which facade the user meant.
+    if band is not None:
+        bx0, bx1 = band
+        ow_b = int(round(bx1 - bx0))
+        if ow_b >= 8:
+            T = np.array([[1, 0, -bx0], [0, 1, -y0], [0, 0, 1]], dtype=float)
+            if settings.keep_size:
+                s = min(img_w / float(ow_b), img_h / float(oh))
+                S = np.array([[s, 0, 0], [0, s, 0], [0, 0, 1]], dtype=float)
+                return S @ T @ H, img_w, img_h, 1.0, area_ratio
+            return T @ H, max(ow_b, 1), max(oh, 1), 1.0, area_ratio
     T = np.array([[1, 0, -x0], [0, 1, -y0], [0, 0, 1]], dtype=float)
     if settings.keep_size:
         s = min(img_w / float(ow), img_h / float(oh))
@@ -528,10 +657,15 @@ def plan(img_w: int, img_h: int, H: np.ndarray, settings,
     """
     quad = warped_quad(H, img_w, img_h)
     area_ratio = quad_area(quad) / float(img_w * img_h)
+    # A strip only means anything once a real rotation has actually separated
+    # the facades; at yaw==0 (no horizontal-auto, no h-marker, no manual yaw)
+    # the frame is still fronto-parallel and the ordinary centred crop already
+    # frames it correctly, so an inactive strip changes nothing.
+    strip_active = strip if (strip is not None and abs(yaw) > 1e-9) else None
 
     if settings.crop == "none":
         wf = _whole_frame(H, quad, img_w, img_h, settings, area_ratio,
-                          _in_strip(line_segs, strip, img_w))
+                          _in_strip(line_segs, strip, img_w), strip=strip_active)
         return _cap_canvas(_wf_keep_near_edge(wf, img_w, img_h, settings, yaw),
                            img_w, img_h, settings)
 
@@ -539,7 +673,15 @@ def plan(img_w: int, img_h: int, H: np.ndarray, settings,
     aspect = (img_w / img_h) if settings.crop in ("aspect", "auto") else None
     if settings.crop == "inside" and aspect is None:
         aspect = img_w / img_h
-    rect = inscribed_rect(quad, aspect, centre)
+    rect = None
+    if strip_active is not None:
+        # The strip picked one facade; the ordinary centred inscribed_rect
+        # anchors on the WHOLE frame's mapped centre, which on a corner view
+        # sits outside that facade more often than not, so bound the crop to
+        # the strip instead (Ledger A.4, measured 2026-09-20: strip+20%).
+        rect = _strip_bounded_rect(quad, H, strip_active, img_w, img_h, aspect)
+    if rect is None:
+        rect = inscribed_rect(quad, aspect, centre)
     rw, rh = rect[2] - rect[0], rect[3] - rect[1]
     if rw < 8 or rh < 8:
         return None
@@ -551,7 +693,7 @@ def plan(img_w: int, img_h: int, H: np.ndarray, settings,
         # facade down to fit a source-sized canvas would shrink the image,
         # which is forbidden: the output must never be smaller than the input.
         wf = _whole_frame(H, quad, img_w, img_h, settings, area_ratio,
-                          _in_strip(line_segs, strip, img_w))
+                          _in_strip(line_segs, strip, img_w), strip=strip_active)
         return _cap_canvas(_wf_keep_near_edge(wf, img_w, img_h, settings, yaw),
                            img_w, img_h, settings)
 

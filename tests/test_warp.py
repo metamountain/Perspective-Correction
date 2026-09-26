@@ -60,6 +60,51 @@ def test_crop_aspect_matches_the_source_aspect():
     assert 0.3 < coverage < 1.0
 
 
+def test_auto_crop_is_bounded_to_the_strip_plus_20_percent():
+    """Ledger A.4 (measured 2026-09-20): cropping to the strip +20% was worth
+    more than a second correction pass on its own, and 20% beat a 30% guess
+    by 8x. This applies the same band to the production auto-crop path --
+    specifically the `_whole_frame` fallback `crop="auto"` takes at any real
+    horizontal-auto yaw (coverage loss already exceeds even the review
+    window's 30% budget well under 20deg, so this is the path a strip
+    actually has to survive, not the aspect/inside path)."""
+    w, h, f = 1600, 1000, 1400.0
+    yaw = math.radians(20.0)
+    H = W.build(w, h, f, math.radians(1.0), math.radians(6.0), yaw)
+    strip = (0.0, 0.30)
+
+    quad = W.warped_quad(H, w, h)
+    band = W._strip_band(H, quad, strip, w, h)
+    assert band is not None
+
+    s = Settings()  # crop="auto" default; no line_segs -- the strip is all
+                    # there is to go on, which is exactly the gap being closed
+    planned = W.plan(w, h, H, s, yaw=yaw, strip=strip)
+    assert planned is not None
+    H_total, ow, oh, _, _ = planned
+
+    # H_total = S @ H with S a pure translate in this branch (keep_size is
+    # off by default), so inverting H back out recovers the crop's x-range
+    # in the same warped space as quad/band.
+    S = H_total @ np.linalg.inv(H)
+    rect_x0 = -S[0, 2] / S[0, 0]
+    rect_x1 = rect_x0 + ow / S[0, 0]
+
+    tol = 1.0
+    assert rect_x0 >= band[0] - tol, (
+        f"crop left edge {rect_x0:.1f} is outside the strip+20% band {band}")
+    assert rect_x1 <= band[1] + tol, (
+        f"crop right edge {rect_x1:.1f} is outside the strip+20% band {band}")
+
+    # Non-vacuity: without the strip, the same yaw's whole-frame crop really
+    # does exceed the band -- otherwise this test would pass for a reason it
+    # doesn't name (see CLAUDE.md's gotcha on exactly that failure mode).
+    H_total0, ow0, *_ = W.plan(w, h, H, s, yaw=yaw)
+    S0 = H_total0 @ np.linalg.inv(H)
+    rw0 = ow0 / S0[0, 0]
+    assert rw0 > (band[1] - band[0]) + tol
+
+
 def test_keep_size_returns_the_original_dimensions():
     s = Settings().replace(crop="aspect", keep_size=True)
     _, ow, oh, _, _ = W.plan(1200, 800, W.build(1200, 800, 900.0, 0.05, 0.15), s)
