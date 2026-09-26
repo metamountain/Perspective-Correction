@@ -1719,10 +1719,21 @@ class ReviewSession:
             from . import correction_log as CLOG
             from .pipeline import measure_horizontals
             from . import __version__
+            from .masks import _imread
             before = measure_horizontals(self.bgr, settings, f)
-            out_bgr = cv2.imread(dst_path)
+            # _imread, not cv2.imread: the latter returns None for a path
+            # with an umlaut, and German street names are ordinary stems.
+            out_bgr = _imread(dst_path, cv2.IMREAD_COLOR)
             after = (measure_horizontals(out_bgr, settings, f) if out_bgr is not None
                      else {"n_lines": 0, "yaw_deg": None, "support": 0.0})
+            # M-LSD segments of both images, user-directed 2026-09-26: the
+            # sidecar holds every segment, the record only the summary.
+            lines_before = CLOG.line_record(self.bgr, settings)
+            lines_after = (CLOG.line_record(out_bgr, settings) if out_bgr is not None
+                           else None)
+            before["lines"] = {k: v for k, v in lines_before.items() if k != "segments"}
+            if lines_after is not None:
+                after["lines"] = {k: v for k, v in lines_after.items() if k != "segments"}
             result = SimpleNamespace(
                 src=self.path, status="OK",
                 roll_deg=math.degrees(roll), pitch_deg=math.degrees(pitch),
@@ -1735,6 +1746,7 @@ class ReviewSession:
             folder = "correction_log"
             stem = os.path.splitext(os.path.basename(self.path))[0]
             CLOG.write_record(folder, stem, rec)
+            CLOG.write_lines(folder, stem, lines_before, lines_after)
             CLOG.append_csv(folder, CLOG.record_to_row(rec))
         except Exception:
             pass

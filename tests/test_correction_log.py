@@ -111,3 +111,31 @@ def test_record_to_row_flattens():
     assert row["yaw_applied_deg"] == 7.32
     assert row["focal_35mm"] == 28.0
     assert row["status"] == "OK"
+
+
+def test_lean_stats_signs_a_right_leaning_top_and_a_right_climbing_line_positive():
+    import numpy as np
+    # y points down: a vertical whose top (small y) sits 5 px right of its
+    # foot, and a horizontal that ends 5 px higher than it starts.
+    seg = np.array([[100.0, 200.0, 105.0, 100.0],      # vertical, top right
+                    [100.0, 300.0, 200.0, 295.0]])     # horizontal, climbing
+    s = CLOG._lean_stats(seg)
+    assert s["n_vertical"] == 1 and s["n_horizontal"] == 1
+    assert s["vertical_lean_median_deg"] > 2.5
+    assert s["horizontal_slope_median_deg"] > 2.5
+    # the same segments drawn end-to-start must give the same answer
+    s2 = CLOG._lean_stats(seg[:, [2, 3, 0, 1]])
+    assert s2 == s
+
+
+def test_append_csv_sets_aside_a_file_with_an_older_header():
+    with tempfile.TemporaryDirectory() as tmp:
+        path = os.path.join(tmp, "summary.csv")
+        with open(path, "w", newline="", encoding="utf-8") as fh:
+            fh.write("file,timestamp\nold.jpg,2026-09-01\n")
+        rec = CLOG.build_record(_FakeResult(), {"n_lines": 1}, {"n_lines": 1}, "1.2")
+        CLOG.append_csv(tmp, CLOG.record_to_row(rec))
+        with open(path, newline="", encoding="utf-8") as fh:
+            assert next(csv.reader(fh)) == CLOG.CSV_HEADER
+        kept = [n for n in os.listdir(tmp) if n.startswith("summary.") and n != "summary.csv"]
+        assert len(kept) == 1
