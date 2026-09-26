@@ -107,7 +107,11 @@ left alone (see Done).
 - **Optional backends install with `--no-deps`.** `simple-lama-inpainting`
   downgrades Pillow/numpy and breaks OpenCV in the same interpreter; a test bans
   `lama`/`ultralytics` extras from `pyproject.toml`.
-- `H = K R K^-1`, always — a camera rotation, three DOF, cannot shear. Seeded RNG
+- `H = K R K^-1` decides what comes out straight — a camera rotation, three
+  DOF, cannot shear. **One deliberate addition (2026-09-26, user-directed):**
+  with a yaw in play `warp.build` follows it with a pure x-scale
+  `sqrt(cos yaw)` (`YAW_FORESHORTEN`), which changes proportions only and
+  keeps every horizontal horizontal and every vertical vertical. Seeded RNG
   everywhere. Confidence is multiplicative, so any single factor can veto.
 - **Beyond the limit means refuse, not trim** (`--clamp-beyond-limit` restores the
   old cap behaviour). Magnitude test, not semantic. *Exception, measured and
@@ -615,6 +619,30 @@ features ahead of everything else.*
 ### Done — rely on these
 
 **2026-09-26**
+
+- **[feature, user-directed, asked ~20 times] Horizontal compression after
+  HA: `x-scale = sqrt(cos yaw)`.** The request was always "Verkürzung auf 70%
+  bei altbau" AFTER the full yaw correction. It was built wrongly first as a
+  tangent-space damping of the yaw itself (`atan(k tan yaw)`), which left the
+  lines slanted, and that was removed. The actual fix is `warp.build`: K·R·K⁻¹,
+  then a pure x-scale about the centre, so straightness is untouched and only
+  the 1/cos stretch is halved on a log scale. **Calibrated against the user's
+  two numbers, not fitted to them**: altbau yaw 60.0° → 0.707 (asked 70%),
+  csm_klassik yaw 44.3° → 0.846 (asked ~85%), Chateau −29.9° → 0.931. Yaw
+  measured by real CLI runs, `correction_log/`. Every consumer (preview, save,
+  `output_size`, auto-crop, CLI) goes through `build`, so they cannot disagree.
+- **All correction damping off.** Tangent yaw damping removed (above),
+  corner-view pitch damping removed, and `uncertain_pitch_damping` 0.85 → 1.0
+  (still a setting and `--uncertain-damping`). User: "Dämpfungen sollen so
+  weit wie möglich weg". The GUI damping slider is gone; roll/pitch/focal are
+  back on rows 3-5.
+- **`correction_log/<stem>.lines.json`**: raw M-LSD segments of source and
+  output (fractions of w/h) on every review save and `--horizontal` CLI run,
+  plus signed median lean in the record/CSV. Caveat: the whole-frame median
+  cancels out on a corner view (the two facades slope opposite ways) — judge
+  per facade from the segments.
+- **Open, noticed on the way**: the CLI does not bound output size like the
+  review save does (`keep_size=True` only in `ReviewSession.save`).
 
 - **[feature, user-directed] Auto-crop now respects the facade strip, bounded
   to strip + 20%.** User's request: "wenn ROI aktiv ist sollte das der auto
