@@ -381,7 +381,7 @@ def clip_to_box(poly, x0, y0, x1, y1):
     return np.asarray(p)[:, ::-1] if len(p) else p
 
 
-def max_free_rect(poly, lo: float = 0.15, hi: float = 6.0):
+def max_free_rect(poly, lo: float = 0.15, hi: float = 6.0, score=None):
     """Largest axis-aligned rectangle of ANY aspect inside a convex polygon.
 
     After a yaw correction the output's proportions are no longer the
@@ -391,6 +391,12 @@ def max_free_rect(poly, lo: float = 0.15, hi: float = 6.0):
     the bottom-right quarter of a whole corner view (measured 2026-09-26 on
     altbau.jpeg / csm_klassik.jpg). A coarse log sweep over aspect, then a
     fine one around the winner; each step is the exact solver.
+
+    ``score(rect)`` replaces output area as what is maximised across aspects
+    (per aspect the solver still returns the largest rectangle). The review
+    crop passes the SOURCE area a rectangle covers: output pixels over a
+    stretched region are mostly interpolation, and counting them picked the
+    sky over the building on the Antibes facade (2026-09-26).
     """
     def best_of(aspects):
         best, area = None, 0.0
@@ -398,7 +404,7 @@ def max_free_rect(poly, lo: float = 0.15, hi: float = 6.0):
             r = max_inscribed_rect(poly, float(a))
             if r is None:
                 continue
-            ar = (r[2] - r[0]) * (r[3] - r[1])
+            ar = score(r) if score is not None else (r[2] - r[0]) * (r[3] - r[1])
             if ar > area:
                 best, area = (r, float(a)), ar
         return best
@@ -409,6 +415,14 @@ def max_free_rect(poly, lo: float = 0.15, hi: float = 6.0):
     step = coarse[1] / coarse[0]
     fine = best_of(np.geomspace(got[1] / step, got[1] * step, 21))
     return (fine or got)[0]
+
+
+def source_area(H_total, rect):
+    """Area, in SOURCE pixels, of the photograph a warped-space rectangle shows."""
+    x0, y0, x1, y1 = (float(v) for v in rect)
+    pts = G.apply_h(np.linalg.inv(H_total),
+                    np.array([[x0, y0], [x1, y0], [x1, y1], [x0, y1]]))
+    return quad_area(pts)
 
 
 def _strip_bounded_rect(quad, H, strip, img_w, img_h, aspect):
@@ -540,9 +554,7 @@ def _whole_frame(H, quad, img_w, img_h, settings, area_ratio,
             H_out = T @ H
 
             if settings.keep_size:
-                s2 = min(img_w / float(ow_c), img_h / float(oh_c))
-                S2 = np.array([[s2, 0, 0], [0, s2, 0], [0, 0, 1]], dtype=float)
-                return S2 @ H_out, img_w, img_h, 1.0, area_ratio
+                return _fit_inside(H_out, ow_c, oh_c, img_w, img_h) + (1.0, area_ratio)
             return H_out, ow_c, oh_c, 1.0, area_ratio
 
     # Fallback: no line segments -- use the full quad, or the strip band when
@@ -556,16 +568,33 @@ def _whole_frame(H, quad, img_w, img_h, settings, area_ratio,
         if ow_b >= 8:
             T = np.array([[1, 0, -bx0], [0, 1, -y0], [0, 0, 1]], dtype=float)
             if settings.keep_size:
-                s = min(img_w / float(ow_b), img_h / float(oh))
-                S = np.array([[s, 0, 0], [0, s, 0], [0, 0, 1]], dtype=float)
-                return S @ T @ H, img_w, img_h, 1.0, area_ratio
+                return _fit_inside(T @ H, ow_b, oh, img_w, img_h) + (1.0, area_ratio)
             return T @ H, max(ow_b, 1), max(oh, 1), 1.0, area_ratio
     T = np.array([[1, 0, -x0], [0, 1, -y0], [0, 0, 1]], dtype=float)
     if settings.keep_size:
-        s = min(img_w / float(ow), img_h / float(oh))
-        S = np.array([[s, 0, 0], [0, s, 0], [0, 0, 1]], dtype=float)
-        return S @ T @ H, img_w, img_h, 1.0, area_ratio
+        return _fit_inside(T @ H, ow, oh, img_w, img_h) + (1.0, area_ratio)
     return T @ H, max(ow, 1), max(oh, 1), 1.0, area_ratio
+
+
+def _fit_inside(H_out, cw, ch, img_w, img_h):
+    """Scale a whole-frame plan uniformly to the source's long edge.
+
+    ``keep_size`` used to return the SOURCE's exact dimensions here, scaling
+    the content into them and leaving the rest to the fill -- but a
+    correction changes the aspect ratio, so on the portrait Antibes facade
+    (2026-09-26) half the saved canvas was empty and lama invented a wedge of
+    steps there, while the preview and Auto crop (which plan without
+    ``keep_size``) showed a different framing altogether. Keeping the
+    content's own aspect makes this plan a pure scale of the ``keep_size``-off
+    one, so crop fractions taken on one hold on the other.
+    """
+    # Long edge to long edge (user: "lange Kante gleich viel Pixel, nicht
+    # doppelt so viele"), rather than fitting inside the source's box: a
+    # correction that turns a portrait landscape would otherwise come out
+    # smaller than the photograph on every side.
+    s = max(img_w, img_h) / float(max(cw, ch))
+    S = np.array([[s, 0, 0], [0, s, 0], [0, 0, 1]], dtype=float)
+    return S @ H_out, max(1, int(round(cw * s))), max(1, int(round(ch * s)))
 
 
 NEAR_EDGE_MAX_SCALE = 3.0

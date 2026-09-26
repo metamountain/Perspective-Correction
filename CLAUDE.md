@@ -667,6 +667,19 @@ features ahead of everything else.*
   Looked at `nandometzger/MLFocalLengths` (MIT, EfficientNet-B4, 233 MB):
   MAE 16 mm on a 256 px centre crop — cannot tell 12 from 28 mm; possible
   later as a softer default prior, not tested (download not approved).
+- **[bug] Save framed differently from the preview.** Review save planned
+  with `keep_size=True`, whose whole-frame branches forced the SOURCE's
+  exact dimensions and padded the rest — but a correction changes the aspect,
+  so on the portrait Antibes facade half the saved canvas was fill (lama
+  invented a wedge of steps), and the preview / Auto crop (planned without
+  `keep_size`) showed another framing, so crop fractions landed on fill.
+  `warp._fit_inside` now scales the plan uniformly, long edge to the
+  source's long edge ("lange Kante gleich viel Pixel") — verified identical
+  framing on four photos. The review crop now maximises the SOURCE area a
+  rectangle shows (`warp.source_area`), not output area: output pixels over
+  a stretched sky counted as much as the building and the crop picked the
+  sky. Antibes now keeps door to pediment, narrow — the inverted trapezoid
+  allows no wider fill-free rectangle.
 - **Open**: `test_every_asset_has_a_cached_mask_matched_by_stem` fails on
   `tests/assets/3zb3nbpvnp9njrb76wymv5m8pp.jpg`, added 2026-09-26 20:51
   (untracked, gitignored) without a cached mask.
