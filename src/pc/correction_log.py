@@ -2,7 +2,7 @@
 
 Writes per-image JSON sidecars and an appended CSV summary into a dedicated
 folder (``correction_log/``) whenever ``--horizontal`` is active or the
-review panel saves, plus ``<stem>.lines.json`` with the M-LSD segments of the
+review panel saves, plus ``<stem>.lines.json`` with the LSD and M-LSD segments of the
 source and of the written file.  The data
 serves two purposes: verifying that the residual yaw after warp is near zero,
 and building a learning dataset of before/after measurements for algorithm
@@ -26,7 +26,8 @@ CSV_HEADER = [
     # session, displayed in the window -- and a stored value that needs to be
     # told which of the three it is has not been stored.
     "strip_x0", "strip_x1",
-    # Signed median lean from the M-LSD segment sidecar (<stem>.lines.json).
+    # Signed, length-weighted median lean from LSD (M-LSD reads verticals
+    # -0.6 deg off; its numbers are nested under "mlsd" in the JSON record).
     "before_v_lean_deg", "before_h_slope_deg",
     "after_v_lean_deg", "after_h_slope_deg",
 ]
@@ -92,9 +93,25 @@ def _lean_stats(seg):
     vert = np.abs(ang) >= 90.0 - LINE_WINDOW_DEG
     h_slope = -ang[horiz]
     v_lean = np.where(ang[vert] > 0, ang[vert] - 90.0, ang[vert] + 90.0)
-    med = lambda a: round(float(np.median(a)), 3) if len(a) else None
-    return {"n_vertical": int(vert.sum()), "vertical_lean_median_deg": med(v_lean),
-            "n_horizontal": int(horiz.sum()), "horizontal_slope_median_deg": med(h_slope)}
+    length = np.hypot(dx, dy)
+
+    def med(a, w):
+        # LENGTH-weighted median (2026-09-26, measured): on the cropped
+        # csm_klassik output M-LSD returned four "horizontals" -- two cornices
+        # of 1151 and 1330 px at 0.0 and 0.4 deg, two dormer edges of 110 and
+        # 164 px at 27 deg -- and the plain median of four reported 13.8 deg
+        # for a facade that is level. A long edge is more evidence than a
+        # short one; weighted, the same four give 0.4 deg.
+        if len(a) == 0:
+            return None
+        order = np.argsort(a)
+        cw = np.cumsum(w[order])
+        return round(float(a[order][np.searchsorted(cw, 0.5 * cw[-1])]), 3)
+
+    return {"n_vertical": int(vert.sum()),
+            "vertical_lean_median_deg": med(v_lean, length[vert]),
+            "n_horizontal": int(horiz.sum()),
+            "horizontal_slope_median_deg": med(h_slope, length[horiz])}
 
 
 def line_record(bgr, settings, detector: str = "mlsd") -> dict:
@@ -130,6 +147,27 @@ def line_record(bgr, settings, detector: str = "mlsd") -> dict:
     norm = seg / np.array([w, h, w, h], dtype=float) if len(seg) else seg
     rec["segments"] = [[round(float(v), 5) for v in s] for s in norm]
     return rec
+
+
+def line_records(bgr, settings) -> dict:
+    """``{"lsd": ..., "mlsd": ...}`` -- both detectors' segments of one image.
+
+    M-LSD was asked for by name (2026-09-26); LSD rides along because M-LSD
+    turned out to read EXACT verticals as -0.62 deg (synthetic grid, same
+    day; LSD reads 0.001) while its horizontals are fine. So the summary
+    numbers come from LSD and M-LSD's segments are kept for what it is good
+    at -- long structural edges -- with its bias on record.
+    """
+    return {"lsd": line_record(bgr, settings, "lsd"),
+            "mlsd": line_record(bgr, settings, "mlsd")}
+
+
+def line_summary(recs: dict) -> dict:
+    """The record/CSV summary of `line_records`: LSD stats, M-LSD nested."""
+    strip = lambda r: {k: v for k, v in r.items() if k != "segments"}
+    out = strip(recs["lsd"])
+    out["mlsd"] = strip(recs["mlsd"])
+    return out
 
 
 def write_lines(folder: str, stem: str, before: dict, after: dict) -> str:

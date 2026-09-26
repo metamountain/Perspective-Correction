@@ -139,3 +139,14 @@ def test_append_csv_sets_aside_a_file_with_an_older_header():
             assert next(csv.reader(fh)) == CLOG.CSV_HEADER
         kept = [n for n in os.listdir(tmp) if n.startswith("summary.") and n != "summary.csv"]
         assert len(kept) == 1
+
+
+def test_lean_stats_weights_by_length_so_short_edges_cannot_outvote_long_ones():
+    import numpy as np
+    # the csm_klassik case: two long level cornices, two short 27 deg edges
+    def seg(length, deg):
+        a = np.radians(deg)
+        return [0.0, 500.0, length * np.cos(a), 500.0 - length * np.sin(a)]
+    s = CLOG._lean_stats(np.array([seg(1151, 0.0), seg(1330, 0.4),
+                                   seg(164, 27.2), seg(110, 27.9)]))
+    assert abs(s["horizontal_slope_median_deg"]) < 1.0
