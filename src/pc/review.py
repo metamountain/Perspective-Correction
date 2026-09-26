@@ -554,7 +554,7 @@ class ReviewSession:
         # Free aspect once a yaw is in play: the output's proportions are not
         # the photograph's any more, and the source aspect on a steep
         # trapezoid parks the rectangle in its tallest corner.
-        rect = (W.max_free_rect(region) if yawed
+        rect = (W.max_free_rect(region, score=lambda r: W.source_area(H_total, r)) if yawed
                 else W.max_inscribed_rect(region, self.w / float(self.h)))
         if rect is None:
             return False
