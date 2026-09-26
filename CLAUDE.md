@@ -643,6 +643,33 @@ features ahead of everything else.*
   per facade from the segments.
 - **Open, noticed on the way**: the CLI does not bound output size like the
   review save does (`keep_size=True` only in `ReviewSession.save`).
+- **[fix, user-caught] No-EXIF ultra-wide: focal now found automatically.**
+  The Antibes ultra-wide straightened by hand at 12 mm but not by itself: no
+  EXIF, frontal facade, so one vertical VP fixes only f : tilt; the program
+  sat at the 28 mm default, which needs a 50° tilt, past the 30° cap. Two
+  changes in `model.py`: (A) `_horizontal_sensitivity` wobbles the horizontal
+  VP's bearing by 0.5° and discards the orthogonality focal (sigma = inf)
+  when that wobble leaves no estimate at all — it had claimed 37 mm at
+  sigma 0.26. Only the total-loss case is acted on; a graded version moved
+  Struktur (conf 0.50→0.32) and altbau (117→112 mm) for no shown gain.
+  (B) `_tilt_prior_focal`: with no EXIF/manual focal, choose the point on
+  the curve of equally good (f, tilt) pairs that maximises focal prior ×
+  tilt prior (half-normal, `tilt_prior_deg` = 15). Antibes: 28.4 mm/30°
+  capped → **14.3 mm / 27.6°**, LSD vertical lean −0.81° → +0.59°.
+  Measured with `drive_review.py` against a baseline: 12 of 23 unchanged,
+  including altbau, csm_klassik, Struktur, Chateau, Platte, Presserundgang
+  (the user-calibrated x-compression cases). YNS7 (U-shaped block, conf
+  0.15) was garbage before and after. `39079116` now reads "tilt prior"
+  (conf 0.69→0.50, still admitted; its geometric focal came from mixed
+  planes, the documented failure). Pinned by
+  `test_the_tilt_prior_trades_an_implausible_tilt_for_a_wider_lens`.
+  `diag["focal_blend"]` records prior/blend/sigma/tilt-prior per photo.
+  Looked at `nandometzger/MLFocalLengths` (MIT, EfficientNet-B4, 233 MB):
+  MAE 16 mm on a 256 px centre crop — cannot tell 12 from 28 mm; possible
+  later as a softer default prior, not tested (download not approved).
+- **Open**: `test_every_asset_has_a_cached_mask_matched_by_stem` fails on
+  `tests/assets/3zb3nbpvnp9njrb76wymv5m8pp.jpg`, added 2026-09-26 20:51
+  (untracked, gitignored) without a cached mask.
 - **`tools/drive_review.py` — remote control of the REAL window.** Opens the
   actual `App` off-screen with the user's remembered settings, loads each
   photograph into the review panel, presses horizontal auto / facade strip /

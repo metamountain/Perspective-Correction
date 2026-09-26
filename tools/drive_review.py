@@ -92,6 +92,7 @@ def main(argv=None):
     from pc import gui as GUI
     from pc.gui import App
     from pc import warp as W
+    from pc import model as M
 
     # A modal dialog on an off-screen window would wait forever for a click
     # nobody can make. Record what the window WOULD have said instead.
@@ -143,6 +144,8 @@ def main(argv=None):
                 pitch=round(math.degrees(pitch), 2), yaw=round(math.degrees(yaw), 2),
                 x_scale=round(W.yaw_x_scale(yaw), 3),
                 confidence=round(s.model.confidence, 3) if s.model else "",
+                f35=round(M.focal_35mm_from_px(f, s.w, s.h), 1),
+                f_source=s.model.f_source if s.model else "",
                 skip=s.would_skip() or "",
                 strip="" if s.strip is None else f"{s.strip[0]:.3f}-{s.strip[1]:.3f}",
                 crop="" if crop is None else " ".join(f"{v:.3f}" for v in crop),
