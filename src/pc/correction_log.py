@@ -1,7 +1,9 @@
 """Horizontal correction verification log.
 
 Writes per-image JSON sidecars and an appended CSV summary into a dedicated
-folder (default ``hpc_save/``) whenever ``--horizontal`` is active.  The data
+folder (``correction_log/``) whenever ``--horizontal`` is active or the
+review panel saves, plus ``<stem>.lines.json`` with the M-LSD segments of the
+source and of the written file.  The data
 serves two purposes: verifying that the residual yaw after warp is near zero,
 and building a learning dataset of before/after measurements for algorithm
 improvement.
@@ -24,6 +26,9 @@ CSV_HEADER = [
     # session, displayed in the window -- and a stored value that needs to be
     # told which of the three it is has not been stored.
     "strip_x0", "strip_x1",
+    # Signed median lean from the M-LSD segment sidecar (<stem>.lines.json).
+    "before_v_lean_deg", "before_h_slope_deg",
+    "after_v_lean_deg", "after_h_slope_deg",
 ]
 
 
@@ -58,6 +63,84 @@ def remember_strip(folder: str, stem: str, strip) -> str:
     return path
 
 
+LINE_WINDOW_DEG = 30.0
+"""A segment counts as vertical/horizontal within this many degrees of the axis.
+
+Wide on purpose: the BEFORE image still has its perspective in it, and a
+facade's horizontals there can run 20 deg and more off level.
+"""
+
+
+def _lean_stats(seg):
+    """Signed lean of near-vertical and near-horizontal segments, in degrees.
+
+    Signed, not absolute: a systematic tilt (Ledger item 15, -2.2 deg on
+    altbau.jpeg) shows as a median well away from zero, while scatter around a
+    good correction averages out. Vertical lean is positive when the top leans
+    right; horizontal slope is positive when the line climbs to the right
+    (image y points down, hence the sign flip).
+    """
+    import numpy as np
+    if len(seg) == 0:
+        return {"n_vertical": 0, "vertical_lean_median_deg": None,
+                "n_horizontal": 0, "horizontal_slope_median_deg": None}
+    dx = seg[:, 2] - seg[:, 0]
+    dy = seg[:, 3] - seg[:, 1]
+    ang = np.degrees(np.arctan2(dy, dx))            # -180..180, y down
+    ang = (ang + 90.0) % 180.0 - 90.0               # -90..90, direction-free
+    horiz = np.abs(ang) <= LINE_WINDOW_DEG
+    vert = np.abs(ang) >= 90.0 - LINE_WINDOW_DEG
+    h_slope = -ang[horiz]
+    v_lean = np.where(ang[vert] > 0, ang[vert] - 90.0, ang[vert] + 90.0)
+    med = lambda a: round(float(np.median(a)), 3) if len(a) else None
+    return {"n_vertical": int(vert.sum()), "vertical_lean_median_deg": med(v_lean),
+            "n_horizontal": int(horiz.sum()), "horizontal_slope_median_deg": med(h_slope)}
+
+
+def line_record(bgr, settings, detector: str = "mlsd") -> dict:
+    """Detected segments of one image, as data rather than as a picture.
+
+    User-directed 2026-09-26 ("mlsd Vektoren mitspeichern"): the saved lines
+    are what lets a correction be checked by arithmetic -- residual lean,
+    per-facade slope, whether two eaves end at the same height -- instead of
+    by squinting at a render. Runs at ``detect_max_edge``, the resolution the
+    estimator itself sees. Coordinates are FRACTIONS of width/height (the same
+    unit the strip is stored in), so a record needs no second number to be
+    read. Raw detector output apart from the length floor and the border
+    guard: no mask, no merge, no classification -- the point is an independent
+    measurement, not a second copy of the estimator's opinion.
+    """
+    import cv2
+    import numpy as np
+    from . import imageio as IO
+    from . import lines as L
+    from . import geometry as G
+    gray, _ = IO.analysis_gray(bgr, settings.detect_max_edge)
+    h, w = gray.shape[:2]
+    small = cv2.resize(bgr, (w, h), interpolation=cv2.INTER_AREA)
+    min_len = max(8.0, settings.min_line_length_frac * min(w, h))
+    seg, name = L.detect_segments(gray, min_len, detector, small, settings)
+    seg = np.asarray(seg, dtype=float).reshape(-1, 4)
+    if len(seg):
+        seg = seg[G.segment_lengths(seg) >= min_len]
+    if len(seg):
+        seg = L.drop_border_segments(seg, w, h, settings.border_margin_px)
+    rec = {"detector": name, "width": w, "height": h}
+    rec.update(_lean_stats(seg))
+    norm = seg / np.array([w, h, w, h], dtype=float) if len(seg) else seg
+    rec["segments"] = [[round(float(v), 5) for v in s] for s in norm]
+    return rec
+
+
+def write_lines(folder: str, stem: str, before: dict, after: dict) -> str:
+    """Write the segment sidecar ``<stem>.lines.json`` beside the record."""
+    os.makedirs(folder, exist_ok=True)
+    path = os.path.join(folder, f"{stem}.lines.json")
+    with open(path, "w", encoding="utf-8") as fh:
+        json.dump({"file": stem, "before": before, "after": after}, fh)
+    return path
+
+
 def write_record(folder: str, stem: str, record: dict):
     """Write (or overwrite) the per-image JSON sidecar."""
     os.makedirs(folder, exist_ok=True)
@@ -70,6 +153,14 @@ def append_csv(folder: str, row: dict):
     """Append one row to summary.csv, creating the header if new."""
     os.makedirs(folder, exist_ok=True)
     path = os.path.join(folder, "summary.csv")
+    if os.path.exists(path):
+        # A header written by an older version would misalign every new
+        # column; keep that file under a dated name and start a fresh one.
+        with open(path, newline="", encoding="utf-8") as fh:
+            first = next(csv.reader(fh), [])
+        if first != CSV_HEADER:
+            stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+            os.replace(path, os.path.join(folder, f"summary.{stamp}.csv"))
     is_new = not os.path.exists(path)
     with open(path, "a", newline="", encoding="utf-8") as fh:
         w = csv.DictWriter(fh, fieldnames=CSV_HEADER, extrasaction="ignore")
@@ -127,4 +218,8 @@ def record_to_row(record: dict) -> dict:
         "status": record["status"],
         "strip_x0": (record.get("strip") or [None, None])[0],
         "strip_x1": (record.get("strip") or [None, None])[1],
+        "before_v_lean_deg": (b.get("lines") or {}).get("vertical_lean_median_deg"),
+        "before_h_slope_deg": (b.get("lines") or {}).get("horizontal_slope_median_deg"),
+        "after_v_lean_deg": (a.get("lines") or {}).get("vertical_lean_median_deg"),
+        "after_h_slope_deg": (a.get("lines") or {}).get("horizontal_slope_median_deg"),
     }

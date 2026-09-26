@@ -380,7 +380,7 @@ def _job(item):
 
 
 def _hpc_save(results, settings, log):
-    """Write hpc_save/ records for every OK result when --horizontal is active."""
+    """Write correction_log/ records for every OK result when --horizontal is active."""
     from . import __version__
     from . import correction_log as CLOG
     from . import imageio as io
@@ -392,25 +392,32 @@ def _hpc_save(results, settings, log):
             continue
         stem = os.path.splitext(os.path.basename(r.src))[0]
         # before: re-measure on the source
+        lines_before = lines_after = None
         try:
             src_loaded = io.load(r.src)
             before = measure_horizontals(src_loaded.bgr, settings, _focal_px(r))
+            lines_before = CLOG.line_record(src_loaded.bgr, settings)
+            before["lines"] = {k: v for k, v in lines_before.items() if k != "segments"}
         except Exception:
             before = {"n_lines": 0, "yaw_deg": None, "support": 0.0}
         # after: re-measure on the output
         try:
-            out_bgr = cv2.imread(r.dst)
+            from .masks import _imread      # umlaut-safe, unlike cv2.imread
+            out_bgr = _imread(r.dst, cv2.IMREAD_COLOR)
             if out_bgr is None:
                 raise ValueError("unreadable")
             after = measure_horizontals(out_bgr, settings, _focal_px(r))
+            lines_after = CLOG.line_record(out_bgr, settings)
+            after["lines"] = {k: v for k, v in lines_after.items() if k != "segments"}
         except Exception:
             after = {"n_lines": 0, "yaw_deg": None, "support": 0.0}
         rec = CLOG.build_record(r, before, after, __version__)
         CLOG.write_record(folder, stem, rec)
+        CLOG.write_lines(folder, stem, lines_before, lines_after)
         CLOG.append_csv(folder, CLOG.record_to_row(rec))
         ok_count += 1
     if ok_count:
-        log(f"# hpc_save: {ok_count} record(s) written to {folder}/")
+        log(f"# correction_log: {ok_count} record(s) written to {folder}/")
 
 
 def _focal_px(r):
