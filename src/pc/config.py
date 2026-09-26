@@ -78,7 +78,13 @@ class Settings:
     default_focal_35mm: float = 28.0    # same generic default darktable uses
     use_exif_focal: bool = True
     focal_estimate: str = "vp"          # off | vp | horizon | both
-    uncertain_pitch_damping: float = 0.85
+    # 1.0 = off (2026-09-26, user-directed: "Dämpfungen sollen so weit wie
+    # möglich weg"). Was 0.85, measured on the 40-scene benchmark to cut
+    # over-corrections 15 -> 9 when the focal length is a guess -- a
+    # batch-era trade that leaves verticals converging on purpose; with a
+    # person reviewing, full correction is the default. Kept as a setting
+    # (and --uncertain-damping) so the old behaviour is one flag away.
+    uncertain_pitch_damping: float = 1.0
     refine: bool = True                 # joint (roll, pitch, f) refinement
 
     # ---- correction ----

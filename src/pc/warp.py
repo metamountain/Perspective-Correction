@@ -74,19 +74,56 @@ def _max_safe_yaw(w: int, h: int, f: float, roll: float, pitch: float,
     return lo
 
 
+YAW_FORESHORTEN = 0.5
+"""Exponent of the horizontal compression after a yaw correction.
+
+User-directed 2026-09-26, asked for many times: "Verkürzung auf 70% bei
+altbau", AFTER the full HA correction, not instead of it. A facade seen at
+yaw θ is foreshortened to cos θ of its width; the rotation undoes that and
+stretches it by 1/cos θ -- geometrically true, visually far too wide on a
+steep corner view. The result is compressed in x by ``cos(θ) ** k``:
+
+    k = 0    true frontal proportions (the full 1/cos θ stretch)
+    k = 0.5  halfway, on a log scale, between the photograph and frontal
+    k = 1    the photograph's own width at the centre
+
+At k = 0.5 altbau.jpeg (θ = 60°) gets sqrt(0.5) = 0.707 -- the 70% asked for
+-- while 30° keeps 93%, 10° keeps 99.6% and a straight photograph is
+untouched. A pure x-scale keeps every horizontal horizontal and every
+vertical vertical, so straightness is exactly what the rotation delivered.
+
+NOT the tangent damping that was built and removed the same day: that
+shrank the yaw itself and left the lines visibly slanted.
+"""
+
+
+def yaw_x_scale(yaw: float, k: float = YAW_FORESHORTEN) -> float:
+    """Horizontal compression factor that follows a yaw correction."""
+    c = abs(math.cos(yaw))
+    return c ** k if c > 1e-6 else 1.0
+
+
 def build(w: int, h: int, f: float, roll: float, pitch: float,
           yaw: float = 0.0, max_area: float = 4.0) -> np.ndarray:
-    """Build the correction homography: pure K·R·K⁻¹ camera rotation.
+    """Build the correction homography: K·R·K⁻¹, then the yaw x-compression.
 
-    This is the only mathematically valid perspective correction — it undoes
-    the camera's rotation relative to the scene.  No 4-point remapping or
-    1/cos stretching is applied, because those change proportions rather than
-    correcting them.  The output canvas may be larger than the input (the
-    rotation opens up corners that the fill band covers); it is never smaller.
+    The rotation undoes the camera's rotation relative to the scene; it alone
+    decides what comes out straight.  With a yaw in play it is followed by a
+    pure horizontal scale about the image centre (`yaw_x_scale`), which
+    changes proportions only -- see `YAW_FORESHORTEN` for why and how much.
+    Without a yaw the scale is 1 and this is the plain rotation, bit for bit.
     """
     K = G.intrinsics(f, w / 2.0, h / 2.0)
     R = G.correction_rotation(roll, pitch, yaw)
-    return G.homography(K, R)
+    H = G.homography(K, R)
+    s = yaw_x_scale(yaw)
+    if s != 1.0:
+        cx = w / 2.0
+        S = np.array([[s, 0.0, cx * (1.0 - s)],
+                      [0.0, 1.0, 0.0],
+                      [0.0, 0.0, 1.0]])
+        H = S @ H
+    return H
 
 
 def _facade_perspective(w: int, h: int, vert_segs: np.ndarray,
