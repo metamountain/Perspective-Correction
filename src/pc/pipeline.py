@@ -122,32 +122,17 @@ def analyse(bgr, settings, exif_focal_px=None, image_path="", strip=None):
     if m.f:
         m.f = m.f / scale                       # back to full resolution pixels
     m.detect_info = info
-
-    # Corner-view pitch damping: at large yaw the pitch computed from all
-    # verticals (both facades) is invalid for the target facade.  Damp pitch
-    # proportionally to |yaw| so that at 45°+ only ~30% of the original pitch
-    # is applied — enough to level the frame, not enough to tilt the
-    # corrected facade's verticals.
-    # ...unless the rotation came from the facade's own two vanishing points.
-    # That construction has no "pitch computed from all verticals" to rescue:
-    # the pitch in it was orthogonalised against THIS facade's horizontal, and
-    # the three angles are a decomposition of one rotation, not three knobs.
-    # Damping one of them shears the result back out of square -- measured on
-    # Platte_1.jpg, 13.63 degrees off with the damping against 0.15 without.
-    built_from_facade = "facade_rotation" in (m.diagnostics or {})
-    if settings.correct_horizontal and m.yaw is not None and not built_from_facade:
-        yaw_abs = abs(m.yaw)
-        if yaw_abs > math.radians(20):
-            # Linear damping: 20°→100%, 50°+→30%
-            t = min(1.0, (yaw_abs - math.radians(20)) / math.radians(30))
-            damp = 1.0 - 0.7 * t
-            m.diagnostics["pitch_damped"] = (
-                f"|yaw|={math.degrees(yaw_abs):.0f}°: pitch "
-                f"{math.degrees(m.pitch):+.1f}°×{damp:.2f}="
-                f"{math.degrees(m.pitch * damp):+.1f}°"
-            )
-            m.pitch *= damp
-
+    # Corner-view pitch damping was tried here and removed 2026-09-26
+    # (user-directed: "keine Daempfung waere am besten" -- no damping is the
+    # cleaner answer, even where it costs accuracy on a corner view). It had
+    # also only ever lived in this function, never in review.py's `_detect`,
+    # which builds a Model via `M.estimate()` directly -- so every interactive
+    # session ran undamped while every CLI batch run ran damped, and the two
+    # paths produced visibly different, pixel-diff-confirmed corrections from
+    # the same photo. Removing it here (rather than adding it to review.py
+    # too) makes both paths agree on the simpler behaviour. The measurement
+    # that motivated it in the first place is not invalidated by this
+    # decision and is kept below in case a future session revisits it.
     return m, vert, horiz, scale, detector
 
 
@@ -155,7 +140,7 @@ def measure_horizontals(bgr, settings, focal_px):
     """Re-run detection on a (warped) image and report the residual yaw.
 
     Returns a dict with ``n_lines``, ``yaw_deg`` (or None), and ``support``.
-    Used by the hpc_save logging to verify that horizontals are actually level
+    Used by ``correction_log`` to verify that horizontals are actually level
     after correction."""
     gray, scale = io.analysis_gray(bgr, settings.detect_max_edge)
     gh, gw = gray.shape[:2]
