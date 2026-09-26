@@ -146,6 +146,35 @@ OVERLAY = {
     # what the mask wash is tinted with until the user picks otherwise
     "mask_default": "#dc4c3e",
 }
+
+CHECK_LINE_TOL_DEG = 1.5
+""""Check lines" straightness tolerance, in DEGREES from the nearest axis.
+
+Ledger item 15 (2026-09-26, user-caught): this used to be an absolute PIXEL
+offset (``abs(dy) <= 1.5``) checked against whatever length segment the
+re-detector happened to return on the small preview array. For a short
+segment (most of what a real detector returns -- window reveals, coursing,
+brick joints, 15-25 px typical) 1.5 px is 3-6 deg of slack, enough to hide a
+real, measured -2.2 deg systematic lean entirely, segment by segment, while
+the line it belongs to visibly climbs across the whole frame. An angle is
+the only version of this check that means the same thing regardless of how
+long a piece the detector happened to find.
+"""
+
+
+def _off_angle_deg(x0, y0, x1, y1):
+    """Degrees the segment leans from its nearest axis (horizontal or vertical).
+
+    ``atan2(min(|dx|,|dy|), max(|dx|,|dy|))`` gives that in one formula: the
+    smaller of the two extents IS the offset from whichever axis the larger
+    one is closest to, so there is no separate branch for "vertical-ish" vs
+    "horizontal-ish" -- classifying the segment for colour purposes (see
+    callers) is a different question from measuring how far off it is.
+    """
+    dx, dy = abs(x1 - x0), abs(y1 - y0)
+    return math.degrees(math.atan2(min(dx, dy), max(dx, dy, 1e-9)))
+
+
 # --------------------------------------------------------------------------
 # theme
 # --------------------------------------------------------------------------
@@ -964,7 +993,7 @@ class ReviewPanel(tk.Frame):
         app = self._app()
         if app is not None:
             W, H = self.session.w, self.session.h
-            title = (f"{position}  {os.path.basename(path)}  {W}×{H}  |  Batch "
+            title = (f"{position}  {os.path.basename(path)}  {W}×{H}  |  "
                      f"Perspective Correction  v{__version__}")
             app.title(title.strip())
         self._build()
@@ -978,6 +1007,15 @@ class ReviewPanel(tk.Frame):
         # and undoable with "Reset crop" -- see `auto_crop_if_cheap`.
         if self.session.auto_crop_if_cheap():
             self._refresh_crop()
+        # A corner view mixes two facades' worth of horizontal evidence into
+        # one estimate (2026-09-26, user-directed, replaces the removed
+        # corner-view pitch damping): point at it rather than guess. Opens
+        # the strip rulers already showing and says why, instead of a
+        # silently-wrong auto estimate the user has to notice is off first.
+        if self.session.directions_diverge():
+            if getattr(self, "v_strip", None) is not None:
+                self.v_strip.set(True)
+            self._set_status("multiple main directions detected -- please pick a facade (Facade strip)")
         self.after(60, self._sync_from_session)
 
     def _fire_closed(self):
@@ -2974,7 +3012,14 @@ class ReviewPanel(tk.Frame):
         self._draw_crop_outline(aox + x0 * iw, aoy + y0 * ih,
                                 aox + x1 * iw, aoy + y1 * ih)
         # Q2: output dimensions + crop size, bottom-left.
-        ow, oh = arr.shape[1], arr.shape[0]
+        # `arr.shape` is the PREVIEW array (render_after scales to the canvas
+        # widget's on-screen size, see `_redraw`) -- it is not what `save()`
+        # will write. Ledger item 15 (2026-09-26, user-caught): this label
+        # claimed to show "output dimensions" while actually showing the
+        # preview's pixel size, which can be many times smaller than the real
+        # save. `session.output_size()` mirrors `save()`'s own plan exactly
+        # (same angles, same strip) so the two can never disagree again.
+        ow, oh = self.session.output_size()
         cw = max(1, int(round((x1 - x0) * ow)))
         ch = max(1, int(round((y1 - y0) * oh)))
         self.c_after.create_text(
@@ -4073,11 +4118,9 @@ class ReviewPanel(tk.Frame):
             return
         ox, oy = self._after_off
         for x0, y0, x1, y1 in seg:
-            dx, dy = x1 - x0, y1 - y0
-            if abs(dy) >= abs(dx):     # vertical-ish: the ones being straightened
-                colour = OVERLAY["check_ok"] if abs(dx) <= 1.5 else OVERLAY["check_v_off"]
-            else:
-                colour = OVERLAY["check_ok"] if abs(dy) <= 1.5 else OVERLAY["check_h_off"]
+            colour = (OVERLAY["check_ok"] if _off_angle_deg(x0, y0, x1, y1) <= CHECK_LINE_TOL_DEG
+                     else (OVERLAY["check_v_off"] if abs(y1 - y0) >= abs(x1 - x0)
+                           else OVERLAY["check_h_off"]))
             self.c_after.create_line(ox + x0, oy + y0, ox + x1, oy + y1,
                                      fill=colour, width=1, tags="after_lines")
         # Second pass: M-LSD in a distinct colour (cyan) so both detectors
@@ -4090,11 +4133,9 @@ class ReviewPanel(tk.Frame):
                 seg_m = None
             if seg_m is not None and len(seg_m):
                 for x0, y0, x1, y1 in seg_m:
-                    dx, dy = x1 - x0, y1 - y0
-                    if abs(dy) >= abs(dx):
-                        colour = OVERLAY["mlsd_ok"] if abs(dx) <= 1.5 else OVERLAY["mlsd_v_off"]
-                    else:
-                        colour = OVERLAY["mlsd_ok"] if abs(dy) <= 1.5 else OVERLAY["mlsd_h_off"]
+                    colour = (OVERLAY["mlsd_ok"] if _off_angle_deg(x0, y0, x1, y1) <= CHECK_LINE_TOL_DEG
+                             else (OVERLAY["mlsd_v_off"] if abs(y1 - y0) >= abs(x1 - x0)
+                                   else OVERLAY["mlsd_h_off"]))
                     self.c_after.create_line(ox + x0, oy + y0, ox + x1, oy + y1,
                                              fill=colour, width=1, tags="after_lines")
 
@@ -4605,9 +4646,9 @@ class ReviewPanel(tk.Frame):
         if not strip:
             return
         try:
-            from . import hpc_log as HPC
+            from . import correction_log as CLOG
             stem = os.path.splitext(os.path.basename(s.path))[0]
-            HPC.remember_strip("hpc_save", stem, strip)
+            CLOG.remember_strip("correction_log", stem, strip)
         except Exception as exc:        # never break a finished save
             self._set_status(f"strip not stored: {exc}")
 

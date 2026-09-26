@@ -41,7 +41,7 @@ MODULES = ["test_geometry", "test_lines", "test_layout", "test_warp", "test_esti
            "test_deps",
            "test_distortion",
            "test_sam2seg",
-           "test_hpc_log",
+           "test_correction_log",
            "test_horizontal"]
 
 MAX_WORKERS = 8

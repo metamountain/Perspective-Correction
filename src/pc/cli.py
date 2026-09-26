@@ -382,10 +382,10 @@ def _job(item):
 def _hpc_save(results, settings, log):
     """Write hpc_save/ records for every OK result when --horizontal is active."""
     from . import __version__
-    from . import hpc_log as HPC
+    from . import correction_log as CLOG
     from . import imageio as io
 
-    folder = "hpc_save"
+    folder = "correction_log"
     ok_count = 0
     for r in results:
         if r.status != OK:
@@ -405,9 +405,9 @@ def _hpc_save(results, settings, log):
             after = measure_horizontals(out_bgr, settings, _focal_px(r))
         except Exception:
             after = {"n_lines": 0, "yaw_deg": None, "support": 0.0}
-        rec = HPC.build_record(r, before, after, __version__)
-        HPC.write_record(folder, stem, rec)
-        HPC.append_csv(folder, HPC.record_to_row(rec))
+        rec = CLOG.build_record(r, before, after, __version__)
+        CLOG.write_record(folder, stem, rec)
+        CLOG.append_csv(folder, CLOG.record_to_row(rec))
         ok_count += 1
     if ok_count:
         log(f"# hpc_save: {ok_count} record(s) written to {folder}/")

@@ -71,6 +71,7 @@ models/*.tar
 # trashed files (recoverable until manually deleted) and HPC save records
 Trashcan/
 verworfen/
+correction_log/
 hpc_save/
 
 # Rendered synthetic scenes: `tools/render_synth.py` writes them here for

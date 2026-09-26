@@ -6,13 +6,18 @@ thing that matters most: it recorded the suite as "307 tests, 2 failed" when
 `--full` could not run at all. Everything below was either re-measured today or
 is marked with where it came from.
 
-## Governance — four files, one status
+## Governance — three files, one status
+
+**Corrected 2026-09-26 (audit-caught): this used to say "four files" and list
+a `debug.md` that no longer exists.** `debug.md` is retired
+(`cae2160 debug.md is done: the living part kept, the file retired`) — its
+still-relevant findings were folded into this file directly; there is no
+fourth file to read.
 
 | file | holds | rule |
 |---|---|---|
 | **`CLAUDE.md`** (this) | **status, hard rules, how to run things** | the only place status lives |
 | **`QWEN.md`** | worker/agent operating rules — coordinate scaling, vision, MCP tools | **no status.** Points here instead |
-| **`debug.md`** | the read-only audit's findings list (1383 lines) | append-only findings; a finding is a pointer, not a verdict |
 | **`knowledge.md`** | analysis + external sources for the open research goals | read only when this file points at a section |
 
 This file is kept small on purpose so it fits a context window with room for the
@@ -56,10 +61,10 @@ left alone (see Done).
 - One module: `python tests/run_tests.py test_gui`.
 - **The runner has two modes, and the bare command is not the full suite.**
 
-  | command | what it runs | measured 2026-09-20 |
+  | command | what it runs | measured 2026-09-26 (audit-caught: this row said 337/290 from 09-20, already stale against the Ledger's own Done section) |
   |---|---|---|
-  | `python tests/run_tests.py` | fast — skips `test_gui`, `test_assets` | **290 tests, 0 failed, ~19 s** |
-  | `python tests/run_tests.py --full` (or `PC_FULL=1`) | everything, 23 modules | **337 tests, 0 failed, 2 skipped, ~67 s** |
+  | `python tests/run_tests.py` | fast — skips `test_gui`, `test_assets` | **303 tests, 0 failed, ~23 s** |
+  | `python tests/run_tests.py --full` (or `PC_FULL=1`) | everything, 23 modules | **353 tests, 0 failed, 2 skipped, ~77 s** |
 
   The fast run says so on exit (`!! FAST RUN -- did NOT run: test_assets,
   test_gui`). **Green there does not mean green.** `-s` forces the old sequential
@@ -107,7 +112,7 @@ left alone (see Done).
 - **Beyond the limit means refuse, not trim** (`--clamp-beyond-limit` restores the
   old cap behaviour). Magnitude test, not semantic. *Exception, measured and
   deliberate:* a **pure-yaw** breach warns and applies capped rather than refusing
-  the whole correction (`pipeline.py:208-218`) — P9 measured that refusing whole
+  the whole correction (`pipeline.py:265-292`) — P9 measured that refusing whole
   threw away 25 photographs whose roll+pitch were fine.
 - **Every colour comes from `INK`, and anything RENDERED must be re-rendered.**
   Two traps, both paid for: `_retint_bg` matches widgets **by class**, so adding a
@@ -118,7 +123,7 @@ left alone (see Done).
   follows the theme. The check is one gesture: switch theme, look for anything
   still wearing the old colours.
 - **`INK` is a module-level dict that `_switch_theme` mutates in place**
-  (`gui.py:4084`, `INK.update(new)`). It outlives the `App` that changed it. Any
+  (`gui.py:4790`, `INK.update(new)`). It outlives the `App` that changed it. Any
   test that switches theme **must restore it** — one that did not made an
   unrelated test fail for a day. See the Ledger.
 - **Mechanical work goes to the worker; the architect measures and decides.**
@@ -169,9 +174,10 @@ declared `mlsd` extra) is in the **system** interpreter, so
 
 ## Ledger — the only place status lives
 
-**Suite, measured 2026-09-20 at `a6d1aaa`+: `--full` = 337 tests, 0 failed,
-2 skipped, 67.0 s. The suite is green for the first time in this file's history.** Fast run
-= 290 in ~19 s and is not the suite. **And the honest one:
+**Suite, measured 2026-09-26 (corrected — this line said 337/09-20, stale
+against this file's own Done section, which already said 353; audit-caught,
+see Open item 15's history): `--full` = 353 tests, 0 failed, 2 skipped,
+77.0 s.** Fast run = 303 in ~22.6 s and is not the suite. **And the honest one:
 `PC_TEST_ASSETS=0 python tests/run_tests.py test_assets` over the whole
 photograph pool = 11 tests, 0 failed, 2 skipped, 133.7 s** — `--full` still
 samples 5 photographs, so it is not by itself a claim about the pool. Re-run
@@ -247,11 +253,12 @@ features ahead of everything else.*
    inverted), hence a `trace_add` on the variable; and the once-only variable
    outlives the session, so a fresh session needed the shown value pushed
    through or the widget would lie on photograph two. Pinned by
-   `test_the_pixel_reference_slider_is_greyed_out_unless_horizontal_auto_is_on`,
+   `test_the_detail_slider_is_greyed_out_unless_a_yaw_is_being_corrected`,
    verified red by sabotage.
    **Checked, NOT a bug**: the slider stays live when the h-marker is on and
-   `correct_horizontal` is off. `review.current_yaw()` returns `_hmarker_yaw`
-   regardless of that flag, so a yaw really is applied and the dial really does
+   `correct_horizontal` is off. `current_yaw()` (`review.py:1096`) calls
+   `self.marker_yaw()` (`review.py:990`) at line 1116, ahead of that flag,
+   so a yaw really is applied and the dial really does
    bite — the tooltip was the thing that was wrong and now names all three yaw
    sources.
 
@@ -481,7 +488,203 @@ features ahead of everything else.*
     already (`ArchitectureScheme.draw_preview` and the debug overlay), so the
     open part is a GUI toggle and a choice of which to show.
 
+14. **[bug, measured 2026-09-26, user-caught] Yaw is estimated by inverting
+    `vp_x = f * tan(yaw)` — well-conditioned near 0 deg, numerically explosive
+    as yaw approaches 90 deg, and nothing in the pipeline detects when an
+    estimate has landed in that region.** Found on `tests/assets/Horizontal/altbau.jpeg`
+    (a real corner-view photo, no EXIF): the tool reports **yaw=63.5 deg**, but
+    the 420 detected horizontal segments themselves only show **median 5.6 deg,
+    90th pct 16.4 deg** of visible 2D slope — the user's own eyeball estimate
+    ("etwa 10 grad") was right, and asking "why does 63 come out of a photo
+    that only shows 10" is the right question, not user error.
+    **The two numbers are not the same quantity** (2D line slope in the photo
+    vs. a 3D camera-obliquity angle) and are related by `tan`, not 1:1 — but
+    that alone doesn't excuse 63.5 deg: at that estimate the implied horizontal
+    vanishing point sits at **x=8072px, 6.7 frame-widths outside the 1200px
+    photo**, extrapolated from segments that only span the visible frame.
+    **Measured sensitivity near the reported value**: yaw 61.46->65.46 deg (a
+    4 deg wobble, well inside plausible line-detection noise at only 5-16 deg
+    of visible convergence) moves the implied VP position **7413px->8830px,
+    +19%** — the arctan inversion amplifies ordinary detection noise into a
+    swing of tens of degrees once the true angle is this close to 90 deg. A
+    forced-focal sweep (18mm to 50mm equivalent) barely moved the estimate
+    (58.7-61.5 deg either way), so this is not simply the focal-length
+    degeneracy already documented elsewhere in this file — it is the yaw
+    inversion itself being ill-conditioned in this regime, a distinct failure
+    mode from "confidence doesn't know if it has the right lines."
+    **Not fixed.** `max_horizontal_deg` (currently 60) caps in ANGLE space,
+    which is exactly the space that explodes here — it does nothing to catch
+    an estimate that is precise-looking but numerically fragile.
+
+    **Sharper root cause, measured directly (same day, user pushed back that
+    "ill-conditioned" wasn't a strong enough explanation for THIS MUCH visible
+    stretch — correctly).** Re-warped the same 420 detected segments through
+    `warp.build()` at a sweep of yaw values and measured the residual 2D slope
+    that survives correction at each, alongside the warped-quad area it costs:
+
+    | yaw tried | median residual slope after | area cost |
+    |---|---|---|
+    | 20 deg | 4.4 deg | 1.2x |
+    | 40 deg | 3.8 deg | 2.3x |
+    | 55 deg | 2.8 deg | 5.8x |
+    | 60 deg | 2.4 deg | 9.2x |
+    | **63.5 deg (reported)** | **2.0 deg** | **13.5x** |
+    | 70 deg | 1.8 deg | 36x |
+    | 75 deg | 1.7 deg | 121x |
+    | 80 deg | 2.0 deg | 2312x |
+
+    **The fit is nearly flat across the whole 20-80 deg range** (residual moves
+    from 4.4 to 1.7 deg, a small change relative to the noise already present
+    in the 5-16 deg of raw visible slope) **while the area cost explodes by
+    three orders of magnitude over the same range.** The line-fit objective the
+    hypothesis search actually optimises cannot distinguish 20 deg from 75 deg
+    on this photo — they explain the visible evidence almost equally well — and
+    it landed on 63.5 deg, one of the most expensive points in that flat valley,
+    with nothing in the objective penalising the cost of being wrong there. This
+    is the real bug, not merely "the arctan inversion is sensitive near 90 deg"
+    (true, and kept above as supporting evidence, but the sensitivity alone
+    doesn't explain choosing an expensive point over a cheap, equally-valid one
+    — a hypothesis search that was blind to cost either way would land on
+    different values, at random, not systematically on the expensive end).
+
+    **Not fixed. Architect decision needed on which of three directions:**
+    (a) add a stretch/area-cost term to the yaw hypothesis scoring itself (in
+    `model.py`'s search, not as a post-hoc cap) so that among near-equally-fitting
+    candidates the cheaper one wins — the most direct fix, but changes the
+    estimator's objective, needs its own accuracy re-measurement against the
+    existing benchmark pool; (b) cap/flag in VP-POSITION space instead of angle
+    space (e.g. refuse or damp confidence hard once the implied VP sits more
+    than N frame-widths outside the photo — cheaper to add, but only a backstop,
+    not a fix to the search picking an arbitrary point in the flat valley in the
+    first place); (c) report yaw with an uncertainty band derived from how flat
+    the local objective is, rather than a bare point estimate. Any of these
+    needs its own measurement pass before shipping, per this file's own rule.
+
+15. **[bug, measured 2026-09-26, user-caught] The "full" HA correction leaves a
+    real, SYSTEMATIC residual tilt on the very facade it targeted — and
+    "Check lines" cannot see it, because its own threshold is the wrong shape
+    of check.** On `altbau.jpeg` at the reported yaw=60deg (same case as item
+    14): re-warping the model's own inlier horizontal lines (`horiz.subset(dom.inliers)`,
+    287 of 420 detected, `dom.support=0.81`) through the applied `H` gives
+    **mean -2.20deg on the LEFT (dominant) facade's own lines, mean -2.09deg on
+    the right** — not scatter around zero, a one-directional slant on both
+    sides. This is real: measured with the model's own inlier set, not raw
+    detector noise, and it is what the user saw as "schief wie Hoelle" in both
+    my rendered comparisons and their own saved output. **Root cause**: the
+    yaw hypothesis search (`model.py`, `horiz_hyps[0]`) picks the most-agreed
+    RANSAC cluster by inlier COUNT, which is a consensus criterion, not a
+    least-squares fit minimizing total residual slope to zero — a robust
+    majority vote can still land a couple of degrees off the line that would
+    truly zero the residual, and nothing downstream corrects for that gap.
+    **Contrast, same photo, measured 2026-09-26 (prototype only, not shipped,
+    no Done entry yet — recorded here since this is where it was measured)**:
+    the single-facade PLANAR rectification (strip-restricted
+    `auto_facade_corners` + `planar.transform_for`) gave **0.31-0.88deg**
+    median residual — 3-7x
+    tighter, because it fits the facade's own four corners directly rather
+    than inheriting a RANSAC consensus built for a different purpose (finding
+    *a* dominant direction, not minimizing final slope).
+    **"Check lines" (`gui.py:4073 _draw_after_lines`) gave a false all-clear
+    and that is a second, independent bug, not confirmation the first one is
+    fine.** Its colour test is
+    ```python
+    colour = OVERLAY["check_ok"] if abs(dy) <= 1.5 else OVERLAY["check_h_off"]
+    ```
+    — an ABSOLUTE PIXEL offset on whatever segment the re-detector happens to
+    find on the small preview array, not an angle. For a long segment 1.5px
+    is strict (~0.3deg over 300px); for the short segments a real detector
+    mostly returns (window reveals, coursing, brick joints, 15-25px typical)
+    the same 1.5px is **~3.4-5.7deg of slack** — enough to hide the measured
+    -2.2deg mean entirely, segment by segment, while the cornice as a whole
+    visibly climbs across the frame. The diagnostic's own docstring says its
+    job is showing "a residual lean" from "the photograph actually ended
+    up" — a per-segment absolute-pixel test cannot do that job; it needs to
+    measure the angle each segment makes (`degrees(atan2(abs(dy), abs(dx)))`
+    for a near-horizontal one) against a degree threshold, independent of how
+    long the piece the detector happened to return is.
+    **(i) fixed, same session, uncommitted.** `_draw_after_lines` now uses
+    `_off_angle_deg()` against `CHECK_LINE_TOL_DEG` (`gui.py:150-175`, call
+    sites at `gui.py:4105` and `:4120`) — an angle, not a pixel offset.
+    `python -m py_compile src/pc/gui.py` succeeds; not yet committed
+    (`git status` shows `gui.py` modified). **(ii) still open.** The
+    RANSAC-consensus-vs-least-squares gap in the yaw search itself is the
+    same class of decision as item 14's option (a) — needs its own
+    measurement pass, not a quick patch, since tightening the search could
+    change which cluster wins on other photographs in the pool.
+
 ### Done — rely on these
+
+**2026-09-26**
+
+- **[feature, user-directed] Auto-crop now respects the facade strip, bounded
+  to strip + 20%.** User's request: "wenn ROI aktiv ist sollte das der auto
+  crop beachten." Ledger A.4 (2026-09-20) had measured that cropping to the
+  strip +20% was worth more than a whole second correction pass on its own,
+  and that 20% beat a 30% guess by 8x — this generalises that measurement to
+  the production `warp.plan()` auto-crop, not just the experimental two-pass
+  harness. **Designed by a read-only Sonnet plan-subagent working directly
+  against this checkout (not the unsloth worker, whose first attempt at this
+  same task was caught citing stale session-transcript line numbers instead
+  of the live file — discarded, not applied), verified and applied by the
+  architect.**
+  New in `src/pc/warp.py`: `STRIP_CROP_MARGIN = 0.20`, `_strip_x_range_warped`
+  (maps `strip`'s original-image-space fractions through `H` — confirmed by
+  measurement that `quad`/`inscribed_rect` live in warped/output space, which
+  under real yaw is NOT a scaled copy of the original x-axis), `_strip_band`
+  (the warped strip + margin, clipped to `quad` — same clip-to-what-exists
+  rule `_whole_frame`'s own facade-box margin already uses), `_clip_quad_to_x_band`
+  (Sutherland-Hodgman, stays convex), and `_strip_bounded_rect` (uses
+  `max_inscribed_rect`, deliberately NOT the centre-anchored `inscribed_rect`
+  — measured that anchoring on the original frame's centre degenerates to a
+  zero-area rect whenever that centre sits outside the chosen strip, which is
+  the common corner-view case).
+  Gated in `plan()` on `strip is not None and abs(yaw) > 1e-9` (a strip placed
+  AND a real rotation fired) — this necessarily reads as "any yaw," since
+  `plan()`'s signature can't distinguish the three yaw sources (auto/h-marker/
+  manual) CLAUDE.md names elsewhere; not fixed here.
+  **The path that actually matters is `_whole_frame`, not the plain
+  `inscribed_rect` call** — measured: `crop="auto"` (the default) blows
+  through `crop_max_loss` and falls back to `_whole_frame` at essentially
+  every yaw large enough for a strip to matter (e.g. 60% coverage loss at
+  yaw=20°, against a 5% batch / 30% review budget), so `_whole_frame` gained
+  the same strip-awareness in both its branches: the line-segs facade-box path
+  (intersects the existing box with the strip band) and the no-line-segs
+  fallback (previously ignored `strip` entirely, and had no width floor to
+  begin with). **One deliberate override of "never smaller than source"**:
+  the line-segs branch's `ow_c = max(ow_c, img_w)` floor is now skipped
+  specifically when a strip band applies — measured that the band is
+  narrower than `img_w` in most real (yaw, strip) pairs, so honouring the
+  floor there would routinely re-admit the region the user's strip excluded.
+  Pinned by `tests/test_warp.py::test_auto_crop_is_bounded_to_the_strip_plus_20_percent`
+  (asserts the crop's warped x-range stays inside the strip+20% band, and
+  separately that the SAME yaw without a strip really does exceed that band —
+  the non-vacuity half this file's gotchas insist on). `python tests/run_tests.py --full`:
+  **353 tests, 0 failed, 2 skipped** (up from 337 on 09-20 — `test_distortion`,
+  `test_sam2seg` and this new test all grew the count; `test_sam2seg` is no
+  longer the "0 bytes" file item C.10 named, worth a separate confirmation
+  pass since that item is still open below).
+  **Found on the way, NOT fixed, flagged instead of silently repaired:**
+  (1) `_whole_frame`'s line-segs branch chains TWO margins, not one — a
+  hardcoded 20% (`mx, my = 0.20 * (fx1-fx0), ...`) followed by a second,
+  separately-clipped `settings.reframe_margin` margin (`config.py:177`
+  defaults to **0.30**, not the `getattr(..., 0.20)` fallback its own line
+  suggests) — so that path's real behaviour today is closer to "facade
+  +20%, then +30% more," which is roughly the ratio A.4 measured as *worse*,
+  not the 20% it measured as best. Independent of this fix; needs its own
+  decision. (2) `tests/test_selfupdate.py` exists and is **not in
+  `tests/run_tests.py`'s `MODULES`** — the runner now prints
+  `!! not in MODULES, so never run: test_selfupdate` on every run. Exactly
+  the "Tested is not reachable" trap this file names twice already; not
+  investigated further here (unrelated to this task, and unknown whether it
+  passes). (3) `ReviewSession.auto_crop()` (`review.py`) already threads
+  `strip=self.strip` into `W.plan()`, so its `ow`/`oh` now correctly narrow
+  — but its OWN subsequent `W.max_inscribed_rect(quad, ...)` call (on the
+  full, un-clipped quad derived from `H_total`) is not itself strip-band-aware;
+  the later `min(x1, ow)`-style clamp bounds the result into the now-narrower
+  canvas but does not guarantee the *largest* rect within the band the way
+  `_strip_bounded_rect` does for `plan()` proper. Likely fine in practice,
+  not verified against a real corner-view asset by hand — a candidate for the
+  same treatment if the button's output is ever measured and found wanting.
 
 **2026-09-20**
 
@@ -897,8 +1100,11 @@ features ahead of everything else.*
   the supported path.
 - **H-Marker is a per-facade tool, by design.** It gives an exact yaw for **one**
   facade. On a corner view with opposing VPs the single-rotation model cannot
-  straighten both facades at once — expected, not a bug. "horizontal auto (yaw)"
-  and "horizontal marker (manuell)" are mutually exclusive in Q4. PC Rectangle is
+  straighten both facades at once — expected, not a bug. **Stale as of
+  2026-09-26 (audit-caught): there is no separate "horizontal marker (manuell)"
+  checkbox any more** — it was removed 2026-09-20 (`gui.py:1299-1306`'s own
+  comment: "the line is the switch now"); a drawn control line is itself the
+  h-marker, nothing to toggle against "horizontal auto (yaw)". PC Rectangle is
   the tool when one surface needs full planar control.
 
 **2026-09-17 → 18**
@@ -1063,6 +1269,21 @@ detector removed · M-LSD unblocked in the GUI interpreter.
 
 ## Worker (local Qwen, via `tools/worker_agent.py`)
 
+**A third route exists now, and its first real test (2026-09-26) failed in a
+way worth naming.** Claude Code Desktop can expose the same Unsloth server as
+MCP tools, `unsloth_agent` (write) / `unsloth_plan_agent` (read-only). Asked
+to propose the strip-aware auto-crop fix above, it reported that its
+filesystem access to this checkout was sandboxed/denied, then answered anyway
+— from two old session transcripts instead of the live tree — and its own
+report flagged the line numbers as "not independently verified." The
+proposal was discarded, not applied; a Sonnet plan-subagent with real
+Read/Grep/Bash access redid it from scratch and found real corrections to it
+(see the 2026-09-26 Done entry). **Treat an `unsloth_agent`/`unsloth_plan_agent`
+result as a pointer, same as any worker or subagent finding, and check first
+whether it says its own file access actually worked** — this session's proposal
+said so itself, in its own uncertainty section, and would have been missed by
+skimming only the confident-sounding parts.
+
 **Do not use the `qwen -p` CLI and do not use the plugin. Use the server.**
 `qwen -p` registers no tools: it reads and reasons but cannot write or execute,
 which is why the worker was written off for weeks. `tools/worker_agent.py` POSTs
@@ -1124,8 +1345,6 @@ Five repo-scoped tools, **no raw shell**: `read_file`, `grep`, `str_replace`,
 - `.claude/skills/grounding-sam/SKILL.md` — Grounding DINO + SAM2
   detect-then-segment, local model paths, the benchmark gate.
 - `knowledge.md` — analysis and sources for the open research goals.
-- `debug.md` — the audit findings list. **Large (1383 lines): send questions
-  about it to a subagent rather than reading it into context.**
 - `docs/claude-md-overhaul-plan.md` — historical; superseded by this file and
   `knowledge.md`, kept only for the Stage 4 plumb-line detail.
 - `docs/qwen-knowledge.md` — history, not instruction: why the worker was once

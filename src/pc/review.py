@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import math
 import os
+from types import SimpleNamespace
 
 import cv2
 import numpy as np
@@ -1124,6 +1125,31 @@ class ReviewSession:
         return W.limit(self.model.roll, self.model.pitch, self.settings,
                        yaw=self.model.yaw, focal_is_a_guess=guessed)[2]
 
+    def directions_diverge(self, ratio=0.5, min_support=0.5):
+        """Two (or more) comparably-strong, DIFFERENT horizontal directions.
+
+        User-directed (2026-09-26): a corner view mixes two facades' worth of
+        horizontal evidence into one pitch/yaw estimate, which is exactly why
+        the old corner-view pitch damping existed and was then removed --
+        "keine Daempfung waere am besten" (no damping is the cleaner answer).
+        The replacement is manual, not automatic: point the strip at one
+        facade instead of guessing how much to trust the mixed evidence. This
+        only detects the case that needs pointing at; it never places the
+        strip itself, no auto_facade_corners-style guess -- the caller's job
+        is to ask, per `planar.py`'s own stated principle for exactly this
+        situation ("guessing wrong warps a good photo into a sliver").
+
+        A no-op (returns False) once `self.strip` is already set: the
+        question has already been answered for this photograph.
+        """
+        if self.strip is not None or self.model is None:
+            return False
+        supports = (self.model.diagnostics or {}).get("horiz_supports") or []
+        if len(supports) < 2:
+            return False
+        top, second = supports[0], supports[1]
+        return top >= min_support and second >= min_support and second >= ratio * top
+
     def would_skip(self):
         """``None`` if the image would be corrected, else the reason it would not.
 
@@ -1580,6 +1606,34 @@ class ReviewSession:
         IO.save(dst_path, out, self.src, self.settings)
         return dst_path
 
+    def output_size(self):
+        """``(ow, oh)`` the next :meth:`save` will actually write, at full
+        source resolution -- geometry only, no pixel warp, so it is cheap
+        enough to call on every redraw.
+
+        Mirrors ``save()``'s own plan exactly (same angles, same
+        ``keep_size=True``, same ``strip``) so the two can never disagree.
+        Returns the source size when there is nothing to straighten (the same
+        case ``save()`` special-cases into a copy-through) or when the plan is
+        degenerate, matching what a save would actually produce in each case.
+        """
+        roll, pitch, f, _ = self.current_angles()
+        yaw = self.current_yaw()
+        if abs(roll) < 1e-12 and abs(pitch) < 1e-12 and abs(yaw) < 1e-12:
+            return self.w, self.h
+        save_settings = self.settings.replace(keep_size=True)
+        H = W.build(self.w, self.h, f, roll, pitch, yaw, max_area=save_settings.max_area_ratio)
+        _segs = None
+        if len(self.vert) or len(self.horiz):
+            _parts = [x.seg for x in (self.vert, self.horiz) if len(x)]
+            if _parts:
+                _segs = np.concatenate(_parts, axis=0)
+        planned = W.plan(self.w, self.h, H, save_settings, line_segs=_segs, yaw=yaw,
+                         strip=self.strip)
+        if planned is None:
+            return self.w, self.h
+        return int(planned[1]), int(planned[2])
+
     def save(self, dst_path: str, on_stage=None):
         """Write the corrected image using whatever is currently in force.
 
@@ -1605,13 +1659,16 @@ class ReviewSession:
             os.makedirs(os.path.dirname(os.path.abspath(dst_path)) or ".", exist_ok=True)
             IO.save(dst_path, out, self.src, self.settings)
             return dst_path
-        # keep_size=False: the corrected image must never be SMALLER than the
-        # original.  With keep_size=True, _whole_frame would scale an inflated
-        # quad (large yaw) back down to source dimensions — that is exactly the
-        # shrinkage the user forbade.  keep_size=False lets the output grow to
-        # fit the full warped frame; for small roll/pitch the quad barely
-        # inflates so the output stays close to source size either way.
-        save_settings = self.settings.replace(keep_size=False)
+        # keep_size=True here, only here (2026-09-26, user-directed: "lange
+        # Kante gleich viel Pixel, nicht doppelt so viele" -- at False a large
+        # yaw grew the long edge well past the source). Tried as a global
+        # default first and reverted: it broke four unrelated tests
+        # (strip-cropping, the keep_pixels dial, fill sizing) that build a
+        # bare Settings() and never meant to opt into this. Scoped to just
+        # the save the user actually looks at instead. The "detail (px kept)"
+        # dial still decides how far past source size the near edge may push
+        # the canvas: 0 = source long edge, 1 = every near-edge pixel kept.
+        save_settings = self.settings.replace(keep_size=True)
         H = W.build(self.w, self.h, f, roll, pitch, yaw, max_area=save_settings.max_area_ratio)
         _segs = None
         if len(self.vert) or len(self.horiz):
@@ -1641,7 +1698,46 @@ class ReviewSession:
         _stage("writing", mpx)
         os.makedirs(os.path.dirname(dst_path) or ".", exist_ok=True)
         IO.save(dst_path, out, self.src, self.settings)
+        self._log_correction(dst_path, roll, pitch, f, yaw, save_settings)
         return dst_path
+
+    def _log_correction(self, dst_path, roll, pitch, f, yaw, settings):
+        """Real before/after verification, written to `correction_log/`.
+
+        User-directed (2026-09-26): "messe auch nach Korrektur Werte und
+        trage sie in Listen ein" -- re-detect horizontals on the SOURCE and
+        on the FILE JUST WRITTEN (read back from disk, not the in-memory
+        array -- the point is to verify what actually landed on disk), the
+        same before/after pattern `cli.py`'s `_hpc_save` already used for the
+        batch path. The review window never wrote this; every "before/after"
+        number discussed for the GUI path this session was a reconstruction,
+        never a measurement. A diagnostic must never break a real save, so
+        every failure here is swallowed after `on_stage` has already
+        returned -- the photograph is already on disk by this point.
+        """
+        try:
+            from . import correction_log as CLOG
+            from .pipeline import measure_horizontals
+            from . import __version__
+            before = measure_horizontals(self.bgr, settings, f)
+            out_bgr = cv2.imread(dst_path)
+            after = (measure_horizontals(out_bgr, settings, f) if out_bgr is not None
+                     else {"n_lines": 0, "yaw_deg": None, "support": 0.0})
+            result = SimpleNamespace(
+                src=self.path, status="OK",
+                roll_deg=math.degrees(roll), pitch_deg=math.degrees(pitch),
+                yaw_deg=math.degrees(yaw),
+                confidence=(self.model.confidence if self.model else 0.0),
+                focal_35mm=M.focal_35mm_from_px(f, self.w, self.h),
+                focal_source=(self.model.f_source if self.model else "none"),
+                clamped=False, strip=self.strip)
+            rec = CLOG.build_record(result, before, after, __version__)
+            folder = "correction_log"
+            stem = os.path.splitext(os.path.basename(self.path))[0]
+            CLOG.write_record(folder, stem, rec)
+            CLOG.append_csv(folder, CLOG.record_to_row(rec))
+        except Exception:
+            pass
 
 
 def _fit(img, max_edge):

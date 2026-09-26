@@ -730,11 +730,14 @@ def test_single_image_save_runs_the_fill_when_a_mode_is_set():
 
     assert "hole" in calls, "save() must call inpaint.fill when a fill mode is set"
     # The hole it passes matches the planned output size.  save() uses
-    # keep_size=False so the output grows to fit the warped quad (never shrinks).
-    # Note: _whole_frame now crops to the facade bounding box + margin, so the
-    # planned size may differ from a naive full-quad calculation.
+    # keep_size=True (2026-09-26, user-directed: "lange Kante gleich viel
+    # Pixel, nicht doppelt so viele"), scoped to the review save path only,
+    # so the output stays at source dimensions rather than growing to fit
+    # the warped quad. Note: _whole_frame now crops to the facade bounding
+    # box + margin, so the planned size may differ from a naive full-quad
+    # calculation.
     roll, pitch, f, yaw = s.current_angles()
-    save_settings = s.settings.replace(keep_size=False)
+    save_settings = s.settings.replace(keep_size=True)
     H = W.build(s.w, s.h, f, roll, pitch)
     # Rebuild line segments the same way save() does
     _segs = None
@@ -799,13 +802,14 @@ def test_save_with_real_lama_produces_a_filled_frame():
         assert out is not None, "save() must write a file"
         assert out.shape[2] == 3
 
-    # The output must match the planned size.  save() uses keep_size=False so
-    # the warped quad gets its full canvas (output grows, never shrinks).
-    # _whole_frame crops to the facade bounding box + margin, so we rebuild
-    # the plan with the same line segments save() uses.
+    # The output must match the planned size.  save() uses keep_size=True
+    # (2026-09-26, user-directed), scoped to the review save path, so the
+    # output stays at source dimensions rather than growing to fit the
+    # warped quad. _whole_frame crops to the facade bounding box + margin,
+    # so we rebuild the plan with the same line segments save() uses.
     from pc import warp as W
     roll, pitch, f, yaw = s.current_angles()
-    save_settings = s.settings.replace(keep_size=False)
+    save_settings = s.settings.replace(keep_size=True)
     H = W.build(s.w, s.h, f, roll, pitch)
     _segs = None
     if len(s.vert) or len(s.horiz):
