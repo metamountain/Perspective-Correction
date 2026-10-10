@@ -665,3 +665,18 @@ def test_the_live_switch_lets_a_slow_fill_into_the_preview_and_none_never_runs()
     assert not gate("lama", False), "lama must stay out of the preview by default"
     assert gate("lama", True), "the switch has to let lama in -- that is its job"
     assert not gate("none", False) and not gate("none", True),         "there is nothing to preview when the fill is off"
+
+
+def test_a_missing_backend_falls_back_to_telea_instead_of_failing():
+    """Save must not die because an optional backend is not installed."""
+    img, hole = _photo(), _hole()
+    orig = F._fill_lama
+    def boom(*a, **k):
+        raise F.FillUnavailable("LaMa needs simple-lama-inpainting: pip install")
+    F._fill_lama = boom
+    try:
+        out, note = F.fill(img, hole, Settings().replace(fill="lama", fill_max_share=0.0))
+    finally:
+        F._fill_lama = orig
+    assert note.startswith("telea filled") and "lama unavailable" in note
+    assert not np.array_equal(out[hole], img[hole]) or not hole.any()

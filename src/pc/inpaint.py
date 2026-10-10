@@ -699,7 +699,7 @@ def _fill_comfy(bgr: np.ndarray, hole: np.ndarray, settings) -> np.ndarray:
 # the seam
 # --------------------------------------------------------------------------
 def fill(bgr: np.ndarray, hole: np.ndarray, settings, on_step=None) -> tuple:
-    """``(image, note)``.  Raises ``FillUnavailable`` rather than falling back.
+    """``(image, note)``.  A lama/comfyui backend that is unavailable falls back to TELEA (see note); an unknown mode still raises ``FillUnavailable``.
 
     ``hole`` is ``warp.filled_region``: True where the output has no source
     pixel behind it.  Nothing else is ever modified.
@@ -744,11 +744,22 @@ def fill(bgr: np.ndarray, hole: np.ndarray, settings, on_step=None) -> tuple:
         # One indivisible OpenCV call: there is no honest midpoint to report.
         step("filling the band", 0.0)
         out = _fill_telea(bgr, hole, settings)
-    elif mode == "lama":
-        out = _fill_lama(bgr, hole, settings, step)
     else:
-        step("asking ComfyUI", 0.0)
-        out = _fill_comfy(bgr, hole, settings)
+        # A missing optional backend must not stop a save (user, 2026-10-10):
+        # the band is filled by TELEA instead and the note says so.
+        try:
+            if mode == "lama":
+                out = _fill_lama(bgr, hole, settings, step)
+            else:
+                step("asking ComfyUI", 0.0)
+                out = _fill_comfy(bgr, hole, settings)
+        except FillUnavailable as exc:
+            step("falling back to telea", 0.0)
+            out = _fill_telea(bgr, hole, settings)
+            step("filled", 1.0)
+            reason = str(exc).split("  ")[0]
+            return out, (f"telea filled {share:.1%} in {time.time() - t0:.1f}s "
+                         f"({mode} unavailable: {reason})")
     step("filled", 1.0)
     return out, f"{mode} filled {share:.1%} in {time.time() - t0:.1f}s"
 
