@@ -10,8 +10,9 @@ tools are.
 
 - **Read `CLAUDE.md` first.** It has the hard rules, how to run the tests, and
   what is open.
-- **Findings go in `debug.md`.** It is 1383 lines — ask a subagent about it
-  rather than reading it into context.
+- **Findings go in `CLAUDE.md`'s Ledger.** `debug.md` was retired
+  (`cae2160`); its still-relevant findings were folded into `CLAUDE.md`
+  directly. There is no separate findings file to read.
 
 ---
 
@@ -136,7 +137,6 @@ screenshot and paste it back just so an agent can check something.
 
 | File | Permission |
 |---|---|
-| `debug.md` | **WRITE** — findings list + proposals |
 | `QWEN.md` | **WRITE** — these operating rules |
 | `CLAUDE.md` | **WRITE** — the Ledger, after a change lands |
 | everything else | **READ-ONLY** unless the user explicitly asks for a change |

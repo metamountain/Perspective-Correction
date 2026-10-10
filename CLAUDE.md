@@ -84,7 +84,8 @@ left alone (see Done).
   away. **`PC_TEST_ASSETS=0` restores the whole pool and must be
   used before writing any pool-wide number into this file.**
 - A new `test_*.py` must be added to `MODULES` in `run_tests.py` or `_unlisted()`
-  fails the run. There are **23** modules.
+  fails the run. There are **23** modules. (`test_selfupdate.py` exists on disk but is not yet in `MODULES`; `_unlisted()` flags it.)
+- `src/pc/selfupdate.py` (229 lines) holds the update button's logic — kept out of `gui.py` so it can be tested without a window; it checks and applies a fast-forward-only pull, refusing a dirty tree or diverged history. Tested by `tests/test_selfupdate.py` (193 lines), which builds throwaway git repos rather than mocking.
 - GUI off-screen pattern: `App(start_maximized=False)`,
   `geometry("<WxH>-4000+0")`, pump with `update()` + `sleep(0.02)`, then
   `destroy()`. `invalid command name ..._pump` on teardown is harmless Tk noise.
@@ -437,7 +438,7 @@ features ahead of everything else.*
    the second one needed correcting afterwards** — the audit stamped a wrong
    support figure as verified, which is the entry worth reading.
 
-8. **`gui.py` is 5217 lines** — 3.5× the next largest file (`review.py`, 1369).
+8. **`gui.py` is 6014 lines** — 3.3× the next largest file (`review.py`, 1809).
    A 12-file composition split was proposed and **deprioritised by the user**. It
    stays deprioritised; recorded so it is not re-proposed as if new.
 9. ~~**`cli.py` `isatty()` gate**~~ **Struck 2026-09-20: it was not a defect.**
@@ -455,7 +456,7 @@ features ahead of everything else.*
     twin of the failure `_unlisted` was written for, and the runner now prints
     a **LISTED BUT EMPTY** banner beside the FAST RUN one (reported, not fatal:
     turning a pre-existing gap into a red suite makes the red stop meaning
-    anything). **Writing those tests is the open item.** The segmentation path
+    anything). **Tests were written (103 lines): the config-name derivation, the quoting that keeps a non-ASCII path safe, and the seam that runs without SAM2.** The segmentation path
     is not small — `sam2seg.run_subprocess` shells into `python_embeded` and
     hands a PNG back, `load_mask_png` inverts selection-white to ignore, and
     `apply_sam_mask` converts file-resolution to analysis-resolution, which is
