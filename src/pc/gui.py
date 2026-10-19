@@ -943,12 +943,14 @@ class ReviewPanel(tk.Frame):
     # into the same widgets.
     def __init__(self, master):
         super().__init__(master, background=INK["cross"])
-        # The perfect cross (2026-09-12): four exactly equal fields -- the two
-        # previews on top, loader and controls below -- divided by a flat dark
-        # cross and ringed by a dark border, both CROSS_GAP/CROSS_BORDER wide.
-        # One grid of uniform rows and columns makes equality a property of the
-        # layout rather than an agreement between two arrangements; `load`
-        # destroys and rebuilds three of the four fields, the loader survives.
+        # The cross: two previews on top, loader and controls below -- divided
+        # by a flat dark cross and ringed by a dark border, both
+        # CROSS_GAP/CROSS_BORDER wide. One grid of uniform rows and columns makes
+        # the split a property of the layout rather than an agreement between two
+        # arrangements; `load` destroys and rebuilds three of the four fields,
+        # the loader survives. The rows are broken vertically (2026-10-19,
+        # user-directed): the pictures on top take the larger share, see
+        # CROSS_TOP_WEIGHT / CROSS_BOT_WEIGHT below.
         b = layout.CROSS_BORDER
         g = layout.CROSS_GAP // 2
         # The cross and the border ARE this widget's own background showing
@@ -964,8 +966,13 @@ class ReviewPanel(tk.Frame):
         self.bind("<Button-1>", self._on_cross_press)
         self.bind("<B1-Motion>", self._on_cross_pull)
         self.bind("<ButtonRelease-1>", self._on_cross_drop)
-        self.rowconfigure(0, weight=1, uniform="cross_rows")
-        self.rowconfigure(1, weight=1, uniform="cross_rows")
+        # The cross is broken vertically (2026-10-19, user-directed): one uniform
+        # group keeps each row's size fixed and independent of its content's
+        # request (the controls ask for ~679 px and must not grow their row), and
+        # the weight ratio 3:2 hands the pictures ~60 % of the pane and the
+        # controls ~40 % instead of the old equal halves.
+        self.rowconfigure(0, weight=layout.CROSS_TOP_WEIGHT, uniform="cross_rows")
+        self.rowconfigure(1, weight=layout.CROSS_BOT_WEIGHT, uniform="cross_rows")
         self.columnconfigure(0, weight=1, uniform="cross_cols")
         self.columnconfigure(1, weight=1, uniform="cross_cols")
         self.cell_before = ttk.Frame(self)
@@ -1112,8 +1119,14 @@ class ReviewPanel(tk.Frame):
         # The controls are one of the four fields, not a strip under two of
         # them: `cell_ui` is the lower-right box of the cross and everything
         # from the hint down to the Save row lives inside it.
+        # This frame is the per-photograph controls (the sliders and the Save
+        # row) -- the manual-review instrument, which is the product. It is
+        # packed side="top" WITHOUT expand so it claims its full height first
+        # and is never the thing that gets squeezed: the batch defaults below
+        # (`opt`, built in App._build) are the expander and clip first, because
+        # they only matter for the demoted unattended run.
         top = ttk.Frame(self.cell_ui, padding=6)
-        top.pack(fill="both", expand=True)
+        top.pack(side="top", fill="x")
 
         # The two previews are the upper fields.  Nothing here divides
         # anything: the split between them is the cross's own grid, so the two
@@ -5096,11 +5109,15 @@ class App(_ROOT_CLASS):
         self._w_out[1].pack(side="right")
         self.lbl_count.pack(side="right")
         self.progress.pack(side="left", fill="x", expand=True, padx=10)
-        # Start row at the very foot of the field, options above it.  Both are
-        # packed side="bottom", so the frame `load` rebuilds -- packed
-        # side="top" with expand -- can never push them out of place.
+        # Start row at the very foot of the field. The per-photograph controls
+        # (`top`, packed side="top" without expand in ReviewPanel._build) claim
+        # their full height first, then this run bar takes its strip from the
+        # foot, and the batch defaults (`opt`) are the expander -- they get the
+        # leftover and clip first, because they only matter for the demoted
+        # unattended run while the sliders and Save are the manual-review
+        # instrument the window exists for.
         bar.pack(side="bottom", fill="x")
-        opt.pack(side="bottom", fill="x")
+        opt.pack(side="top", fill="x", expand=True)
 
         # The results list is the lower half of the loader field: files and
         # what happened to them in one place, under the list that names them.

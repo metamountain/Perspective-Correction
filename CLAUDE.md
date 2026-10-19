@@ -651,6 +651,30 @@ features ahead of everything else.*
   window maps in `mainloop`) and re-applied in `_maximize` and `_switch_theme`.
   Verified by screenshot: caption is black under Minimal Black.
 
+- **[UI, user-directed] The cross broke vertically: the pictures on top take
+  the larger share.** The 2026-09-12 "four exactly equal fields" directive is
+  superseded for the rows only: the two preview fields on top now get more
+  height than the loader/controls below, because a photograph judged by eye
+  wants every extra pixel while the controls want only what they need.
+  `CROSS_TOP_WEIGHT = 3` / `CROSS_BOT_WEIGHT = 2` in `layout.py`; the
+  `ReviewPanel` rows (`gui.py:974-975`) use those weights inside ONE uniform
+  group `cross_rows`. The single uniform group is load-bearing, measured:
+  separate groups (or no uniform) let the controls' ~679 px request drive the
+  split back to ~19/81. Columns are untouched — still one uniform group, four
+  equal widths. Inside the controls field the pack order changed with the
+  demotion: the per-photograph controls (`top`, sliders + Save row) pack
+  `side="top", fill="x"` WITHOUT expand (`gui.py:1128`), so they claim their
+  full height first and are never the thing squeezed; the batch defaults
+  (`opt`) are now the expander (`side="top", fill="x", expand=True`,
+  `gui.py:5120`) and clip first, because they only matter for the demoted
+  unattended run. Pinned by
+  `test_the_cross_breaks_vertically_with_the_pictures_on_top` (renamed from
+  `test_the_cross_is_four_equal_fields`): per-row uniformity, top row bigger
+  than bottom, ratio within 0.05 of the constants' 3:2 at 1920x1080 and
+  2560x1440; `test_collapsing_the_adjustments_leaves_the_cross_where_it_was`
+  updated to the 3:2 wording (collapsing the adjustments still moves no
+  field).
+
 **2026-09-26**
 
 - **[feature, user-directed, asked ~20 times] Horizontal compression after
@@ -1272,7 +1296,8 @@ Stage 0 distortion · package renamed `bpc` → `pc` · rulers became plain grey
 guides pulled from the cross · both previews fill their field at one scale ·
 planar removed from the palette, module kept · lens profile looked up by name
 and **refused rather than guessed** when ambiguous · suite sampled to 5 assets ·
-perfect-cross UI (closed decision — do not propose layout changes) · Hough
+perfect-cross UI (superseded 2026-10-19: rows broke to a 3:2 split, pictures
+on top — see the Done entry) · Hough
 detector removed · M-LSD unblocked in the GUI interpreter.
 
 ### Repo note (measured 2026-09-20)

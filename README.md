@@ -23,9 +23,10 @@ basis, each against its own measurement.
 
 ## The window
 
-![The review window at 1920×1080: four equal fields around a black cross. Top left the original with detected lines drawn on it and the tool palette down its edge; top right the corrected frame with crop handles; bottom left the detector and mask controls; bottom right the angle sliders and the Review/Unattended bar.](docs/ui.png)
+![The review window at 1920×1080: the two preview fields on top take the larger share, loader and controls below, around a black cross. Top left the original with detected lines drawn on it and the tool palette down its edge; top right the corrected frame with crop handles; bottom left the detector and mask controls; bottom right the angle sliders and the Review/Unattended bar.](docs/ui.png)
 
-The window *is* a cross of four equal fields. **Top left** is the original, with
+The window *is* a cross of four fields, the two previews on top taking the
+larger share. **Top left** is the original, with
 what the estimator saw drawn over it and the tools that change the input running
 down its edge. **Top right** is the result, at the same scale as the original so
 the two can be compared honestly, with a crop rectangle whose discarded area is

@@ -480,11 +480,12 @@ def test_collapsing_the_adjustments_leaves_the_cross_where_it_was():
     """The four control rows fold away, and come back where they were.
 
     This used to assert that collapsing them bought the picture 100 px. Under
-    the perfect cross it cannot, and the inversion *is* the feature: the two
-    rows are equal halves of the pane, so folding the controls away changes
-    what is inside the lower-right field and never the size of any field. The
-    preview must therefore not move at all -- a layout whose boxes jump when a
-    checkbox is pressed is the thing the equal cross exists to stop.
+    the cross it cannot, and the inversion *is* the feature: the two rows are a
+    fixed 3:2 split of the pane (the pictures on top take the larger share), so
+    folding the controls away changes what is inside the lower-right field and
+    never the size of any field. The preview must therefore not move at all --
+    a layout whose boxes jump when a checkbox is pressed is the thing the
+    uniform cross exists to stop.
 
     Everything else this test guards is unchanged and still live: `pack`
     appends, so a re-expand that does not name its place puts the controls
@@ -510,8 +511,8 @@ def test_collapsing_the_adjustments_leaves_the_cross_where_it_was():
         assert r._adj not in top.pack_slaves(), "collapsed, but still packed"
         assert abs(shut_h - open_h) <= 2, (
             f"the preview field moved {shut_h - open_h} px when the controls "
-            f"folded; the cross's rows are equal halves and must not depend on "
-            f"what is inside one of them")
+            f"folded; the cross's rows are a fixed 3:2 split and must not "
+            f"depend on what is inside one of them")
 
         r.v_adjust.set(True); r._toggle_adjust(); _settle(app, 10)
         assert abs(r.c_before.winfo_height() - open_h) <= 2, (
@@ -812,15 +813,19 @@ def test_guides_are_pulled_off_the_black_cross():
         app.destroy()
 
 
-def test_the_cross_is_four_equal_fields():
-    """The 2026-09-12 directive, asserted on the real widgets.
+def test_the_cross_breaks_vertically_with_the_pictures_on_top():
+    """The cross is broken vertically (2026-10-19, user-directed), asserted on
+    the real widgets.
 
-    Four exactly equal fields -- before/after on top, loader and controls
-    below -- divided by a flat dark cross and ringed by a dark border, both of
-    them the constants' width.  The constants are the oracle rather than a
-    typed-in pixel count; what is pinned here is that Tk's uniform grid lands
-    on them, and that the plus shape is the plus shape (loader lower-left,
-    controls lower-right), which no size assertion alone would catch.
+    The two preview fields on top take the larger share and the two lower fields
+    the smaller one, in the CROSS_TOP_WEIGHT : CROSS_BOT_WEIGHT ratio -- the
+    pictures want every extra pixel, the controls only what they need. The
+    columns stay one uniform group, so all four fields still share a width; the
+    heights are the thing that broke. The constants are the oracle for the ratio
+    rather than a typed-in pixel count; what is pinned is that Tk's uniform grid
+    lands on a top row bigger than the bottom row, and that the plus shape is
+    the plus shape (loader lower-left, controls lower-right), which no size
+    assertion alone would catch.
     """
     from pc import layout as L
     for w, h in ((1920, 1080), (2560, 1440)):
@@ -832,8 +837,18 @@ def test_the_cross_is_four_equal_fields():
             sizes = [(c.winfo_width(), c.winfo_height()) for c in cells]
             assert max(s[0] for s in sizes) - min(s[0] for s in sizes) <= 2, (
                 f"{w}x{h}: the field widths differ: {sizes}")
-            assert max(s[1] for s in sizes) - min(s[1] for s in sizes) <= 2, (
-                f"{w}x{h}: the field heights differ: {sizes}")
+            # The rows broke: the two previews match each other, the two lower
+            # fields match each other, and the top row is the bigger of the two.
+            top = [s[1] for s in sizes[:2]]
+            bot = [s[1] for s in sizes[2:]]
+            assert max(top) - min(top) <= 2, f"{w}x{h}: the two previews differ: {sizes}"
+            assert max(bot) - min(bot) <= 2, f"{w}x{h}: the two lower fields differ: {sizes}"
+            assert top[0] > bot[0], (
+                f"{w}x{h}: the pictures are not bigger than the controls: {sizes}")
+            ratio = top[0] / max(1, bot[0])
+            want = L.CROSS_TOP_WEIGHT / L.CROSS_BOT_WEIGHT
+            assert abs(ratio - want) <= 0.05, (
+                f"{w}x{h}: the top/bottom split is {ratio:.2f}, not ~{want:.2f}: {sizes}")
 
             # The dark shows through at exactly the constants' width: the full
             # border on every outer edge, the cross between the fields.

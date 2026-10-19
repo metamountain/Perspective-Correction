@@ -203,6 +203,13 @@ def fill_fraction(box_w, box_h, img_w, img_h):
 #
 # The previews are still the point: they get half the height, which is far more
 # than the 361 px the old wide-and-short row gave them.
+#
+# 2026-10-19 (user-directed): the window broke the cross *vertically* -- the
+# pictures on top now take the larger share (CROSS_TOP_WEIGHT : CROSS_BOT_WEIGHT
+# below), not equal halves. The two functions in this section (`quadrant`,
+# `perfect_cross_field`) still compute the equal-field arithmetic, because that
+# is what the flat-20-px cross/border directive is stated in; the live grid in
+# gui.py no longer asks them for the row split.
 
 # The lower field's need is not one number, because the control block collapses
 # (`adjustments_start_open`, wired to the review pane's <Configure>). Two
@@ -236,6 +243,17 @@ def quadrant(pane_w, pane_h, gap=PREVIEW_GAP):
 # border around them are each a flat 20 px of dark, on every screen.
 CROSS_GAP = 20
 CROSS_BORDER = 20
+# The cross is broken vertically (2026-10-19, user-directed): the two preview
+# fields on top take the larger share, because a photograph judged by eye wants
+# every extra pixel while the controls below want only what they need. Both rows
+# stay in ONE uniform group -- that is what keeps each row's size fixed and
+# independent of how much its content asks for (the controls ask for ~679 px and
+# must not be allowed to grow their row) -- and the weight ratio hands the
+# pictures ~60 % of the pane and the controls ~40 %, instead of the old equal
+# halves. Measured, not guessed: separate uniform groups or no uniform let the
+# 679 px request drive the split back to ~19/81.
+CROSS_TOP_WEIGHT = 3
+CROSS_BOT_WEIGHT = 2
 
 
 def perfect_cross_field(pane_w, pane_h, gap=CROSS_GAP, border=CROSS_BORDER):
