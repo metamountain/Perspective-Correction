@@ -619,6 +619,38 @@ features ahead of everything else.*
 
 ### Done — rely on these
 
+**2026-10-19**
+
+- **[UI, user-directed] Fonts matched to RefGrade — dim labels, one face,
+  slightly smaller.** The typeface was already Inter (the reference's face);
+  what was off was the *treatment*. Three changes, all in `apply_theme`:
+  (1) **field labels dim** — `TLabel` foreground `text` → `dim`, and `dim`
+  itself darkened `#8b929c` → `#6f7680` toward RefGrade's `#666`; values and
+  the title stay bright (`Value.TLabel`, `Title.TLabel`), and `_keep_px_read`
+  was moved to `Value.TLabel` so the detail dial's "max/min px" does not dim
+  with the labels. (2) **numbers share the UI face** — with no `mono_font`
+  override the number family now resolves to `ui` (Inter) instead of
+  `_MONO_FAMILIES` (Cascadia Mono), so the whole window is one face like the
+  reference; the retro themes keep their terminal face via `mono_font`.
+  Tkinter cannot switch on Inter's tabular-figures feature (tnum), so a column
+  of numbers does not align to the pixel the way a mono face would — accepted,
+  because one face reads as one instrument. (3) **slightly smaller** — base
+  font 10 → 9 pt, title 16 → 14 pt. Layout untouched (user: "layout is
+  fine"). `--full`: 0 failed; the runner's exit 1 is the pre-existing
+  `test_selfupdate` "not in MODULES" banner, not a failure.
+
+- **[UI, user-directed] Native Windows title bar matches the palette.** The
+  OS-drawn caption follows the OS theme, not the app, so a dark window still
+  wore a light title bar. `_dark_titlebar(win)` (gui.py) pushes the active INK
+  colours onto that chrome via `dwmapi.DwmSetWindowAttribute`: immersive dark
+  mode (attr 20) keyed off the palette's `bg` luminance, plus `bg` for the
+  border/caption (34/35) and `text` for the title text (36) — so it tracks the
+  theme, dark *or* light. The hwnd is the Tk client's parent (the frame owns
+  the caption). Best-effort: no-op off-Windows / older Windows / no window yet.
+  Called via `after(0)` in `App.__init__` (a direct call is reset when the
+  window maps in `mainloop`) and re-applied in `_maximize` and `_switch_theme`.
+  Verified by screenshot: caption is black under Minimal Black.
+
 **2026-09-26**
 
 - **[feature, user-directed, asked ~20 times] Horizontal compression after

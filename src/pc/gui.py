@@ -190,7 +190,7 @@ INK = {
     "cross":   "#0b0d10",   # the review panel's dark cross and border
     "line":    "#2b2f36",   # hairlines, borders
     "text":    "#e6e8ec",
-    "dim":     "#8b929c",   # secondary text
+    "dim":     "#6f7680",   # secondary text (RefGrade's dim is #666)
     "accent":  "#4da3ff",
     "ok":      "#5ac37f",
     "warn":    "#e0b24c",
@@ -207,7 +207,7 @@ THEMES = {
     "Minimal Black": {
         "bg": "#16181c", "panel": "#1d2025", "field": "#101216",
         "cross": "#0b0d10", "line": "#2b2f36",
-        "text": "#e6e8ec", "dim": "#8b929c",
+        "text": "#e6e8ec", "dim": "#6f7680",
         "accent": "#4da3ff", "ok": "#5ac37f", "warn": "#e0b24c", "err": "#ef6b6b",
     },
     # --- C64: VIC-II PAL palette.  Blue (#0000AA) bg, Light Blue (#0088FF)
@@ -254,9 +254,11 @@ THEMES = {
     },
 }
 
-# Grotesque first, then whatever the platform has.  Numbers get a mono face so
-# columns of angles line up -- a table of readings that does not align is harder
-# to scan than one with fewer readings in it.
+# One face, Inter (RefGrade): the whole window is a single typeface, numbers
+# included.  Tkinter cannot switch on Inter's tabular-figures feature (tnum),
+# so a column of numbers does not align to the pixel the way a monospace face
+# would -- but one face reads as one instrument, and that is the reference's
+# look.  Retro themes opt back into a terminal face via `mono_font`.
 _UI_FAMILIES = ("Inter", "Segoe UI Variable", "Segoe UI", "Helvetica Neue", "DejaVu Sans")
 _MONO_FAMILIES = ("JetBrains Mono", "Cascadia Mono", "Consolas", "DejaVu Sans Mono")
 
@@ -337,12 +339,12 @@ def apply_theme(root, palette=None):
     if mono_override:
         mono = _pick_family(root, (mono_override, *tuple(_MONO_FAMILIES)), "TkFixedFont")
     else:
-        mono = _pick_family(root, _MONO_FAMILIES, "TkFixedFont")
+        mono = ui   # one face (RefGrade): numbers share the UI face, not a mono
     try:
         from tkinter import font as tkfont
-        for name, fam, size in (("TkDefaultFont", ui, 10), ("TkTextFont", ui, 10),
-                                ("TkMenuFont", ui, 10), ("TkHeadingFont", ui, 10),
-                                ("TkFixedFont", mono, 10)):
+        for name, fam, size in (("TkDefaultFont", ui, 9), ("TkTextFont", ui, 9),
+                                ("TkMenuFont", ui, 9), ("TkHeadingFont", ui, 9),
+                                ("TkFixedFont", mono, 9)):
             f = tkfont.nametofont(name)
             f.configure(family=fam, size=size)
     except Exception:
@@ -358,14 +360,15 @@ def apply_theme(root, palette=None):
                  fieldbackground=p["field"], bordercolor=p["line"],
                  lightcolor=p["panel"], darkcolor=p["panel"],
                  focuscolor=p["accent"], troughcolor=p["field"],
-                 insertcolor=p["text"], font=(ui, 10))
+                 insertcolor=p["text"], font=(ui, 9))
     st.configure("TFrame", background=p["bg"])
     st.configure("Panel.TFrame", background=p["panel"])
-    st.configure("TLabel", background=p["bg"], foreground=p["text"])
+    # Field labels are dim (RefGrade); values and the title stay bright.
+    st.configure("TLabel", background=p["bg"], foreground=p["dim"])
     st.configure("Dim.TLabel", foreground=p["dim"])
     st.configure("Head.TLabel", foreground=p["dim"], font=(ui, 9))
-    st.configure("Value.TLabel", foreground=p["text"], font=(mono, 10))
-    st.configure("Title.TLabel", foreground=p["text"], font=(ui, 16))
+    st.configure("Value.TLabel", foreground=p["text"], font=(mono, 9))
+    st.configure("Title.TLabel", foreground=p["text"], font=(ui, 14))
 
     st.configure("TButton", background=p["panel"], foreground=p["text"],
                  borderwidth=0, focusthickness=0, padding=(16, 9))
@@ -794,6 +797,52 @@ def _set_window_icon(win):
         return photo
     except Exception:
         return None
+
+
+def _dark_titlebar(win):
+    """Match the native Windows title bar to the active palette.
+
+    On Windows 10/11 the OS-drawn caption follows the OS theme, not the app, so
+    a dark window still wears a light title bar. This pushes the active INK
+    colours onto that chrome via ``DwmSetWindowAttribute``:
+
+    * ``DWMWA_USE_IMMERSIVE_DARK_MODE`` (20) -- dark caption for dark palettes.
+    * ``DWMWA_BORDER_COLOR`` (34) / ``DWMWA_CAPTION_COLOR`` (35) -- frame and
+      caption, set to the palette's ``bg``.
+    * ``DWMWA_TEXT_COLOR`` (36) -- the title text, set to the palette's ``text``.
+
+    Best-effort: a no-op off Windows, on older Windows, or before the native
+    window exists. The frame -- not the Tk client -- owns the caption, so the
+    hwnd is the client's parent.
+    """
+    import sys
+    if sys.platform != "win32":
+        return
+    try:
+        import ctypes
+        from ctypes import byref, c_int
+
+        hwnd = ctypes.windll.user32.GetParent(win.winfo_id())
+        if not hwnd:
+            return
+        dwmapi = ctypes.windll.dwmapi
+
+        def _ref(hexcolor):
+            h = hexcolor.lstrip("#")
+            r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+            return (b << 16) | (g << 8) | r, r, g, b
+
+        def _set(attr, value):
+            dwmapi.DwmSetWindowAttribute(hwnd, c_int(attr), byref(c_int(value)), 4)
+
+        bgref, r, g, b = _ref(INK["bg"])
+        # The caption follows the palette's background, dark or light.
+        _set(20, 1 if (0.299 * r + 0.587 * g + 0.114 * b) < 140 else 0)
+        _set(34, bgref)                       # DWMWA_BORDER_COLOR
+        _set(35, bgref)                       # DWMWA_CAPTION_COLOR
+        _set(36, _ref(INK["text"])[0])        # DWMWA_TEXT_COLOR
+    except Exception:
+        return
 
 
 def _attach_tooltip(widget, text):
@@ -1349,7 +1398,8 @@ class ReviewPanel(tk.Frame):
         self._keep_px_scale.grid(row=2, column=1, sticky="ew", padx=6)
         # A readout in the spinbox column, because the number alone says
         # nothing: the point of the control is which END you are near.
-        self._keep_px_read = ttk.Label(ctl, text="", width=7, anchor="e")
+        self._keep_px_read = ttk.Label(ctl, text="", width=7, anchor="e",
+                                       style="Value.TLabel")
         self._keep_px_read.grid(row=2, column=2, sticky="e", padx=(6, 0))
         _help = (
                  "How much detail the straightening keeps.\n"
@@ -4717,6 +4767,9 @@ class App(_ROOT_CLASS):
         self.minsize(1920, 1080)
         apply_theme(self)
         self._last_applied_theme = "Minimal Black"
+        # Deferred: the caption is only honoured once the window is mapped, and
+        # that happens in mainloop -- a direct call here would be reset on show.
+        self.after(0, lambda: _dark_titlebar(self))
         self._icon = _set_window_icon(self)
         self.queue = queue.Queue()
         self.worker = None
@@ -4756,6 +4809,7 @@ class App(_ROOT_CLASS):
             self.state("zoomed")
         except tk.TclError:          # platforms without a zoomed state
             pass
+        _dark_titlebar(self)         # a state change can re-lay the caption
 
     def _toggle_fullscreen(self):
         """F11: borderless fullscreen and back.  Maximized keeps the title bar
@@ -4810,6 +4864,7 @@ class App(_ROOT_CLASS):
         if "grad" not in new:
             INK.pop("grad", None)
         apply_theme(self, new)
+        _dark_titlebar(self)
         _retint_bg(self, old, new)
         # A walk cannot fix a PhotoImage: the icons carry their tint in their
         # PIXELS, rendered once at build with the palette that was current then.
