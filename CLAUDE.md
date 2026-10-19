@@ -652,28 +652,27 @@ features ahead of everything else.*
   Verified by screenshot: caption is black under Minimal Black.
 
 - **[UI, user-directed] The cross broke vertically: the pictures on top take
-  the larger share.** The 2026-09-12 "four exactly equal fields" directive is
+  every extra pixel.** The 2026-09-12 "four exactly equal fields" directive is
   superseded for the rows only: the two preview fields on top now get more
   height than the loader/controls below, because a photograph judged by eye
   wants every extra pixel while the controls want only what they need.
-  `CROSS_TOP_WEIGHT = 3` / `CROSS_BOT_WEIGHT = 2` in `layout.py`; the
-  `ReviewPanel` rows (`gui.py:974-975`) use those weights inside ONE uniform
-  group `cross_rows`. The single uniform group is load-bearing, measured:
-  separate groups (or no uniform) let the controls' ~679 px request drive the
-  split back to ~19/81. Columns are untouched — still one uniform group, four
-  equal widths. Inside the controls field the pack order changed with the
-  demotion: the per-photograph controls (`top`, sliders + Save row) pack
-  `side="top", fill="x"` WITHOUT expand (`gui.py:1128`), so they claim their
-  full height first and are never the thing squeezed; the batch defaults
-  (`opt`) are now the expander (`side="top", fill="x", expand=True`,
-  `gui.py:5120`) and clip first, because they only matter for the demoted
-  unattended run. Pinned by
+  `CROSS_TOP_WEIGHT = 1` / `CROSS_BOT_WEIGHT = 0` in `layout.py`; the
+  `ReviewPanel` rows (`gui.py:975-976`) use those weights with NO uniform
+  group, so the lower row sizes to its own content and the upper row takes the
+  rest. A fixed ratio (the earlier 3:2, then 4:1, both inside one uniform group
+  `cross_rows`) was tried and killed: it clipped the run bar whenever the
+  controls' request outgrew its share, so the split now follows the content
+  instead of a constant. Columns are untouched — still one uniform group, four
+  equal widths. The batch defaults section (`opt`, "defaults every photograph
+  opens with") was killed from the visible layout (its vars are still built so
+  `_settings()` works, but the Labelframe is never packed), and the adjustments
+  panel opens collapsed (`start_open=False`), so the lower row only carries the
+  per-photograph controls and the run bar. Pinned by
   `test_the_cross_breaks_vertically_with_the_pictures_on_top` (renamed from
-  `test_the_cross_is_four_equal_fields`): per-row uniformity, top row bigger
-  than bottom, ratio within 0.05 of the constants' 3:2 at 1920x1080 and
-  2560x1440; `test_collapsing_the_adjustments_leaves_the_cross_where_it_was`
-  updated to the 3:2 wording (collapsing the adjustments still moves no
-  field).
+  `test_the_cross_is_four_equal_fields`): per-row uniformity, top row at least
+  double the bottom row at 1920x1080 and 2560x1440;
+  `test_collapsing_the_adjustments_leaves_the_cross_where_it_was` updated to the
+  content-sizing wording (collapsing the adjustments still moves no field).
 
 **2026-09-26**
 

@@ -966,13 +966,14 @@ class ReviewPanel(tk.Frame):
         self.bind("<Button-1>", self._on_cross_press)
         self.bind("<B1-Motion>", self._on_cross_pull)
         self.bind("<ButtonRelease-1>", self._on_cross_drop)
-        # The cross is broken vertically (2026-10-19, user-directed): one uniform
-        # group keeps each row's size fixed and independent of its content's
-        # request (the controls ask for ~679 px and must not grow their row), and
-        # the weight ratio 3:2 hands the pictures ~60 % of the pane and the
-        # controls ~40 % instead of the old equal halves.
-        self.rowconfigure(0, weight=layout.CROSS_TOP_WEIGHT, uniform="cross_rows")
-        self.rowconfigure(1, weight=layout.CROSS_BOT_WEIGHT, uniform="cross_rows")
+        # The cross is broken vertically (2026-10-19, user-directed): the lower
+        # row sizes to its own content (per-photograph controls + run bar, the
+        # batch defaults are gone and the adjustments panel opens collapsed) and
+        # the upper row takes every remaining pixel, so the two preview images
+        # are as tall as the window allows.  No uniform group: a fixed ratio
+        # would clip the run bar whenever the controls' request outgrows it.
+        self.rowconfigure(0, weight=layout.CROSS_TOP_WEIGHT)
+        self.rowconfigure(1, weight=layout.CROSS_BOT_WEIGHT)
         self.columnconfigure(0, weight=1, uniform="cross_cols")
         self.columnconfigure(1, weight=1, uniform="cross_cols")
         self.cell_before = ttk.Frame(self)
@@ -1121,12 +1122,13 @@ class ReviewPanel(tk.Frame):
         # from the hint down to the Save row lives inside it.
         # This frame is the per-photograph controls (the sliders and the Save
         # row) -- the manual-review instrument, which is the product. It is
-        # packed side="top" WITHOUT expand so it claims its full height first
-        # and is never the thing that gets squeezed: the batch defaults below
-        # (`opt`, built in App._build) are the expander and clip first, because
-        # they only matter for the demoted unattended run.
+        # packed side="top" WITH expand so it absorbs any spare height the lower
+        # row has left over (the row now sizes to the taller of this field and
+        # the loader, and the batch defaults that used to clip first are gone):
+        # the controls keep their full height and the spare lands above them,
+        # never the run bar at the foot.
         top = ttk.Frame(self.cell_ui, padding=6)
-        top.pack(side="top", fill="x")
+        top.pack(side="top", fill="x", expand=True)
 
         # The two previews are the upper fields.  Nothing here divides
         # anything: the split between them is the cross's own grid, so the two
@@ -1318,15 +1320,17 @@ class ReviewPanel(tk.Frame):
         # preview.  A choice already made outranks it -- `_adj_open` exists the
         # moment anyone touches the toggle, and then it holds for the session
         # and for every `load` of a review queue.
-        # The control columns default to visible -- one persistent layout, no
-        # height-based auto-collapse (that is what kept them out of sight).  A
-        # manual choice already made outranks the default: `_adj_open` exists
-        # the moment anyone touches the toggle and must survive `load`, which
-        # destroys every child and rebuilds.
+        # The adjustments panel opens COLLAPSED (2026-10-19, user-directed): the
+        # two preview fields on top are maximized vertically, and the lower row
+        # only carries the per-photograph controls and the run bar.  The panel is
+        # one toggle away when the angles need a hand.  A manual choice already
+        # made outranks the default: `_adj_open` exists the moment anyone touches
+        # the toggle and must survive `load`, which destroys every child and
+        # rebuilds.
         if hasattr(self, "_adj_open"):
             start_open = self._adj_open
         else:
-            start_open = True
+            start_open = False
         self.v_adjust = tk.BooleanVar(value=start_open)
 
         adj = ttk.Frame(top)
@@ -5112,18 +5116,25 @@ class App(_ROOT_CLASS):
         # Start row at the very foot of the field. The per-photograph controls
         # (`top`, packed side="top" without expand in ReviewPanel._build) claim
         # their full height first, then this run bar takes its strip from the
-        # foot, and the batch defaults (`opt`) are the expander -- they get the
-        # leftover and clip first, because they only matter for the demoted
-        # unattended run while the sliders and Save are the manual-review
-        # instrument the window exists for.
+        # foot. The batch defaults (`opt`) were killed (2026-10-19, user-directed):
+        # their variables are still created above so `_settings()` feeds each
+        # `review.load`, but the Labelframe is never packed, so the lower row only
+        # carries the per-photograph controls and this run bar.
         bar.pack(side="bottom", fill="x")
-        opt.pack(side="top", fill="x", expand=True)
+        # `opt` is deliberately not packed: the "defaults every photograph opens
+        # with" section is gone from the layout, keeping the two top preview
+        # fields maximized vertically.
 
         # The results list is the lower half of the loader field: files and
         # what happened to them in one place, under the list that names them.
+        # The lower row sizes to its content and the previews take the rest, so
+        # the tree asks for only a couple of rows here; it is packed expand and
+        # fills whatever the row allows, the height option just keeps its
+        # *request* small so the loader field does not drive the row tall.
         self._w_tree = ttk.Frame(self.review.loader)
         cols = ("status", "file", "roll", "pitch", "conf", "note")
-        self.tree = ttk.Treeview(self._w_tree, columns=cols, show="headings", selectmode="browse")
+        self.tree = ttk.Treeview(self._w_tree, columns=cols, show="headings",
+                                 selectmode="browse", height=2)
         for c, w in zip(cols, (80, 320, 70, 70, 60, 380)):
             self.tree.heading(c, text=c)
             self.tree.column(c, width=w, anchor="w")
@@ -5727,14 +5738,15 @@ class App(_ROOT_CLASS):
         ComfyUI address typed -- survives emptying the list, and the window
         never changes shape underneath whoever is looking at it.
         """
-        # One persistent layout: the work UI -- options, start bar, results
-        # list, output row and review -- is always on screen, all inside the
-        # cross. There is no separate "empty" landing screen; an empty window
-        # shows the same controls with nothing in them, so the layout never
-        # changes shape when a folder arrives. The drop target lives in the
-        # loader field. The output row now lives inside the persistent start bar,
-        # so it is mapped whenever that bar is -- nothing of its own to re-map here.
-        for w in (self._w_opt, self._w_bar):
+        # One persistent layout: the work UI -- start bar, results list, output
+        # row and review -- is always on screen, all inside the cross. There is no
+        # separate "empty" landing screen; an empty window shows the same controls
+        # with nothing in them, so the layout never changes shape when a folder
+        # arrives. The drop target lives in the loader field. The output row now
+        # lives inside the persistent start bar, so it is mapped whenever that bar
+        # is -- nothing of its own to re-map here. The batch defaults (`_w_opt`)
+        # were killed and are never packed, so they are not re-mapped.
+        for w in (self._w_bar,):
             if not w.winfo_ismapped():
                 w.pack(side="bottom", fill="x")
 

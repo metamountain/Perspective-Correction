@@ -244,16 +244,15 @@ def quadrant(pane_w, pane_h, gap=PREVIEW_GAP):
 CROSS_GAP = 20
 CROSS_BORDER = 20
 # The cross is broken vertically (2026-10-19, user-directed): the two preview
-# fields on top take the larger share, because a photograph judged by eye wants
-# every extra pixel while the controls below want only what they need. Both rows
-# stay in ONE uniform group -- that is what keeps each row's size fixed and
-# independent of how much its content asks for (the controls ask for ~679 px and
-# must not be allowed to grow their row) -- and the weight ratio hands the
-# pictures ~60 % of the pane and the controls ~40 %, instead of the old equal
-# halves. Measured, not guessed: separate uniform groups or no uniform let the
-# 679 px request drive the split back to ~19/81.
-CROSS_TOP_WEIGHT = 3
-CROSS_BOT_WEIGHT = 2
+# fields on top take every extra pixel, because a photograph judged by eye wants
+# them all while the controls below want only what they need. The lower row is
+# NOT in a uniform group and carries weight 0, so it sizes to its own content
+# (the per-photograph controls plus the run bar; the batch defaults were killed
+# and the adjustments panel opens collapsed) and the upper row, weight 1, takes
+# the rest. A fixed ratio would clip the run bar whenever the controls' request
+# outgrew its share, so the split now follows the content instead of a constant.
+CROSS_TOP_WEIGHT = 1
+CROSS_BOT_WEIGHT = 0
 
 
 def perfect_cross_field(pane_w, pane_h, gap=CROSS_GAP, border=CROSS_BORDER):

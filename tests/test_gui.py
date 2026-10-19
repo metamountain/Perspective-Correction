@@ -479,13 +479,14 @@ def _assert_adjust_above_save(r, top, when):
 def test_collapsing_the_adjustments_leaves_the_cross_where_it_was():
     """The four control rows fold away, and come back where they were.
 
-    This used to assert that collapsing them bought the picture 100 px. Under
-    the cross it cannot, and the inversion *is* the feature: the two rows are a
-    fixed 3:2 split of the pane (the pictures on top take the larger share), so
-    folding the controls away changes what is inside the lower-right field and
-    never the size of any field. The preview must therefore not move at all --
-    a layout whose boxes jump when a checkbox is pressed is the thing the
-    uniform cross exists to stop.
+    Under the content-sized cross (2026-10-19) the lower row is not a fixed
+    share of the pane -- it is as tall as its contents, and the upper row takes
+    every remaining pixel. Folding the control rows away shrinks the lower row,
+    so the preview *grows*; re-opening restores it. The inversion from the old
+    fixed 3:2 split is deliberate: the pictures on top are what the window is
+    for, and they should get the height back the moment the controls give it up.
+    So this asserts the preview never *shrinks* when the controls fold (it holds
+    or gains), and that re-expanding restores the original size.
 
     Everything else this test guards is unchanged and still live: `pack`
     appends, so a re-expand that does not name its place puts the controls
@@ -509,10 +510,10 @@ def test_collapsing_the_adjustments_leaves_the_cross_where_it_was():
         r.v_adjust.set(False); r._toggle_adjust(); _settle(app, 10)
         shut_h = r.c_before.winfo_height()
         assert r._adj not in top.pack_slaves(), "collapsed, but still packed"
-        assert abs(shut_h - open_h) <= 2, (
-            f"the preview field moved {shut_h - open_h} px when the controls "
-            f"folded; the cross's rows are a fixed 3:2 split and must not "
-            f"depend on what is inside one of them")
+        assert shut_h >= open_h - 2, (
+            f"the preview field shrank {open_h - shut_h} px when the controls "
+            f"folded; the lower row is content-sized, so folding the controls "
+            f"can only give the pictures their height back")
 
         r.v_adjust.set(True); r._toggle_adjust(); _settle(app, 10)
         assert abs(r.c_before.winfo_height() - open_h) <= 2, (
@@ -588,14 +589,14 @@ def test_the_panel_default_keeps_both_the_buttons_and_a_usable_picture():
 
     The picture is what this window is for, so a default arrangement that
     leaves it below ``layout.MIN_USEFUL_CANVAS`` is a broken default however
-    tidy the controls look. `_adapt_adjust_default` is what enforces it, and it
-    was written and then never called: the control columns stayed open at every
-    height and a 1280x800 window opened on a 121 px preview.
+    tidy the controls look.
 
-    So this asserts the verdict, not a constant -- the arithmetic lives in
-    `layout.adjustments_start_open` and is tested there. What must hold on the
-    real widgets is that the panel agrees with it, that the picture clears the
-    floor, and that Save is still reachable either way.
+    Under the content-sized cross (2026-10-19) the control rows start folded
+    at every resolution: the two preview fields on top are maximized
+    vertically and the lower row carries only the per-photograph controls and
+    the run bar. The angles are one toggle away when they need a hand. So the
+    default is simply "shut", and what must hold on the real widgets is that
+    the picture clears the floor and Save is still reachable.
     """
     from pc import layout as L
     for w, h in ((1280, 800), (1920, 1080), (2560, 1400)):
@@ -605,17 +606,12 @@ def test_the_panel_default_keeps_both_the_buttons_and_a_usable_picture():
             r = app.review
             canvas = r.c_before.winfo_height()
             assert r._btns.winfo_ismapped(), f"{w}x{h}: Save is not on screen"
-            assert r.v_adjust.get() is L.adjustments_start_open(r.winfo_height()), (
-                f"{w}x{h}: the control columns are "
-                f"{'open' if r.v_adjust.get() else 'shut'} against the height's "
-                f"verdict on a {r.winfo_height()} px pane")
+            assert r.v_adjust.get() is False, (
+                f"{w}x{h}: the control rows should start folded so the "
+                f"pictures on top are maximized")
             assert canvas >= L.MIN_USEFUL_CANVAS, (
                 f"{w}x{h}: the preview opened at {canvas} px, below the "
                 f"{L.MIN_USEFUL_CANVAS} px floor")
-            if (w, h) == (2560, 1400):
-                assert r.v_adjust.get() is True, (
-                    "a 1440p pane can afford the control columns and must "
-                    "start with them open")
         finally:
             app.destroy()
 
@@ -817,15 +813,15 @@ def test_the_cross_breaks_vertically_with_the_pictures_on_top():
     """The cross is broken vertically (2026-10-19, user-directed), asserted on
     the real widgets.
 
-    The two preview fields on top take the larger share and the two lower fields
-    the smaller one, in the CROSS_TOP_WEIGHT : CROSS_BOT_WEIGHT ratio -- the
-    pictures want every extra pixel, the controls only what they need. The
-    columns stay one uniform group, so all four fields still share a width; the
-    heights are the thing that broke. The constants are the oracle for the ratio
-    rather than a typed-in pixel count; what is pinned is that Tk's uniform grid
-    lands on a top row bigger than the bottom row, and that the plus shape is
-    the plus shape (loader lower-left, controls lower-right), which no size
-    assertion alone would catch.
+    The two preview fields on top take every extra pixel and the two lower fields
+    only what their content asks for -- the lower row is not in a uniform group
+    (weight 0), it sizes to the per-photograph controls plus the run bar, and the
+    upper row (weight 1) takes the rest. The pictures want every extra pixel, the
+    controls only what they need. The columns stay one uniform group, so all four
+    fields still share a width; the heights are the thing that broke. What is
+    pinned is that the top row dominates the bottom row at every window size, and
+    that the plus shape is the plus shape (loader lower-left, controls
+    lower-right), which no size assertion alone would catch.
     """
     from pc import layout as L
     for w, h in ((1920, 1080), (2560, 1440)):
@@ -845,10 +841,10 @@ def test_the_cross_breaks_vertically_with_the_pictures_on_top():
             assert max(bot) - min(bot) <= 2, f"{w}x{h}: the two lower fields differ: {sizes}"
             assert top[0] > bot[0], (
                 f"{w}x{h}: the pictures are not bigger than the controls: {sizes}")
-            ratio = top[0] / max(1, bot[0])
-            want = L.CROSS_TOP_WEIGHT / L.CROSS_BOT_WEIGHT
-            assert abs(ratio - want) <= 0.05, (
-                f"{w}x{h}: the top/bottom split is {ratio:.2f}, not ~{want:.2f}: {sizes}")
+            # The lower row sizes to its content and the upper row takes the
+            # rest, so the pictures dominate at every window size.
+            assert top[0] >= 2 * bot[0], (
+                f"{w}x{h}: the pictures should dominate the controls: {sizes}")
 
             # The dark shows through at exactly the constants' width: the full
             # border on every outer edge, the cross between the fields.
