@@ -531,26 +531,6 @@ def _beholder_points(w, h):
     return tri, eye_box, pupil_box
 
 
-def _emblem_size(root):
-    """DPI-flexible emblem size: ~28px base, scales with the display, clamped."""
-    try:
-        scale = max(0.75, min(root.winfo_fpixels("1i") / 96.0, 2.0))
-    except Exception:
-        scale = 1.0
-    return max(20, min(40, int(round(28 * scale))))
-
-
-def _draw_eye_pyramid(canvas):
-    """Draw the mark on a Tk canvas sized to its own width/height."""
-    w = max(int(canvas.winfo_width()), 1)
-    h = max(int(canvas.winfo_height()), 1)
-    tri, eye_box, pupil_box = _beholder_points(w, h)
-    col = ICON_WHITE
-    canvas.create_polygon(*tri, outline=col, width=2, fill="")
-    canvas.create_oval(eye_box, outline=col, width=2, fill="")
-    canvas.create_oval(pupil_box, outline=col, fill=col, width=1)
-
-
 LOGO_FILE = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                           "..", "..", "Logo_BPC.png"))
 
@@ -581,6 +561,35 @@ def _hex_rgba(hexc, alpha=255):
     """A ``#rrggbb`` palette colour as an RGBA tuple for PIL."""
     h = hexc.lstrip("#")
     return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16), alpha)
+
+
+WORDMARK_FILE = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                              "..", "..", "Logo_wordmark.png"))
+
+
+def _wordmark_image(height, colour):
+    """The v07 wordmark scaled to ``height`` px tall, tinted to ``colour``.
+
+    ``Logo_wordmark.png`` is white type on black with no alpha channel, so the
+    alpha is taken from its luminance: white ink becomes opaque, the black
+    ground transparent.  The colour comes from the palette, so the wordmark
+    follows the theme like the mark does.  ``None`` when the file is absent.
+    """
+    try:
+        src = Image.open(WORDMARK_FILE).convert("L")
+    except Exception:
+        return None
+    # Crop to the ink first: the source is the wordmark centred in a larger
+    # canvas, so scaling the whole canvas would leave the type tiny.
+    box = src.getbbox()
+    if box is None:
+        return None
+    src = src.crop(box)
+    w = max(1, int(round(src.width * height / src.height)))
+    src = src.resize((w, height), Image.LANCZOS)
+    tint = Image.new("RGBA", (w, height), colour)
+    tint.putalpha(src)
+    return tint
 
 
 _ICON_FONTS = ("segoeicons.ttf", "SegMDL2.ttf")   # Fluent, then MDL2
@@ -873,66 +882,6 @@ def _attach_tooltip(widget, text):
     widget.bind("<Leave>", hide)
 
 
-def _brand_header(parent, on_select=None):
-    """Emblem + wordmark, packed at the top of a window.
-
-    The bar is registered on the toplevel so `_switch_theme` can find it again;
-    its emblem is a rendered image and has to be redrawn, not re-optioned.
-    """
-    bar = ttk.Frame(parent)
-    bar.pack(fill="x", side="top")
-    top = parent.winfo_toplevel()
-    if not hasattr(top, "_brand_bars"):
-        top._brand_bars = []
-    top._brand_bars.append(bar)
-    size = _emblem_size(parent)
-    mark = _logo_image(size, INK["text"])
-    if mark is not None:
-        photo = ImageTk.PhotoImage(mark)
-        lbl = ttk.Label(bar, image=photo)
-        lbl.image = photo               # a Label keeps no reference of its own
-        lbl.pack(side="left", padx=(2, 8), pady=4)
-        # Handed back so a theme switch can re-render it: the mark is tinted
-        # INK["text"] into its pixels, and no walk over widget options can
-        # reach a colour that is part of an image.
-        bar._brand_lbl = lbl
-        bar._brand_size = size
-    else:
-        # Drawn only when the PNG is missing.  On `<Configure>` rather than
-        # after `update_idletasks`, because a canvas that has not been mapped
-        # yet reports a width of 1 -- which drew the whole mark into a single
-        # pixel and looked like a stray white dot beside the title.
-        cv = tk.Canvas(bar, width=size, height=size, bg=INK["bg"],
-                       highlightthickness=0)
-        cv.pack(side="left", padx=(2, 8), pady=4)
-        cv.bind("<Configure>",
-                lambda e, c=cv: (c.delete("all"), _draw_eye_pyramid(c)))
-    title = ttk.Label(bar, text="Perspective Correction", style="Title.TLabel")
-    title.pack(side="left", anchor="w")
-    _attach_tooltip(title, "Batch perspective correction for architectural photographs")
-    # Which copy of this repo is actually running: a stale second copy shows an
-    # older number and gives the whole exercise away.
-    ttk.Label(bar, text=f"v{__version__}", style="Dim.TLabel").pack(side="right", padx=(8, 6))
-    # Beside the version, because that is the number it changes.  Built here
-    # and handed back on the frame so the App can wire it: this function draws
-    # the bar and knows nothing about git.
-    bar._update_btn = ttk.Button(bar, text="update", width=8)
-    bar._update_btn.pack(side="right", padx=(0, 4))
-    _attach_tooltip(
-        bar._update_btn,
-        "Fetch the newer version of this program and fast-forward to it.\n"
-        "Only ever a fast-forward: uncommitted changes, commits of your\n"
-        "own, or a rewritten remote stop it with an explanation -- never\n"
-        "a merge and never a discard. A restart is needed afterwards.")
-    theme_var = tk.StringVar(value="Minimal Black")
-    if on_select is not None:
-        theme_var.trace_add("write", lambda *_: on_select(theme_var.get()))
-    combo = ttk.Combobox(bar, textvariable=theme_var, values=list(THEMES.keys()),
-                         state="readonly", width=14)
-    combo.pack(side="right", padx=(0, 8), pady=2)
-    return bar, theme_var, combo
-
-
 # ==========================================================================
 # review window
 # ==========================================================================
@@ -1070,9 +1019,10 @@ class ReviewPanel(tk.Frame):
         # the strip rulers already showing and says why, instead of a
         # silently-wrong auto estimate the user has to notice is off first.
         if self.session.directions_diverge():
-            if getattr(self, "v_strip", None) is not None:
-                self.v_strip.set(True)
-            self._set_status("multiple main directions detected -- please pick a facade (Facade strip)")
+            # ROI stays OFF by default (user, 2026-10-20): the strip is a
+            # deliberate choice, not an auto-applied one. We still point at the
+            # divergence so the user can pick a facade if they want to.
+            self._set_status("multiple main directions detected -- pick a facade with the Facade strip if you want to")
         self.after(60, self._sync_from_session)
 
     def _fire_closed(self):
@@ -1332,6 +1282,13 @@ class ReviewPanel(tk.Frame):
         else:
             start_open = False
         self.v_adjust = tk.BooleanVar(value=start_open)
+        # The toggle that opens and closes the adjustments panel.  It rides in
+        # the `stat` row (see the comment above) rather than a row of its own,
+        # so the collapsed state costs no extra height.  Re-added 2026-10-20:
+        # the checkbox was dropped in 4724643, and with the panel now starting
+        # collapsed the per-photograph angles were left with no way back in.
+        ttk.Checkbutton(stat, text="Adjustments", variable=self.v_adjust,
+                        command=self._toggle_adjust).pack(side="left")
 
         adj = ttk.Frame(top)
         self._adj = adj
@@ -4763,7 +4720,7 @@ class ReviewPanel(tk.Frame):
 # batch window
 # ==========================================================================
 class App(_ROOT_CLASS):
-    def __init__(self, initial=None, start_maximized=True):
+    def __init__(self, initial=None, start_maximized=True, start_fullscreen=False):
         super().__init__()
         self.title(f"Perspective Correction  v{__version__}")
         # The window opens maximized, so this is the size it *restores* to.
@@ -4772,7 +4729,7 @@ class App(_ROOT_CLASS):
         # 1366x768 laptop. `layout.initial_window` takes a share of the real
         # screen instead and clamps it both ways; it is pure arithmetic and
         # tested at five resolutions in tests/test_layout.py. F11 toggles
-        # borderless fullscreen for the review work.
+        # borderless fullscreen for the review work; `run()` opens in it.
         sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
         gw, gh = layout.initial_window(sw, sh)
         self.geometry(f"{gw}x{gh}")
@@ -4812,13 +4769,16 @@ class App(_ROOT_CLASS):
         # a remembered path is offered, never forced: the selector still says off
         if initial:
             self._add(list(initial))
-        self._fullscreen = False
+        self._fullscreen = start_fullscreen
         self.bind("<F11>", lambda _e: self._toggle_fullscreen())
+        self.bind("<Escape>", self._esc)
         self.bind("<m>", lambda _e: self._tool_key("v_mark", "_on_mark_toggle"))
         self.bind("<b>", lambda _e: self._tool_key("v_stroke", "_on_stroke_toggle"))
         self.bind("<s>", lambda _e: self._tool_key("v_sam", "_on_sam_toggle"))
         self.after(120, self._pump)
-        if start_maximized:
+        if start_fullscreen:
+            self.after(50, self._enter_fullscreen)
+        elif start_maximized:
             self.after(50, self._maximize)
 
     def _maximize(self):
@@ -4827,6 +4787,17 @@ class App(_ROOT_CLASS):
         except tk.TclError:          # platforms without a zoomed state
             pass
         _dark_titlebar(self)         # a state change can re-lay the caption
+
+    def _enter_fullscreen(self):
+        """Open borderless: no title bar, no menu -- the review working state.
+        F11 returns to the windowed view."""
+        try:
+            self.attributes("-fullscreen", True)
+        except tk.TclError:
+            pass
+        self._fullscreen = True
+        if hasattr(self, "v_fullscreen"):
+            self.v_fullscreen.set(True)
 
     def _toggle_fullscreen(self):
         """F11: borderless fullscreen and back.  Maximized keeps the title bar
@@ -4838,6 +4809,13 @@ class App(_ROOT_CLASS):
             pass
         if hasattr(self, "v_fullscreen"):
             self.v_fullscreen.set(self._fullscreen)
+
+    def _esc(self, _e):
+        """ESC exits fullscreen (F11 still toggles).  A no-op while windowed, so
+        it never steals ESC from a dialog or entry."""
+        if self._fullscreen:
+            self._toggle_fullscreen()
+            self._set_status("fullscreen off (ESC)")
 
     def _tool_key(self, var_name, handler_name):
         """Flip one tool mode from the keyboard.
@@ -4898,28 +4876,61 @@ class App(_ROOT_CLASS):
                     rev._schedule_redraw()
             except tk.TclError:
                 pass                       # window going away mid-switch
-        # The brand mark is a rendered image too, tinted INK["text"] into its
-        # pixels at build time and never re-rendered.
-        for bar in getattr(self, "_brand_bars", []):
-            lbl = getattr(bar, "_brand_lbl", None)
-            if lbl is None:
-                continue
-            mark = _logo_image(getattr(bar, "_brand_size", 24), INK["text"])
-            if mark is None:
-                continue
-            try:
-                photo = ImageTk.PhotoImage(mark)
-                lbl.configure(image=photo)
-                lbl.image = photo
-            except tk.TclError:
-                pass
+        # The status-bar wordmark is a rendered image too, tinted INK["text"]
+        # into its pixels at build time; a theme switch re-renders it.
+        sb = getattr(self, "_status_bar", None)
+        wlbl = getattr(sb, "_wordmark_lbl", None) if sb is not None else None
+        if wlbl is not None:
+            mark = _wordmark_image(18, _hex_rgba(INK["text"]))
+            if mark is not None:
+                try:
+                    photo = ImageTk.PhotoImage(mark)
+                    wlbl.configure(image=photo)
+                    wlbl.image = photo
+                except tk.TclError:
+                    pass
+
+    def _build_status_bar(self):
+        """The slim foot of the window: wordmark left, theme + update right.
+
+        Packed side="bottom" before the cross so it claims its strip first and
+        the cross (fill=both, expand) takes every pixel above it. A child of the
+        App, not the review panel, so `load` never rebuilds it.
+        """
+        bar = ttk.Frame(self)
+        bar.pack(side="bottom", fill="x", padx=8, pady=(2, 4))
+        # Wordmark in the left corner: the v07 typography, tinted to the active
+        # palette so it follows the theme like every other mark.
+        mark = _wordmark_image(18, _hex_rgba(INK["text"]))
+        if mark is not None:
+            photo = ImageTk.PhotoImage(mark)
+            lbl = ttk.Label(bar, image=photo)
+            lbl.image = photo
+            lbl.pack(side="left", padx=(2, 8))
+            bar._wordmark_lbl = lbl
+        # Theme + update in the right corner, moved here from the killed brand row.
+        self.btn_update = ttk.Button(bar, text="update", width=8)
+        self.btn_update.pack(side="right", padx=(0, 4))
+        self.btn_update.configure(command=self._check_for_update)
+        self._theme_var = tk.StringVar(value="Minimal Black")
+        self._theme_var.trace_add(
+            "write", lambda *_a: self._switch_theme(self._theme_var.get()))
+        self._theme_combo = ttk.Combobox(bar, textvariable=self._theme_var,
+                                         values=list(THEMES.keys()),
+                                         state="readonly", width=14)
+        self._theme_combo.pack(side="right", padx=(0, 8), pady=2)
+        return bar
 
     def _build(self):
         pad = dict(padx=6, pady=2)
-        _bar, self._theme_var, self._theme_combo = _brand_header(
-            self, on_select=self._switch_theme)
-        self.btn_update = _bar._update_btn
-        self.btn_update.configure(command=self._check_for_update)
+        # The window is the cross and a slim status bar at the foot -- nothing
+        # else. The brand row is gone: the mark lives only in the OS title bar
+        # (`_set_window_icon`), the wordmark in the status bar's left corner, and
+        # the theme + update controls in its right corner. Packed side="bottom"
+        # before the cross so it claims its strip first and the cross takes the
+        # rest; a child of the App, not the review panel, so `load` never rebuilds
+        # it.
+        self._status_bar = self._build_status_bar()
 
         # Both are read by the review panel's <Configure>, which fires while
         # `ReviewPanel(self)` is still constructing, so they exist before it.
@@ -6093,5 +6104,5 @@ class App(_ROOT_CLASS):
 
 
 def run(initial=None) -> int:
-    App(initial).mainloop()
+    App(initial, start_fullscreen=True).mainloop()
     return 0

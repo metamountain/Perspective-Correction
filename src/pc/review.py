@@ -986,7 +986,13 @@ class ReviewSession:
             f = (self.model.f if self.model and self.model.f
                  else M.focal_px_from_35mm(self.settings.default_focal_35mm,
                                            self.w, self.h))
-            roll, pitch = self._marker_roll_pitch(f)
+            # Pitch is only as good as the f it back-projected with (f-sweep: a 0.5x-2x
+            # f error swings the pitch 12.6->41.8 deg). A true default/prior f (not
+            # determined from the lines) would wreck the image, so drop the pitch then;
+            # a refined/exif/manual f is a real estimate, so keep it. Roll is f-robust.
+            f_is_guess = (self.model is None or self.model.f is None
+                          or self.model.f_source in ("default", "prior", "none"))
+            roll, pitch = self._marker_roll_pitch(f, pitch_ok=not f_is_guess)
             return roll, pitch, f, False
         if self.mode == MANUAL:
             roll, pitch = self.manual_roll, self.manual_pitch
@@ -1034,11 +1040,12 @@ class ReviewSession:
         else:
             roll, pitch = 0.0, 0.0
         cx, cy = self.w / 2.0, self.h / 2.0
+        to_full = 1.0 / self.scale
         sin_sum = cos_sum = 0.0
         n = 0
         for seg in self.control_hlines:
-            x0, y0, x1, y1 = (float(seg[0]), float(seg[1]),
-                              float(seg[2]), float(seg[3]))
+            x0, y0, x1, y1 = (float(seg[0]) * to_full, float(seg[1]) * to_full,
+                              float(seg[2]) * to_full, float(seg[3]) * to_full)
             r0 = np.array([(x0 - cx) / f, (y0 - cy) / f, 1.0])
             r1 = np.array([(x1 - cx) / f, (y1 - cy) / f, 1.0])
             d3 = r1 - r0
@@ -1054,61 +1061,66 @@ class ReviewSession:
             return None
         return math.atan2(sin_sum, cos_sum)
 
-    def _marker_roll_pitch(self, f: float):
+    def _marker_roll_pitch(self, f: float, pitch_ok: bool = True):
         """Roll and pitch from vertical control line(s).
 
-        Each V-line's vanishing point gives the camera's apparent direction of
-        world-vertical.  ``roll_pitch_from_up`` decomposes that into the two
-        corrections that straighten it.  2+ lines: average the up-vectors.
-        Without a vertical mark: (0, 0).
+        Each V-line back-projects to a plane through the camera centre, and the
+        world-up vector lies in every such plane.  With two or more lines that
+        pins the up-vector to the direction perpendicular to all the plane
+        normals -- the smallest-eigenvalue eigenvector of their outer-product
+        sum -- which is a proper 3-D solve, so pitch is recovered instead of
+        assumed zero.  One line leaves pitch undetermined, so it corrects roll
+        only.  Without a vertical mark: (0, 0).
         """
         from . import geometry as G
         n = len(self.control_lines)
         if n < 1:
             return 0.0, 0.0
         cx, cy = self.w / 2.0, self.h / 2.0
-        ups = []
+        to_full = 1.0 / self.scale
+        rays = []
         for i in range(n):
             seg = self.control_lines[i]
-            x0, y0, x1, y1 = (float(seg[0]), float(seg[1]),
-                              float(seg[2]), float(seg[3]))
-            dx, dy = x1 - x0, y1 - y0
-            ln = math.hypot(dx, dy)
-            if ln < 1e-6:
-                continue
-            # Vanishing point of the line (intersection with horizon).
-            # Parametric: p(t) = p0 + t*d.  VP is at t → ∞ direction,
-            # but for a finite segment we find where two points' rays meet.
-            # Simpler: the VP in the image is along the line's direction,
-            # at the point where the line would hit the horizon.  For roll/
-            # pitch we only need the *direction* of the line in 3D camera
-            # coords, which is the normalised difference of the two ray
-            # directions from the principal point.
+            x0, y0, x1, y1 = (float(seg[0]) * to_full, float(seg[1]) * to_full,
+                              float(seg[2]) * to_full, float(seg[3]) * to_full)
             r0 = np.array([(x0 - cx) / f, (y0 - cy) / f, 1.0])
             r1 = np.array([(x1 - cx) / f, (y1 - cy) / f, 1.0])
-            # The line's 3D direction in camera coords is r1 - r0 (both are
-            # points on rays from the camera; their difference is parallel to
-            # the world line).  Normalise and use as the up-vector candidate.
-            d3 = r1 - r0
-            dn = np.linalg.norm(d3)
-            if dn < 1e-9:
+            if np.linalg.norm(r1 - r0) < 1e-9:
                 continue
-            u = d3 / dn
-            # Ensure u points "up" in the image (negative y component).
+            rays.append((r0, r1))
+        if not rays:
+            return 0.0, 0.0
+        if len(rays) == 1:
+            # A single line: the up-vector is any direction in its plane, so
+            # pitch is undetermined -- correct roll only, as before.
+            r0, r1 = rays[0]
+            u = r1 - r0
+            u = u / np.linalg.norm(u)
             if u[1] > 0:
                 u = -u
-            ups.append(u)
-        if not ups:
-            return 0.0, 0.0
-        if len(ups) == 1:
-            u = ups[0]
-        else:
-            u = np.mean(ups, axis=0)
-            un = np.linalg.norm(u)
-            if un < 1e-9:
-                return 0.0, 0.0
-            u = u / un
+            return G.roll_pitch_from_up(u)
+        # 2+ lines: the up-vector lies in every line's back-projected plane.
+        # Each plane's normal is r0 x r1; the direction perpendicular to all of
+        # them is the smallest-eigenvalue eigenvector of sum_i n_i n_i^T.
+        M = np.zeros((3, 3))
+        for r0, r1 in rays:
+            nm = np.cross(r0, r1)
+            nn = np.linalg.norm(nm)
+            if nn < 1e-12:
+                continue
+            nm = nm / nn
+            M += np.outer(nm, nm)
+        w, vecs = np.linalg.eigh(M)
+        u = vecs[:, 0]
+        if u[1] > 0:
+            u = -u
         roll, pitch = G.roll_pitch_from_up(u)
+        if not pitch_ok:
+            # The pitch is only as good as the focal length it back-projected
+            # with; when f is a default guess the pitch is garbage (measured
+            # 12.6 -> 41.8 deg across a 0.5x-2x focal sweep). The roll is
+            # f-robust, so keep it and drop the pitch.
+            pitch = 0.0
         return roll, pitch
 
     def current_yaw(self):
@@ -1306,10 +1318,13 @@ class ReviewSession:
                              (self.control_lines, (200, 80, 200))):
                 if len(arr) == 0:
                     continue
+                # control lines are in GRAY px; the warp H_total maps SMALL px
+                # (w*s x h*s) -> output. gray -> small is * (s/scale), not * s
+                # (off by a factor of `scale` whenever scale != 1.0).
                 pts = np.zeros((len(arr), 2, 2), dtype=np.float32)
                 for i in range(len(arr)):
-                    pts[i, 0] = [arr[i, 0] * s, arr[i, 1] * s]
-                    pts[i, 1] = [arr[i, 2] * s, arr[i, 3] * s]
+                    pts[i, 0] = [arr[i, 0] * s / self.scale, arr[i, 1] * s / self.scale]
+                    pts[i, 1] = [arr[i, 2] * s / self.scale, arr[i, 3] * s / self.scale]
                 mapped = cv2.perspectiveTransform(pts.reshape(-1, 1, 2), H_total)
                 for i in range(len(arr)):
                     a = (int(mapped[2 * i, 0, 0] * fit_s),

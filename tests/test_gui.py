@@ -281,10 +281,11 @@ def test_the_mask_brush_paints_the_ignore_region_and_erases_it_again():
 def test_the_window_is_the_cross_and_nothing_else():
     """The layout rule, asserted on the real widgets at two window sizes.
 
-    There is no paned split and no strip below the cross: the review panel
-    fills everything under the header, and the results list lives inside the
-    cross's lower-left field with a height of its own. A bigger window grows
-    the four equal fields -- and with them the previews.
+    There is no paned split: the review panel fills everything, and the only
+    thing under the cross is the slim fixed-height status bar (wordmark left,
+    theme + update right) -- a strip, not a growing field. The results list
+    lives inside the cross's lower-left field with a height of its own. A
+    bigger window grows the four equal fields -- and with them the previews.
     """
     sizes = [(1280, 800), (1920, 1200)]
     seen = []
@@ -296,8 +297,10 @@ def test_the_window_is_the_cross_and_nothing_else():
                 "the results list left the cross's lower-left field")
             below = app.winfo_height() - app.review.winfo_y() \
                     - app.review.winfo_height()
-            assert below < 12, (
-                f"a strip sits below the cross: {below} px")
+            # The status bar is a fixed-height strip; it must not grow with the
+            # window, so it stays in a narrow band at every size.
+            assert 20 <= below <= 60, (
+                f"the strip below the cross is not the slim status bar: {below} px")
             seen.append((app.review.winfo_height(), app.tree.winfo_height()))
         finally:
             app.destroy()

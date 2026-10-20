@@ -53,6 +53,22 @@ its own measurement, before it moves. `max_horizontal_deg` has moved twice on
 this argument (8 → 30 → 60); `max_pitch_deg` and `max_roll_deg` were measured and
 left alone (see Done).
 
+## Standing orders (user) — follow every session
+
+Standing instructions from the user, recorded 2026-10-20 after being repeated.
+They outrank convenience; a session that skips one is a failed session.
+
+- **Test before you show.** Every projection or UI change is verified
+  headlessly — a repro that measures the actual output, plus the relevant test
+  module — BEFORE it is shown to the user. No half-baked output. The user's
+  words: *"bitte test das selbst, bevor du mir halbgares Zeug vorsetzt."* A
+  change that only `py_compile`s is not tested.
+- **Always add a prompt.** When a feature engages or state changes, show a
+  status/prompt saying what happened and how to reverse it — never switch state
+  silently (e.g. starting in fullscreen says so and says ESC exits it).
+- **Don't forget the orders.** The orders in this section are standing; re-read
+  them at the start of a session. Forgetting one is the failure the user means.
+
 ## Running things (do not rediscover this)
 
 - Project root `D:\Coding\Perspective-Correction`, Windows, PowerShell 7,
@@ -1355,6 +1371,15 @@ detector removed · M-LSD unblocked in the GUI interpreter.
 - The round-trip test must keep the border guard (8 % crop), or `BORDER_REPLICATE`
   smears edge pixels into long straight streaks the detector reads as lines —
   that artifact produced two confident wrong conclusions.
+- **Three pixel spaces, one conversion bug class (gray vs bgr vs preview).** The
+  analysis image is `gray = bgr * scale` px; the preview is `small = bgr * s` px
+  (`s = min(1, max_edge / max(w, h))`). Converting gray → small is `* s / scale`,
+  **not** `* s`. The control-line marker projection in `render_after` did `* s`
+  and put every marker at `scale`× the correct position (pulled toward the
+  centre) — invisible at `scale = 1.0` (Platte_1), which is why a scale-1.0
+  repro cannot catch it. Convert between spaces explicitly, and test any
+  projection on a `scale ≠ 1.0` asset (Alte_Scheune, scale 0.397) before
+  trusting it.
 - Caches key on the **full** argument tuple; hit-check is `key in cache`, never
   truthiness (`None` is a real result).
 - `cv2.imread` mangles non-ASCII paths on Windows — use `masks._imread`
