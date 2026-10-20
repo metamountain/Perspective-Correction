@@ -1233,3 +1233,102 @@ def test_a_canvas_much_bigger_than_the_source_says_so_before_the_save():
     s.manual_yaw = 0.0
     s.mode = "manual"
     assert s.size_note() == "", "an unwarped frame must not warn"
+
+
+def test_every_drawn_line_comes_out_exactly_vertical_or_horizontal():
+    """User rule, 2026-10-20: a drawn line comes out EXACTLY vertical or
+    horizontal, nothing in between -- and two verticals with two horizontals
+    are a rectangle, so every corner between them is 90 degrees.  One drawn
+    line per direction is helped by the detector; from two on only the
+    drawn lines count.  Checked at full size and at preview size, because
+    `_build_H` makes both."""
+    s, _ = _session_with_known_pose(pitch_deg=9.0, roll_deg=-2.0)
+    # Deliberately NOT the scene's true verticals: whatever is drawn wins.
+    vs = [(250, 80, 262, 520), (640, 90, 618, 530)]
+    hs = [(150, 140, 760, 172), (170, 470, 740, 455)]
+    k_full = s.w / float(s.gray.shape[1])
+
+    def dirs(H, seg, k):
+        x1, y1, x2, y2 = np.asarray(seg, float) * s.scale * k
+        p = H @ np.array([[x1, x2], [y1, y2], [1.0, 1.0]])
+        p = p[:2] / p[2]
+        d = p[:, 1] - p[:, 0]
+        return d / np.linalg.norm(d)
+
+    for nv, nh in ((1, 0), (0, 1), (1, 1), (2, 2)):
+        s.clear_control_lines("v")
+        s.clear_control_lines("h")
+        for v in vs[:nv]:
+            assert s.add_control_line(*v, kind="v") is not None
+        for h in hs[:nh]:
+            assert s.add_control_line(*h, kind="h") is not None
+        roll, pitch, f, _ = s.current_angles()
+        yaw = s.current_yaw()
+        for scale in (1.0, 0.5):
+            w, h = int(s.w * scale), int(s.h * scale)
+            H = s._build_H(w, h, f * scale, roll, pitch, yaw)
+            k = k_full * scale
+            dv = [dirs(H, v, k) for v in vs[:nv]]
+            dh = [dirs(H, x, k) for x in hs[:nh]]
+            for d in dv:
+                assert abs(d[0]) < 1e-6, (nv, nh, scale, "vertical leans", d)
+            for d in dh:
+                assert abs(d[1]) < 1e-6, (nv, nh, scale, "horizontal slopes", d)
+            for a in dv:
+                for b in dh:
+                    assert abs(float(a @ b)) < 1e-6, (nv, nh, scale, "corner is not 90 deg")
+
+
+def test_horizontal_auto_takes_the_vertical_point_from_the_lines_not_the_camera_fit():
+    """The HA warp is 2D: it must straighten through the point the photograph's
+    verticals actually converge at.  Measured 2026-10-20 on wohnheim.jpg:
+    `model.vp` (from the camera fit, focal x pitch) sat at y = -7197 while the
+    lines were parallel, and the warp -- exact through the wrong point -- tilted
+    every vertical by +4 deg.  Here the scene's verticals are truly parallel
+    (pitch 0) and `model.vp` is planted wrong on purpose; the verticals must
+    still come out vertical."""
+    import synth
+    sc = synth.Scene(w=900, h=600, pitch_deg=0.0, roll_deg=0.0, seed=31)
+    s = ReviewSession("scene.jpg", Settings().replace(correct_horizontal=True), image=sc.img)
+    gw = s.gray.shape[1]
+    assert s.set_strip(0.05 * gw / s.scale, 0.95 * gw / s.scale)
+    assert s._rectify_active(), "this test is about the HA warp path"
+    s.model.vp = np.array([0.45 * gw, -7.0 * s.gray.shape[0], 1.0])   # a pitch that is not there
+    roll, pitch, f, _ = s.current_angles()
+    H = s._build_H(s.w, s.h, f, roll, pitch, s.current_yaw())
+    k = s.w / float(gw)
+    seg = np.asarray(s.vert.seg, float)[:, :4]
+    L = np.hypot(seg[:, 2] - seg[:, 0], seg[:, 3] - seg[:, 1])
+    leans = []
+    for x1, y1, x2, y2 in seg[L > 0.04 * s.gray.shape[0]] * k:
+        p = H @ np.array([[x1, x2], [y1, y2], [1.0, 1.0]])
+        p = p[:2] / p[2]
+        leans.append(math.degrees(math.atan2(abs(p[0, 1] - p[0, 0]), abs(p[1, 1] - p[1, 0]))))
+    assert len(leans) > 20
+    assert np.median(leans) < 0.3, f"verticals lean {np.median(leans):.2f} deg after the warp"
+
+
+def test_horizontal_auto_warps_without_a_facade_strip():
+    """Horizontal auto with nothing selected used to fall back to the camera
+    rotation, which bent plumb verticals by up to 4.7 deg on wohnheim.jpg
+    (2026-10-21).  It is the facade->rectangle warp now, strip or not; a drawn
+    line still takes over."""
+    import synth
+    sc = synth.Scene(w=900, h=600, yaw_deg=25.0, pitch_deg=0.0, roll_deg=0.0, seed=31)
+    s = ReviewSession("scene.jpg", Settings().replace(correct_horizontal=True), image=sc.img)
+    assert s.strip is None
+    assert s._rectify_active(), "no strip must still mean the HA warp"
+    roll, pitch, f, _ = s.current_angles()
+    H = s._build_H(s.w, s.h, f, roll, pitch, s.current_yaw())
+    k = s.w / float(s.gray.shape[1])
+    seg = np.asarray(s.vert.seg, float)[:, :4]
+    L = np.hypot(seg[:, 2] - seg[:, 0], seg[:, 3] - seg[:, 1])
+    leans = []
+    for x1, y1, x2, y2 in seg[L > 0.04 * s.gray.shape[0]] * k:
+        p = H @ np.array([[x1, x2], [y1, y2], [1.0, 1.0]])
+        p = p[:2] / p[2]
+        leans.append(math.degrees(math.atan2(abs(p[0, 1] - p[0, 0]), abs(p[1, 1] - p[1, 0]))))
+    assert len(leans) > 20
+    assert np.median(leans) < 0.3, f"verticals lean {np.median(leans):.2f} deg"
+    s.add_control_line(100, 100, 800, 100, kind="h")
+    assert not s._rectify_active(), "a drawn line is the user's instruction"

@@ -62,6 +62,23 @@ SLIDER_THUMB = 30      # px, thumb length along the track (~circular with width)
 # stretch it far beyond this via sticky="ew".
 SLIDER_MIN = 80        # px, minimum track-column width
 
+# --- The per-photograph control strip (2026-10-20, user-directed) ------------
+# The cross's lower-right field is a dense two-column strip: General (mask,
+# detector, fill, crop, save, overlays) beside Correction (a 3-mode switch).
+# Every number below is the one place these sizes live; gui.py must not type
+# any of them.  The whole point is that the strip stays short so the two
+# pictures on top take every spare pixel.
+CTRL_FONT_PT = 8          # pt, the strip's face (labels, readouts, buttons)
+CTRL_LINE_HEIGHT = 1.5    # row pitch ceiling, as a multiple of the font line height
+CTRL_ROW_GAP_PX = 0       # px between rows: none (user: "keine Luft zwischen Zeilen")
+CTRL_GROUP_PAD_PX = 4     # px between groups (around a group title)
+CTRL_COL_GAP_PX = 8       # px between the General and Correction columns
+SLIDER_TRACK_H_PX = 4     # px, slim correction-slider trough thickness
+CTRL_FIELD_H_PX = 20      # px, a single control row's height (field/button)
+MODE_SWITCH_H_PX = 24     # px, the segmented Auto / Horizontal auto / Manual bar
+CTRL_STRIP_MAX_H_PX = 140 # px, the strip's height budget at 1080p; the pictures
+                          #   get everything above it
+
 
 def tree_height(n_rows, row_h=ROW_H, rows_max=TREE_ROWS_MAX, rows_min=TREE_ROWS_MIN):
     """Pixels the results tree wants in order to show ``n_rows`` results.
@@ -242,7 +259,9 @@ def quadrant(pane_w, pane_h, gap=PREVIEW_GAP):
 # The 2026-09-12 directive: the cross between the four equal fields and the
 # border around them are each a flat 20 px of dark, on every screen.
 CROSS_GAP = 20
-CROSS_BORDER = 20
+CROSS_BORDER = 10   # halved 2026-10-20 (user: outer edge thinner); bottom edge only now
+CROSS_SIDE = 8      # left/right outer edge, the whole of it: just enough to pull a
+                    #   ruler from (user, 2026-10-20: "kleinen Rand ... jeweils 8 Pixel")
 # The cross is broken vertically (2026-10-19, user-directed): the two preview
 # fields on top take every extra pixel, because a photograph judged by eye wants
 # them all while the controls below want only what they need. The lower row is
@@ -253,6 +272,11 @@ CROSS_BORDER = 20
 # outgrew its share, so the split now follows the content instead of a constant.
 CROSS_TOP_WEIGHT = 1
 CROSS_BOT_WEIGHT = 0
+# Inset of the dimension label from the top-left corner of its picture.  The
+# pictures now sit flush to the top edge of their field, so the label lives
+# inside the picture (top-left) rather than in the black below it.
+LABEL_INSET_PX = 6
+NOTICE_MS = 4000   # ms a state-change prompt stays on screen
 
 
 def perfect_cross_field(pane_w, pane_h, gap=CROSS_GAP, border=CROSS_BORDER):

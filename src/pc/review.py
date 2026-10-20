@@ -526,7 +526,7 @@ class ReviewSession:
         yaw = self.current_yaw()
         if abs(roll) < 1e-9 and abs(pitch) < 1e-9 and abs(yaw) < 1e-9:
             return False
-        H = W.build(self.w, self.h, f, roll, pitch, yaw, max_area=self.settings.max_area_ratio)
+        H = self._build_H(self.w, self.h, f, roll, pitch, yaw, max_area=self.settings.max_area_ratio)
         _segs = None
         if len(self.vert) or len(self.horiz):
             _parts = [x.seg for x in (self.vert, self.horiz) if len(x)]
@@ -591,6 +591,18 @@ class ReviewSession:
         inset = float(W.FRINGE)
         x0, y0 = min(x0 + inset, x1), min(y0 + inset, y1)
         x1, y1 = max(x1 - inset, x0), max(y1 - inset, y0)
+        # Keep headroom above the eave when a fill is active: the fill invents
+        # the sky above the roof, so a crop that starts at the roofline (the
+        # fill-free rectangle) leaves none.  The eave is the topmost long
+        # horizontal; pull the top edge up to leave EAVE_HEADROOM of the crop
+        # height above it, but only ever lower y0 (never crop into the building).
+        fill_mode = getattr(self.settings, "fill", None)
+        if fill_mode not in (None, "", "none") and len(self.horiz):
+            segs = np.asarray(self.horiz.seg, float)[:, :4]
+            segs = segs * (self.w / self.gray.shape[1])
+            ye = W.eave_y(H_total, segs, float(ow), x0, x1)
+            if ye is not None and y0 > ye - W.EAVE_HEADROOM * (y1 - ye):
+                y0 = max(0.0, ye - W.EAVE_HEADROOM * (y1 - ye))
         return self.set_crop_rect(x0, y0, x1, y1, ow, oh)
 
     def auto_crop_if_cheap(self):
@@ -664,7 +676,13 @@ class ReviewSession:
         self.crop_is_auto = False
         if not self.auto_crop():
             return before is not None
-        if self.crop_loss() > self.auto_crop_threshold:
+        # The 0.30 gate is calibrated for small pitch bands (auto_crop_if_cheap).
+        # A horizontal-auto crop is a facade-to-rectangle warp and is inherently
+        # large (measured 0.77 loss on Platte_1); clearing it here would leave
+        # the auto crop "not actualising" the moment the mode it was computed
+        # for is in force. The manual _auto_crop keeps it regardless of loss, so
+        # match that when the rectify warp is active.
+        if self.crop_loss() > self.auto_crop_threshold and not self._rectify_active():
             self.clear_crop_rect()
             return before is not None
         self.crop_is_auto = True
@@ -1123,6 +1141,100 @@ class ReviewSession:
             pitch = 0.0
         return roll, pitch
 
+    def _rectify_active(self):
+        """Is the facade-to-rectangle warp in force?
+
+        Horizontal auto on a SELECTED facade, nothing drawn by hand: the
+        verticals come from the automatic vertical vanishing point, the
+        horizontals from the dominant horizontal one.  A drawn line or a manual angle is the user's own
+        instruction and keeps the rotation path.
+        """
+        m = self.model
+        # No facade selection required any more (2026-10-21, measured on
+        # wohnheim): without a strip or mask this used to fall back to the
+        # camera rotation, which aims at the same dominant horizontal vanishing
+        # point anyway but bent the plumb verticals by up to 4.7 deg.  On a
+        # corner view a strip or mask still decides WHICH facade becomes the
+        # rectangle -- by deciding which lines feed `horiz_vps`.
+        return (self.settings.correct_horizontal
+                and not len(self.control_lines) and not len(self.control_hlines)
+                and self.mode != MANUAL and m is not None and m.vp is not None
+                and bool(m.horiz_vps))
+
+    def _build_H(self, w, h, f, roll, pitch, yaw, max_area=4.0):
+        """The one place a correction homography is made (preview, save, crop).
+
+        Horizontal auto is a WARP that turns the facade into a rectangle, with
+        the length adjustment that compensates the foreshortening of the
+        horizontals (`warp.rectify`); everything else is the camera rotation.
+        Falls back to the rotation when the warp is degenerate.
+
+        Hand-drawn lines come first (user, 2026-10-20): every drawn line comes
+        out EXACTLY vertical or horizontal, nothing in between.  Per direction,
+        one drawn line is helped by the detector's vanishing point and two or
+        more decide alone (`warp.vp_from_lines`)."""
+        gw = self.gray.shape[1]
+        k = w / float(gw)
+
+        def to_build(v):
+            v = np.asarray(v, float)
+            return np.array([v[0] * k, v[1] * k, v[2]])
+
+        if len(self.control_lines) or len(self.control_hlines):
+            m = self.model
+            # Detector help: the vertical VP always (Auto corrects verticals);
+            # the horizontal one only with horizontal auto on, else the
+            # horizontals stay as they are (a point at infinity on the x-axis).
+            dv = self._data_vertical_vp()
+            fv = to_build(dv) if dv is not None else np.array([0.0, 1.0, 0.0])
+            fh = (to_build(m.horiz_vps[0])
+                  if self.settings.correct_horizontal and m is not None and m.horiz_vps
+                  else np.array([1.0, 0.0, 0.0]))
+            vv = W.vp_from_lines(np.asarray(self.control_lines, float) * k, fv)
+            vh = W.vp_from_lines(np.asarray(self.control_hlines, float) * k, fh)
+            xs = W.yaw_x_scale(yaw) if self.settings.correct_horizontal else 1.0
+            H = W.rectify(vv, vh, w, h, x_scale=xs)
+            if H is not None:
+                return H
+        if self._rectify_active():
+            dv = self._data_vertical_vp()
+            H = W.rectify(to_build(dv if dv is not None else self.model.vp),
+                          to_build(self.model.horiz_vps[0]),
+                          w, h, x_scale=W.yaw_x_scale(yaw))
+            if H is not None:
+                return H
+        return W.build(w, h, f, roll, pitch, yaw, max_area=max_area)
+
+    def _data_vertical_vp(self):
+        """Where the photograph's vertical lines actually converge (gray px).
+
+        The 2D warp needs the LINES' vanishing point, not `model.vp`: the model's
+        point comes out of the camera fit (focal x pitch, blended with priors)
+        and can sit far from the lines.  Measured 2026-10-20 on wohnheim.jpg:
+        the verticals are parallel (their own point at y = -322822, i.e. at
+        infinity) while `model.vp` said y = -7197 -- a 7.4 deg pitch that is not
+        in the picture -- and the warp, exact through that point, tilted every
+        vertical by +4 deg.  Least squares over the model's vertical inliers
+        (all detected verticals when it has none), each line weighted by its
+        length so a long edge outvotes a short one."""
+        seg = np.asarray(getattr(self.vert, "seg", np.zeros((0, 4))), float)
+        if seg.ndim != 2 or len(seg) == 0:
+            return None
+        seg = seg[:, :4]
+        m = self.model
+        inl = None if m is None else getattr(m, "vert_inliers", None)
+        if inl is not None and len(inl) == len(seg) and np.any(inl):
+            seg = seg[np.asarray(inl, bool)]
+        rows = []
+        for x1, y1, x2, y2 in seg:
+            l = np.cross([x1, y1, 1.0], [x2, y2, 1.0])
+            n = np.hypot(l[0], l[1])
+            if n > 1e-12:
+                rows.append(l / n * np.hypot(x2 - x1, y2 - y1))
+        if len(rows) < 2:
+            return None
+        return np.linalg.svd(np.array(rows))[2][-1]
+
     def current_yaw(self):
         """Yaw in radians actually in force, 0 when horizontal correction is off.
 
@@ -1274,20 +1386,23 @@ class ReviewSession:
         replaces the rotation-based preview entirely -- it is the direct answer
         to "straighten this facade" and does not go through roll/pitch/yaw at
         all."""
+        self.preview_map = None
         if len(self.planar_quad) >= 4:
             return self.planar_rectified(max_edge=max_edge)
         roll, pitch, f, _ = self.current_angles()
         yaw = self.current_yaw()
         crop = self._apply_crop if apply_crop else (lambda img: img)
         if abs(roll) < 1e-9 and abs(pitch) < 1e-9 and abs(yaw) < 1e-9:
-            return _fit(crop(self.bgr), max_edge)
+            out = _fit(crop(self.bgr), max_edge)
+            self.preview_map = ("scale", out.shape[1] / float(self.w))
+            return out
         # render the preview from a reduced copy: a 24 MP warp per slider tick
         # is unusable, and the geometry is scale invariant apart from f
         s = min(1.0, float(max_edge) / max(self.w, self.h))
         small = cv2.resize(self.bgr, (max(1, int(self.w * s)), max(1, int(self.h * s))),
                            interpolation=cv2.INTER_AREA) if s < 1.0 else self.bgr
         sh, sw = small.shape[:2]
-        H = W.build(sw, sh, f * s, roll, pitch, yaw, max_area=self.settings.max_area_ratio)
+        H = self._build_H(sw, sh, f * s, roll, pitch, yaw, max_area=self.settings.max_area_ratio)
         # Pass detected line segments so plan() can use the motif reframe
         # (facade + margin, centred) instead of the whole-frame pad.
         _segs = None
@@ -1310,6 +1425,7 @@ class ReviewSession:
         # in OW×OH space while the array is smaller → wrong position.
         out = _fit(crop(out), max_edge)
         fit_s = out.shape[1] / float(ow) if ow > 0 else 1.0
+        self.preview_map = ("warp", s, H_total, fit_s)
         # Project hand-drawn marker lines through the warp.  H_total maps
         # preview-space → OW×OH output space; scale original→preview before,
         # then scale the result by fit_s to land on the final array.
@@ -1333,6 +1449,20 @@ class ReviewSession:
                          int(mapped[2 * i + 1, 0, 1] * fit_s))
                     cv2.line(out, a, b, col, 2)
         return out
+
+    def source_to_preview(self, x, y):
+        """Where a full-resolution source pixel lands on the last render_after
+        array, or None (planar view, failed plan, nothing rendered yet)."""
+        m = getattr(self, "preview_map", None)
+        if m is None:
+            return None
+        if m[0] == "scale":
+            return x * m[1], y * m[1]
+        _kind, s, H, fit_s = m
+        q = H @ np.array([x * s, y * s, 1.0])
+        if abs(q[2]) < 1e-9:
+            return None
+        return q[0] / q[2] * fit_s, q[1] / q[2] * fit_s
 
     def _fill_preview(self, out, H_total, sw, sh, ow, oh):
         """Fill the band in the preview -- with the chosen backend, or a stand-in.
@@ -1389,7 +1519,7 @@ class ReviewSession:
         yaw = self.current_yaw()
         if not f or (abs(roll) < 1e-9 and abs(pitch) < 1e-9 and abs(yaw) < 1e-9):
             return None
-        H = W.build(self.w, self.h, f, roll, pitch, yaw,
+        H = self._build_H(self.w, self.h, f, roll, pitch, yaw,
                     max_area=self.settings.max_area_ratio)
         segs = [x.seg for x in (self.vert, self.horiz) if len(x)]
         planned = W.plan(self.w, self.h, H, self.settings,
@@ -1420,6 +1550,32 @@ class ReviewSession:
         return (f"saved size {size[0]}x{size[1]} -- {ratio:.1f}x the original "
                 f"area; crop, or lower 'detail (px kept)'")
 
+    def state_key(self):
+        """Everything a person can change on this photograph, as one value.
+
+        Compared against the value taken when the photograph finished opening
+        (and after each Save) to answer "was anything changed?" before another
+        photograph replaces this one."""
+        import hashlib
+
+        def arr(a):
+            if a is None:
+                return None
+            a = np.ascontiguousarray(a)
+            return hashlib.sha1(a.tobytes()).hexdigest() + str(a.shape)
+
+        s = self.settings
+        return (self.mode,
+                round(self.manual_roll, 6), round(self.manual_pitch, 6),
+                round(self.manual_yaw, 6), round(self.manual_focal_35mm, 3),
+                arr(self.control_lines), arr(self.control_hlines),
+                tuple(sorted(self._crop_edges.items())),
+                tuple(map(tuple, self.planar_quad)), self.planar_active,
+                self.strip, arr(self.enabled), arr(self.paint), arr(self.sam_mask),
+                self.invert_mask, self.mask_enabled,
+                getattr(s, "correct_horizontal", None), getattr(s, "fill", None),
+                getattr(s, "keep_pixels", None), getattr(s, "mask_mode", None))
+
     def status_text(self):
         roll, pitch, f, clamped = self.current_angles()
         f35 = M.focal_35mm_from_px(f, self.w, self.h) if f else 0.0
@@ -1446,7 +1602,16 @@ class ReviewSession:
                      else "conf=n/a (you stated the verticals)")
         yaw_note = (f"  yaw={math.degrees(self.current_yaw()):+.2f}deg"
                     if abs(self.current_yaw()) > 1e-9 else "")
-        parts = [f"{head}  roll={math.degrees(roll):+.2f}deg  pitch={math.degrees(pitch):+.2f}deg{yaw_note}",
+        if self._rectify_active():
+            # The facade-to-rectangle warp is the correction, not roll/pitch/focal
+            # (none of which enter it), so the first line names the warp and drops
+            # those three.  Every other line is unchanged.
+            first = (f"HORIZONTAL AUTO (warp)  facade -> rectangle  "
+                     f"x-scale {W.yaw_x_scale(self.current_yaw()):.2f}")
+        else:
+            first = (f"{head}  roll={math.degrees(roll):+.2f}deg  "
+                     f"pitch={math.degrees(pitch):+.2f}deg{yaw_note}")
+        parts = [first,
                  f"f={f35:.0f}mm ({src if self.mode == AUTO else 'manual'})  {conf_note}  "
                  f"lines={int(self.enabled.sum())}/{len(self.vert)}"]
         parts.append(mask_note)
@@ -1654,7 +1819,7 @@ class ReviewSession:
         if abs(roll) < 1e-12 and abs(pitch) < 1e-12 and abs(yaw) < 1e-12:
             return self.w, self.h
         save_settings = self.settings.replace(keep_size=True)
-        H = W.build(self.w, self.h, f, roll, pitch, yaw, max_area=save_settings.max_area_ratio)
+        H = self._build_H(self.w, self.h, f, roll, pitch, yaw, max_area=save_settings.max_area_ratio)
         _segs = None
         if len(self.vert) or len(self.horiz):
             _parts = [x.seg for x in (self.vert, self.horiz) if len(x)]
@@ -1701,7 +1866,7 @@ class ReviewSession:
         # dial still decides how far past source size the near edge may push
         # the canvas: 0 = source long edge, 1 = every near-edge pixel kept.
         save_settings = self.settings.replace(keep_size=True)
-        H = W.build(self.w, self.h, f, roll, pitch, yaw, max_area=save_settings.max_area_ratio)
+        H = self._build_H(self.w, self.h, f, roll, pitch, yaw, max_area=save_settings.max_area_ratio)
         _segs = None
         if len(self.vert) or len(self.horiz):
             _parts = [x.seg for x in (self.vert, self.horiz) if len(x)]

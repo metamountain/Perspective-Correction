@@ -103,6 +103,47 @@ def yaw_x_scale(yaw: float, k: float = YAW_FORESHORTEN) -> float:
     return c ** k if c > 1e-6 else 1.0
 
 
+EAVE_MIN_LEN = 0.15
+"""Shortest horizontal (as a fraction of the output width) that counts as the
+eave line.  Shorter segments are window reveals and brick joints, not the roof
+line, and the topmost one of those would pull the crop up into the building."""
+
+EAVE_HEADROOM = 0.10
+"""How much of the crop height the auto-crop keeps above the eave when a fill is
+active.  The fill invents the sky above the roof, so a crop that starts at the
+roofline leaves none; this much headroom reads as sky, not as a cut-off roof."""
+
+
+def eave_y(H_total, horiz_segs, ow, x0, x1):
+    """Smallest y (output px) of a long horizontal inside the crop's x-range.
+
+    ``horiz_segs`` are the detected horizontal segments in *source* pixel space
+    (``(N, 4)`` as x0, y0, x1, y1).  Each is mapped through ``H_total`` into the
+    output canvas; a segment counts toward the eave only if its mapped length is
+    at least ``EAVE_MIN_LEN * ow`` and its midpoint's x lies in ``[x0, x1]``.
+    Returns the smallest midpoint y of the segments that count, or ``None`` when
+    none does.  That smallest y is the roofline the crop should keep headroom
+    above.
+    """
+    segs = np.asarray(horiz_segs, float)
+    if segs.size == 0:
+        return None
+    segs = segs[:, :4]
+    p1 = G.apply_h(H_total, segs[:, :2])
+    p2 = G.apply_h(H_total, segs[:, 2:4])
+    best = None
+    for a, b in zip(p1, p2):
+        if math.hypot(b[0] - a[0], b[1] - a[1]) < EAVE_MIN_LEN * ow:
+            continue
+        midx = 0.5 * (a[0] + b[0])
+        if midx < x0 or midx > x1:
+            continue
+        midy = 0.5 * (a[1] + b[1])
+        if best is None or midy < best:
+            best = float(midy)
+    return best
+
+
 def build(w: int, h: int, f: float, roll: float, pitch: float,
           yaw: float = 0.0, max_area: float = 4.0) -> np.ndarray:
     """Build the correction homography: K·R·K⁻¹, then the yaw x-compression.
@@ -123,6 +164,100 @@ def build(w: int, h: int, f: float, roll: float, pitch: float,
                       [0.0, 1.0, 0.0],
                       [0.0, 0.0, 1.0]])
         H = S @ H
+    return H
+
+
+def vp_from_lines(segs, fallback):
+    """The vanishing point every hand-drawn line of one direction passes through.
+
+    User rule, 2026-10-20: a drawn line comes out EXACTLY vertical or
+    horizontal, nothing in between.  With ONE drawn line the detected lines
+    still help: the automatic vanishing point `fallback` is moved onto that
+    line (the foot of the perpendicular), so the line is exact and the rest
+    of the direction comes from the detector.  From TWO lines on the detector
+    has no say in that direction: the point is their intersection (exact for
+    two, the least-squares point for three or more).
+
+    `segs` are (n, 4) segments and `fallback` a homogeneous point, both in the
+    pixel space `rectify` is called in.  No segments returns `fallback`.
+    """
+    segs = np.asarray(segs, float).reshape(-1, 4)
+    if len(segs) == 0:
+        return None if fallback is None else np.asarray(fallback, float)
+    lines = []
+    for x1, y1, x2, y2 in segs:
+        l = np.cross([x1, y1, 1.0], [x2, y2, 1.0])
+        n = np.hypot(l[0], l[1])
+        if n > 1e-12:
+            lines.append(l / n)
+    if not lines:
+        return None if fallback is None else np.asarray(fallback, float)
+    if len(lines) >= 2:
+        return np.linalg.svd(np.array(lines))[2][-1]
+    a, b, c = lines[0]
+    p = None if fallback is None else np.asarray(fallback, float)
+    if p is None or abs(p[2]) < 1e-12 * max(abs(p[0]), abs(p[1]), 1.0):
+        # No usable point, or one at infinity: the line's own direction.
+        return np.array([-b, a, 0.0])
+    x, y = p[0] / p[2], p[1] / p[2]
+    d = a * x + b * y + c
+    return np.array([x - d * a, y - d * b, 1.0])
+
+
+def rectify(vp_v, vp_h, w: int, h: int, x_scale: float = 1.0,
+            max_area: float = 60.0) -> np.ndarray | None:
+    """Warp a facade into a right-angled rectangle from its two vanishing points.
+
+    This is a WARP, not a camera rotation (user, 2026-10-20: "kein
+    Perspektivkorrektur sondern eine Warp-Verzerrung").  A rotation `K R K^-1`
+    cannot shear, so fitting roll, pitch and yaw separately leaves a rhombus;
+    here the vanishing line `l = vp_h x vp_v` is sent to infinity (which makes
+    the two families parallel) and an affine map then takes the horizontal
+    direction to the x-axis and the vertical direction to the y-axis, so the
+    horizontals come out exactly horizontal and the verticals exactly vertical.
+    No focal length, roll or pitch enters.  `x_scale` is the length adjustment
+    that compensates the foreshortening of the horizontals (`yaw_x_scale`).
+
+    `vp_v`, `vp_h` are homogeneous points in the pixel space of `(w, h)`.
+    Returns None when the geometry is degenerate, so the caller can fall back.
+    """
+    c = np.array([w / 2.0, h / 2.0])
+
+    def centred(v):
+        v = np.asarray(v, float)
+        return np.array([v[0] - c[0] * v[2], v[1] - c[1] * v[2], v[2]])
+
+    vh, vv = centred(vp_h), centred(vp_v)
+    line = np.cross(vh, vv)
+    if not np.all(np.isfinite(line)) or abs(line[2]) < 1e-9 * max(np.linalg.norm(line), 1e-12):
+        return None
+    line = line / line[2]
+    Hp = np.array([[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [line[0], line[1], 1.0]])
+    dh = (Hp @ vh)[:2]
+    dv = (Hp @ vv)[:2]
+    if np.linalg.norm(dh) < 1e-12 or np.linalg.norm(dv) < 1e-12:
+        return None
+    dh = dh / np.linalg.norm(dh)
+    dv = dv / np.linalg.norm(dv)
+    if dh[0] < 0:
+        dh = -dh
+    M = np.column_stack([dh, dv])
+    if np.linalg.det(M) < 0:
+        dv = -dv
+        M = np.column_stack([dh, dv])
+    if abs(np.linalg.det(M)) < 1e-6:
+        return None
+    A = np.eye(3)
+    A[:2, :2] = np.linalg.inv(M)
+    S = np.diag([x_scale, 1.0, 1.0])
+    T = np.array([[1.0, 0.0, -c[0]], [0.0, 1.0, -c[1]], [0.0, 0.0, 1.0]])
+    Ti = np.array([[1.0, 0.0, c[0]], [0.0, 1.0, c[1]], [0.0, 0.0, 1.0]])
+    H = Ti @ S @ A @ Hp @ T
+    if not np.all(np.isfinite(H)):
+        return None
+    q = warped_quad(H, w, h)
+    if not np.all(np.isfinite(q)) or quad_area(q) > max_area * w * h or quad_area(q) < 1e-3 * w * h:
+        return None
     return H
 
 

@@ -79,44 +79,34 @@ def _loaded(app, w, h):
     _settle(app)
 
 
-def test_the_prominent_button_asks_rather_than_writing_unattended():
-    """Manual review is the product, so the accent button must open a review
-    window per photograph -- never start a run that writes files nobody saw.
-
-    Asserted by pressing it, not by reading its label or its `command` string: a
-    button that *says* Review while wired to the batch is exactly the failure
-    worth catching, and only invoking it can tell the two apart. The unattended
-    run must still exist (it was demoted, not deleted) and must not be the accent
-    button.
-    """
+def test_adding_photographs_walks_them_and_the_batch_is_one_footer_button():
+    """Manual review is the product: adding photographs opens the first for
+    review, and leaving it (here: Skip) opens the next -- no button to press
+    first, and nothing written by a worker thread.  The unattended batch is a
+    rudiment (user, 2026-10-21): one footer button, not the accent style,
+    labelled with its own counter while it runs.  Not invoked here -- running
+    it would write real files from a test."""
     app = _app()
     try:
-        _loaded(app, 1920, 1080)
-        assert getattr(app, "worker", None) is None, "nothing should be running yet"
-
-        app.btn_run.invoke()
-        _settle(app, 5)
-
-        # The batch writes from a worker thread; a review walk never starts one.
+        app.geometry("1920x1080-4000+0")
+        app.update_idletasks(); app.update()
+        second = os.path.join(os.path.dirname(ASSET), "lochfassade.jpg")
+        app._add([ASSET, second])
+        _settle(app)
         assert getattr(app, "worker", None) is None, (
-            "the accent button started an unattended run -- it must open a "
-            "review window instead, so no file is written unlooked-at")
-        assert getattr(app, "_review_total", 0) >= 1, (
-            "pressing it should have begun walking the selection one photograph "
-            "at a time")
-
-        # The unattended run is demoted, not deleted: still present, still its
-        # own action, just no longer the primary gesture.  Not invoked here --
-        # running it would write real files from a test.
-        assert str(app.btn_run.cget("style")) == "Accent.TButton", (
-            "the asking path is the one that should look primary")
-        assert str(app.btn_batch.cget("style")) != "Accent.TButton", (
-            "the unattended run must not be the primary gesture")
-        assert app.btn_batch.cget("command") != app.btn_run.cget("command"), (
-            "the two buttons must be distinct actions")
+            "adding photographs started an unattended run")
+        assert os.path.basename(app.review.session.path) == os.path.basename(ASSET)
+        assert app._review_total == 2 and app._review_queue == [os.path.abspath(second)]
+        app.review._skip()
+        _settle(app)
+        assert os.path.basename(app.review.session.path) == "lochfassade.jpg", (
+            "Skip did not walk on to the next photograph")
+        assert str(app.btn_batch.cget("style")) != "Accent.TButton"
+        assert app.btn_batch.winfo_ismapped(), "the batch button is not on screen"
+        for gone in ("tree", "btn_run", "btn_stop", "progress", "_w_bar", "_w_opt"):
+            assert not hasattr(app, gone), f"{gone} is back -- the batch is a rudiment"
     finally:
         app.destroy()
-
 
 def test_shorten_middle_keeps_the_end_never_just_truncates():
     """P15: a filename is shortened by cutting its middle, so the end -- the
@@ -283,8 +273,7 @@ def test_the_window_is_the_cross_and_nothing_else():
 
     There is no paned split: the review panel fills everything, and the only
     thing under the cross is the slim fixed-height status bar (wordmark left,
-    theme + update right) -- a strip, not a growing field. The results list
-    lives inside the cross's lower-left field with a height of its own. A
+    batch + theme + update right) -- a strip, not a growing field. A
     bigger window grows the four equal fields -- and with them the previews.
     """
     sizes = [(1280, 800), (1920, 1200)]
@@ -293,20 +282,17 @@ def test_the_window_is_the_cross_and_nothing_else():
         app = _app()
         try:
             _loaded(app, w, h)
-            assert str(app._w_tree.master) == str(app.review.loader), (
-                "the results list left the cross's lower-left field")
             below = app.winfo_height() - app.review.winfo_y() \
                     - app.review.winfo_height()
             # The status bar is a fixed-height strip; it must not grow with the
             # window, so it stays in a narrow band at every size.
             assert 20 <= below <= 60, (
                 f"the strip below the cross is not the slim status bar: {below} px")
-            seen.append((app.review.winfo_height(), app.tree.winfo_height()))
+            seen.append(app.review.winfo_height())
         finally:
             app.destroy()
 
-    (r0, t0), (r1, t1) = seen
-    assert t0 > 8 and t1 > 8, f"the results list collapsed: {t0} px, {t1} px"
+    r0, r1 = seen
     assert r1 > r0, f"the cross did not take the window's extra height " \
                     f"({r0} -> {r1} px)"
 
@@ -459,90 +445,56 @@ def test_strip_draws_two_draggable_rulers_defaulting_to_20_and_80():
         app.destroy()
 
 
-def _assert_adjust_above_save(r, top, when):
-    """The controls sit above the action row, in the packer and on screen.
+def test_the_control_strip_is_always_open_and_the_pictures_never_move():
+    """Three rows, nothing collapses, and the pictures stay put.
 
-    Both halves are needed: these rows are packed `side="bottom"`, so the
-    packing order runs *upwards* from the bottom row and reads backwards --
-    `_btns2` (the marking/crop row) sits directly above `_btns` (the Save row),
-    and `_adj` comes immediately after `_btns2` precisely because it is drawn
-    above both button rows.
+    User, 2026-10-20: no fold-out menus, everything open and ultra compact, the
+    picture area static.  So the strip is the same height in all three
+    correction modes' *picture* terms: switching Auto / Horizontal auto /
+    Manual changes which controls show, and must not move or resize either
+    preview.  The rows are packed ``side="bottom"``, so the packer order runs
+    upwards (Save row first) and reads backwards.  The mode lives on the panel
+    and must survive ``load``, which destroys every child.
     """
-    slaves = top.pack_slaves()
-    assert slaves.index(r._btns2) == slaves.index(r._btns) + 1, (
-        f"{when}: the marking row left its slot above the Save row "
-        f"({[str(w).rsplit('.', 1)[-1] for w in slaves]})")
-    assert slaves.index(r._adj) == slaves.index(r._btns2) + 1, (
-        f"{when}: the adjustments left their slot above the button rows "
-        f"({[str(w).rsplit('.', 1)[-1] for w in slaves]})")
-    assert r._adj.winfo_y() < r._btns2.winfo_y() < r._btns.winfo_y(), (
-        f"{when}: the controls came back below the button rows")
-
-
-def test_collapsing_the_adjustments_leaves_the_cross_where_it_was():
-    """The four control rows fold away, and come back where they were.
-
-    Under the content-sized cross (2026-10-19) the lower row is not a fixed
-    share of the pane -- it is as tall as its contents, and the upper row takes
-    every remaining pixel. Folding the control rows away shrinks the lower row,
-    so the preview *grows*; re-opening restores it. The inversion from the old
-    fixed 3:2 split is deliberate: the pictures on top are what the window is
-    for, and they should get the height back the moment the controls give it up.
-    So this asserts the preview never *shrinks* when the controls fold (it holds
-    or gains), and that re-expanding restores the original size.
-
-    Everything else this test guards is unchanged and still live: `pack`
-    appends, so a re-expand that does not name its place puts the controls
-    *below* the Save row. Order is read from `pack_slaves` rather than from
-    coordinates, because on a short window the packer unmaps the bottom rows
-    outright and a `winfo_y` comparison would then be reading stale numbers.
-    """
+    from pc import layout as L
     app = _app()
     try:
-        _loaded(app, 1920, 1200)
+        _loaded(app, 1920, 1080)
         r = app.review
-        top = r._adj.master
-        # Expanded on purpose: the *default* is the height's decision (see
-        # test_the_panel_default_keeps_both_the_buttons_and_a_usable_picture),
-        # and touching the toggle is what takes that decision away from it.
-        if not r.v_adjust.get():
-            r.v_adjust.set(True); r._toggle_adjust(); _settle(app, 10)
-        assert r._adj in top.pack_slaves(), "expanded, but not packed"
-        open_h = r.c_before.winfo_height()
+        rows = [int(w.grid_info()["row"]) for w in (r._btns2, r._adj, r._btns)]
+        assert rows == [0, 1, 2], (
+            f"the rows left their order {rows}: mode/fill/crop on top, the "
+            f"active mode's controls in the middle, Save at the bottom")
+        assert not hasattr(r, "v_adjust"), "the fold-out toggle is back"
 
-        r.v_adjust.set(False); r._toggle_adjust(); _settle(app, 10)
-        shut_h = r.c_before.winfo_height()
-        assert r._adj not in top.pack_slaves(), "collapsed, but still packed"
-        assert shut_h >= open_h - 2, (
-            f"the preview field shrank {open_h - shut_h} px when the controls "
-            f"folded; the lower row is content-sized, so folding the controls "
-            f"can only give the pictures their height back")
+        sizes = set()
+        for mode in ("auto", "horizontal", "manual"):
+            r.v_corr_mode.set(mode); r._show_mode(); _settle(app, 8)
+            assert r._mode_top == mode, f"{mode}: showing {r._mode_top}"
+            sizes.add((r.c_before.winfo_height(), r.c_after.winfo_height(),
+                       r._img_box, r._strip.winfo_height()))
+            assert r._adj.winfo_ismapped() and r._btns.winfo_ismapped()
+        assert len(sizes) == 1, f"switching mode moved the pictures or the strip: {sizes}"
 
-        r.v_adjust.set(True); r._toggle_adjust(); _settle(app, 10)
-        assert abs(r.c_before.winfo_height() - open_h) <= 2, (
-            "re-expanding did not restore the layout")
-        _assert_adjust_above_save(r, top, "after a collapse and re-expand")
+        # Compact: all three rows together stay inside the strip's budget.
+        strip = (r._btns2.winfo_height() + r._adj.winfo_height()
+                 + r._btns.winfo_height())
+        assert strip <= L.CTRL_STRIP_MAX_H_PX, (
+            f"the control strip is {strip} px, over the {L.CTRL_STRIP_MAX_H_PX} "
+            f"px budget")
 
-        # The path the review queue actually takes: collapse, then the next
-        # photograph.  `load` destroys every child and rebuilds, so the state
-        # has to live on the panel -- a collapse that re-opened itself thirty
-        # times in a queue of thirty is worse than no collapse at all.
-        r.v_adjust.set(False); r._toggle_adjust(); _settle(app, 6)
+        # The queue path: the chosen mode survives the next photograph.
+        r.v_corr_mode.set("manual")
         r.load(r.session.path, r.settings, r.dest_path)
         _settle(app, 20)
-        r = app.review
-        top = r._adj.master
-        assert r.v_adjust.get() is False, "the collapse did not survive the next photograph"
-        assert r._adj not in top.pack_slaves(), "rebuilt collapsed, but packed anyway"
-        r.v_adjust.set(True); r._toggle_adjust(); _settle(app, 10)
-        _assert_adjust_above_save(r, top, "after a reload")
-        assert r._btns.winfo_ismapped(), "Save went missing across a reload"
+        assert app.review.v_corr_mode.get() == "manual", (
+            "the mode did not survive the next photograph")
     finally:
         app.destroy()
 
 
 def test_the_save_button_is_reachable_at_every_window_size():
-    """Save / Keep original / Close, mapped, at three real resolutions.
+    """Save / Skip / Close, mapped, at three real resolutions.
 
     They were not. `pack` serves its children in call order and the canvases
     were packed first with `expand=True`, so at 1920x1080 -- the commonest
@@ -555,10 +507,6 @@ def test_the_save_button_is_reachable_at_every_window_size():
         try:
             _loaded(app, w, h)
             r = app.review
-            # Expanded on purpose: the point is that the action row survives
-            # even the arrangement that squeezes it hardest.
-            if not r.v_adjust.get():
-                r.v_adjust.set(True); r._toggle_adjust(); _settle(app, 8)
             assert r._btns.winfo_ismapped(), (
                 f"{w}x{h}: the Save row is not on screen")
             assert r._btns.winfo_height() > 8, (
@@ -574,17 +522,63 @@ def test_the_save_button_is_reachable_at_every_window_size():
                         f"{w}x{h}: {str(c).rsplit('.', 1)[-1]} starved to "
                         f"{c.winfo_width()} px")
 
-            # ... and it survives both things that rebuild or re-pack the panel
-            r.v_adjust.set(False); r._toggle_adjust(); _settle(app, 6)
-            assert r._btns.winfo_ismapped(), f"{w}x{h}: lost on collapse"
-            r.v_adjust.set(True); r._toggle_adjust(); _settle(app, 6)
-            assert r._btns.winfo_ismapped(), f"{w}x{h}: lost on re-expand"
-
+            # ... and it survives the thing that rebuilds the panel
             r.load(r.session.path, r.settings, r.dest_path)
             _settle(app, 20)
             assert app.review._btns.winfo_ismapped(), f"{w}x{h}: lost on reload"
         finally:
             app.destroy()
+
+
+def test_skip_moves_on_and_writes_nothing():
+    """Skip replaced Keep original (user, 2026-10-20), which copied the
+    untouched photograph to the output.  Skip must advance the queue and leave
+    no file behind -- neither at the output path nor anywhere a copy would go."""
+    app = _app()
+    try:
+        _loaded(app, 1920, 1080)
+        r = app.review
+        dst = r._target_path()
+        if os.path.exists(dst):
+            os.remove(dst)
+        fired = []
+        r.on_closed = lambda: fired.append(True)
+        r._closed_sent = False
+        r._skip()
+        _settle(app, 5)
+        assert fired == [True], "Skip did not advance the queue"
+        assert not os.path.exists(dst), f"Skip wrote {dst}"
+        assert not any(c.winfo_class() == "TButton" and c.cget("text") == "Keep original"
+                       for c in r._btns.winfo_children()), "Keep original is still there"
+    finally:
+        app.destroy()
+
+
+def test_ctrl_v_pastes_a_picture_without_the_icon():
+    """Ctrl+V does what the paste icon does (user, 2026-10-20), and an empty
+    clipboard says so in the notice line instead of a modal dialog."""
+    import tempfile
+    from PIL import Image, ImageGrab
+    app = _app()
+    real = ImageGrab.grabclipboard
+    try:
+        _settle(app, 10)
+        assert app.bind("<Control-v>") and app.bind("<Control-V>"), "Ctrl+V is not bound"
+        with tempfile.TemporaryDirectory() as tmp:
+            app.v_output.set(tmp)
+            ImageGrab.grabclipboard = lambda: Image.new("RGB", (64, 48), (90, 120, 160))
+            before = len(app.items)
+            assert app._paste_key() == "break"
+            _settle(app, 5)
+            shots = [f for f in os.listdir(tmp) if f.startswith("screenshot_")]
+            assert len(shots) == 1, shots
+            assert len(app.items) == before + 1
+            ImageGrab.grabclipboard = lambda: None
+            app._paste_key()
+            assert "no image on the clipboard" in app.review._notice
+    finally:
+        ImageGrab.grabclipboard = real
+        app.destroy()
 
 
 def test_the_panel_default_keeps_both_the_buttons_and_a_usable_picture():
@@ -609,40 +603,11 @@ def test_the_panel_default_keeps_both_the_buttons_and_a_usable_picture():
             r = app.review
             canvas = r.c_before.winfo_height()
             assert r._btns.winfo_ismapped(), f"{w}x{h}: Save is not on screen"
-            assert r.v_adjust.get() is False, (
-                f"{w}x{h}: the control rows should start folded so the "
-                f"pictures on top are maximized")
             assert canvas >= L.MIN_USEFUL_CANVAS, (
                 f"{w}x{h}: the preview opened at {canvas} px, below the "
                 f"{L.MIN_USEFUL_CANVAS} px floor")
         finally:
             app.destroy()
-
-
-def test_a_hand_made_choice_about_the_controls_outranks_the_height():
-    """`_adapt_adjust_default` stands down permanently once anyone touches it.
-
-    It runs off `<Configure>`, which fires on every resize, so without the
-    stand-down a user who opened the controls on a short window would watch
-    them shut again the moment they dragged the window. `_adj_open` exists the
-    instant the toggle is pressed and that is the whole guard.
-    """
-    app = _app()
-    try:
-        _loaded(app, 2560, 1400)                   # tall enough to start open
-        r = app.review
-        r.v_adjust.set(False); r._toggle_adjust(); _settle(app, 10)
-        assert r.v_adjust.get() is False
-        app.geometry("2560x1400-4000+0"); _settle(app, 10)
-        assert r.v_adjust.get() is False, (
-            "a resize re-opened controls the user had shut by hand")
-
-        r.v_adjust.set(True); r._toggle_adjust(); _settle(app, 10)
-        app.geometry("1280x800-4000+0"); _settle(app, 20)
-        assert r.v_adjust.get() is True, (
-            "a resize shut controls the user had opened by hand")
-    finally:
-        app.destroy()
 
 
 def test_the_preview_gives_up_retrying_instead_of_spinning_forever():
@@ -849,14 +814,18 @@ def test_the_cross_breaks_vertically_with_the_pictures_on_top():
             assert top[0] >= 2 * bot[0], (
                 f"{w}x{h}: the pictures should dominate the controls: {sizes}")
 
-            # The dark shows through at exactly the constants' width: the full
-            # border on every outer edge, the cross between the fields.
-            assert abs(r.cell_before.winfo_x() - L.CROSS_BORDER) <= 1, (
+            # The dark shows through at exactly the constants' width: CROSS_SIDE
+            # on the left and right (the ruler strip), the border on the bottom,
+            # the cross between the fields.  The top edge has no border -- the
+            # pictures run to it (user, 2026-10-20), so the top-left field sits
+            # flush at y=0.
+            assert abs(r.cell_before.winfo_x() - L.CROSS_SIDE) <= 1, (
                 f"{w}x{h}: the left border is {r.cell_before.winfo_x()}")
-            assert abs(r.cell_before.winfo_y() - L.CROSS_BORDER) <= 1, (
-                f"{w}x{h}: the top border is {r.cell_before.winfo_y()}")
+            assert abs(r.cell_before.winfo_y()) <= 1, (
+                f"{w}x{h}: the pictures should run to the top edge, top is "
+                f"{r.cell_before.winfo_y()}")
             right = r.winfo_width() - (r.cell_after.winfo_x() + r.cell_after.winfo_width())
-            assert abs(right - L.CROSS_BORDER) <= 1, f"{w}x{h}: the right border is {right}"
+            assert abs(right - L.CROSS_SIDE) <= 1, f"{w}x{h}: the right border is {right}"
             bottom = r.winfo_height() - (r.cell_ui.winfo_y() + r.cell_ui.winfo_height())
             assert abs(bottom - L.CROSS_BORDER) <= 1, f"{w}x{h}: the bottom border is {bottom}"
             vgap = r.cell_after.winfo_x() - (r.cell_before.winfo_x() + r.cell_before.winfo_width())
@@ -1145,39 +1114,6 @@ def test_the_yaw_controls_follow_the_yaw_not_the_checkbox():
         app.destroy()
 
 
-def test_the_batch_bar_has_each_setting_exactly_once():
-    """The 2026-09-13 duplication bug: subfolders and overwrite originals were each
-    created twice in the batch options frame -- bound to the same vars, so it was
-    pure visual clutter (four checkboxes for three settings), which no functional
-    test could ever see.  Pinned by counting the Checkbuttons actually built."""
-    def count(frame, text):
-        n = [0]
-
-        def walk(w):
-            try:
-                if w.winfo_class() == "TCheckbutton" and str(w.cget("text")) == text:
-                    n[0] += 1
-            except Exception:
-                pass
-            for c in w.winfo_children():
-                walk(c)
-
-        walk(frame)
-        return n[0]
-
-    app = _app()
-    try:
-        opt = app._w_opt
-        assert count(opt, "subfolders") == 1, (
-            f"subfolders built {count(opt, 'subfolders')}x, expected once")
-        assert count(opt, "overwrite originals") == 1, (
-            f"overwrite originals built {count(opt, 'overwrite originals')}x, expected once")
-        assert count(opt, "offer manual review for unclear images") == 1, (
-            "offer manual review must appear exactly once too")
-    finally:
-        app.destroy()
-
-
 def test_paste_button_exists_and_handler_is_wired():
     """The addbar must carry a paste button that calls App._paste_screenshot.
 
@@ -1196,55 +1132,6 @@ def test_paste_button_exists_and_handler_is_wired():
         # handler method exists and is callable on the App instance instead.
         assert hasattr(app, "_paste_screenshot"), "App._paste_screenshot missing"
         assert callable(app._paste_screenshot), "App._paste_screenshot not callable"
-    finally:
-        app.destroy()
-
-
-def test_jpeg_quality_spinbox_in_batch_options():
-    """The jpeg quality spinbox must be present in the batch options panel and
-    wired to v_jpegq with a persistence trace."""
-    app = _app()
-    try:
-        opt = app._w_opt
-        assert hasattr(app, "v_jpegq"), "v_jpegq variable missing"
-        val = app.v_jpegq.get()
-        assert isinstance(val, int) and 10 <= val <= 100, (
-            f"jpeg quality {val} out of range")
-        # Walk the options frame for a Spinbox bound to v_jpegq.
-        found = [False]
-
-        def walk(w):
-            try:
-                if w.winfo_class() == "TSpinbox":
-                    tv = w.cget("textvariable")
-                    if isinstance(tv, str) and app.nametowidget(tv).get() == val \
-                            if tv.startswith("!") else False:
-                        found[0] = True
-            except Exception:
-                pass
-            for c in w.winfo_children():
-                walk(c)
-
-        walk(opt)
-        # The _spin helper uses ttk.Spinbox; the nametowidget check above is
-        # fragile across Tk versions, so also verify by label text.
-        if not found[0]:
-            labels = []
-
-            def walk2(w):
-                try:
-                    if w.winfo_class() in ("TLabel", "Label"):
-                        t = str(w.cget("text"))
-                        if "jpeg" in t.lower():
-                            labels.append(t)
-                except Exception:
-                    pass
-                for c in w.winfo_children():
-                    walk2(c)
-
-            walk2(opt)
-            assert any("jpeg" in l.lower() for l in labels), (
-                f"no 'jpeg quality' label found in batch options, got {labels}")
     finally:
         app.destroy()
 
@@ -1868,3 +1755,58 @@ def test_the_detail_slider_is_greyed_out_unless_a_yaw_is_being_corrected():
             "trap, met for the fourth time")
     finally:
         app.destroy()
+
+
+def test_opening_a_file_replaces_the_photo_and_asks_only_when_it_changed():
+    """User, 2026-10-21: opening another file never queues it.  Unchanged, the
+    new photograph simply opens; changed, the user is asked to save first
+    (Yes saves, No discards, Cancel stays).  Only a folder is walked."""
+    import shutil
+    import tempfile
+    from pc import gui as GUI
+    real = GUI.messagebox.askyesnocancel
+    answers, asked = [], []
+
+    def fake(*a, **k):
+        asked.append(a[0])
+        return answers.pop(0)
+
+    GUI.messagebox.askyesnocancel = fake
+    tmp = tempfile.mkdtemp()
+    app = _app()
+    try:
+        names = ("lochfassade.jpg", "Alte_Scheune.jpg", "79cb33878fd0ed76d368e7cfa8827e15.jpg")
+        a, b, c = (shutil.copy(os.path.join(os.path.dirname(ASSET), n), tmp) for n in names)
+        app.geometry("1600x1000-4000+0")
+        app.update_idletasks(); app.update()
+        r = app.review
+        app._add([a]); _settle(app)
+        assert not r.is_dirty(), "a photograph that was only opened counts as changed"
+        app._add([b]); _settle(app)
+        assert asked == [], "asked about a photograph nobody changed"
+        assert os.path.basename(r.session.path) == "Alte_Scheune.jpg"
+        assert not getattr(app, "_review_queue", []), "a single file was queued"
+
+        r.session.add_control_line(100, 50, 104, 400)          # a change
+        assert r.is_dirty()
+        answers.append(None)                                   # Cancel
+        app._add([c]); _settle(app)
+        assert os.path.basename(r.session.path) == "Alte_Scheune.jpg", "Cancel left"
+        answers.append(False)                                  # No: discard
+        app._add([c]); _settle(app)
+        assert os.path.basename(r.session.path) == names[2]
+        assert not any(f.endswith("_corr.jpg") for f in os.listdir(tmp)), "No wrote a file"
+
+        r.session.add_control_line(100, 50, 104, 400)
+        answers.append(True)                                   # Yes: save first
+        app._add([a]); _settle(app)
+        assert os.path.exists(os.path.join(tmp, names[2][:-4] + "_corr.jpg")), "Yes did not save"
+        assert os.path.basename(r.session.path) == "lochfassade.jpg"
+        assert len(asked) == 3
+
+        app._add([tmp]); _settle(app)                          # a folder walks
+        assert app._review_total >= 3 and len(app._review_queue) == app._review_total - 1
+    finally:
+        GUI.messagebox.askyesnocancel = real
+        app.destroy()
+        shutil.rmtree(tmp, ignore_errors=True)

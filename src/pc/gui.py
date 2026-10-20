@@ -1,7 +1,6 @@
-"""Tkinter batch window with a manual review mode.
+"""Tkinter review window, with a rudimentary unattended batch.
 
-Two screens.  The *batch* screen runs a folder and logs OK / SKIPPED / ERROR.
-The *review* screen opens one image and lets the decision be overridden by hand:
+One screen.  Each photograph opens for review and the decision can be overridden by hand:
 sliders for roll, pitch and focal length, and a clickable overlay for striking
 out the lines the detector should not have trusted.
 
@@ -55,8 +54,6 @@ from .inpaint import join_url as _join_url, split_url as _split_url
 from . import sam2seg
 from .review import AUTO, ReviewSession, darken_outside_crop
 
-QUEUED = "queued"
-STATUS_COLOUR = {OK: "#5ac37f", SKIPPED: "#e0b24c", ERROR: "#ef6b6b", QUEUED: "#8899aa"}
 
 # Both windows offer the same list, and it has to match cli.py's --detector
 # choices; a name only one of the two knows about is a bug report waiting to
@@ -115,6 +112,9 @@ OVERLAY = {
     "crop_edge":   "#0b1017",
     # small pixel-dimension labels burned over the image corners
     "label":       "#ffffff",
+    # the status word, drawn faintly inside the after field so the pictures
+    # keep their height; dim enough to read as a watermark, not a label
+    "status_faint": "#3a3f47",
     # hand-placed marks: cyan/amber for verticals, magenta for horizontals,
     # the paler tone being the one that is not currently selected
     "mark_v":      "#00e5ff",
@@ -342,9 +342,9 @@ def apply_theme(root, palette=None):
         mono = ui   # one face (RefGrade): numbers share the UI face, not a mono
     try:
         from tkinter import font as tkfont
-        for name, fam, size in (("TkDefaultFont", ui, 9), ("TkTextFont", ui, 9),
-                                ("TkMenuFont", ui, 9), ("TkHeadingFont", ui, 9),
-                                ("TkFixedFont", mono, 9)):
+        for name, fam, size in (("TkDefaultFont", ui, 8), ("TkTextFont", ui, 8),
+                                ("TkMenuFont", ui, 8), ("TkHeadingFont", ui, 8),
+                                ("TkFixedFont", mono, 8)):
             f = tkfont.nametofont(name)
             f.configure(family=fam, size=size)
     except Exception:
@@ -360,26 +360,49 @@ def apply_theme(root, palette=None):
                  fieldbackground=p["field"], bordercolor=p["line"],
                  lightcolor=p["panel"], darkcolor=p["panel"],
                  focuscolor=p["accent"], troughcolor=p["field"],
-                 insertcolor=p["text"], font=(ui, 9))
+                  insertcolor=p["text"], font=(ui, 8))
     st.configure("TFrame", background=p["bg"])
     st.configure("Panel.TFrame", background=p["panel"])
     # Field labels are dim (RefGrade); values and the title stay bright.
     st.configure("TLabel", background=p["bg"], foreground=p["dim"])
     st.configure("Dim.TLabel", foreground=p["dim"])
-    st.configure("Head.TLabel", foreground=p["dim"], font=(ui, 9))
-    st.configure("Value.TLabel", foreground=p["text"], font=(mono, 9))
-    st.configure("Title.TLabel", foreground=p["text"], font=(ui, 14))
+    st.configure("Head.TLabel", foreground=p["dim"], font=(ui, 8))
+    st.configure("Value.TLabel", foreground=p["text"], font=(mono, 8))
+    st.configure("Title.TLabel", foreground=p["text"], font=(ui, 11))
 
     st.configure("TButton", background=p["panel"], foreground=p["text"],
-                 borderwidth=0, focusthickness=0, padding=(16, 9))
+                  borderwidth=0, focusthickness=0, padding=(12, 6))
     st.map("TButton",
            background=[("pressed", p["line"]), ("active", p["line"])],
            foreground=[("disabled", p["dim"])])
     st.configure("Accent.TButton", background=p["accent"],
-                 foreground=on_accent(p["accent"]),
-                 padding=(18, 10))
+                  foreground=on_accent(p["accent"]),
+                  padding=(14, 7))
     st.map("Accent.TButton", background=[("active", p["accent"]),
                                          ("disabled", p["line"])])
+
+    # The control strip's compact set (2026-10-20): same colours, minimum height.
+    st.configure("Compact.TButton", padding=(6, 0))
+    st.configure("Accent.Compact.TButton", background=p["accent"],
+                 foreground=on_accent(p["accent"]), padding=(10, 0))
+    st.map("Accent.Compact.TButton", background=[("active", p["accent"]),
+                                                 ("disabled", p["line"])])
+    st.configure("Compact.TCheckbutton", background=p["bg"], foreground=p["text"],
+                 padding=0, indicatorwidth=13, indicatorheight=13)
+    st.map("Compact.TCheckbutton", background=[("active", p["bg"])])
+    st.configure("Compact.Toolbutton", padding=(6, 0), anchor="center",
+                 background=p["panel"], foreground=p["text"], borderwidth=0)
+    st.map("Compact.Toolbutton",
+           background=[("selected", p["accent"]), ("active", p["line"])],
+           foreground=[("selected", on_accent(p["accent"]))])
+    # The mode switch: the active mode light, the others dark.
+    st.configure("Mode.Toolbutton", padding=(6, 0), anchor="center",
+                 background=p["bg"], foreground=p["dim"], borderwidth=0)
+    st.map("Mode.Toolbutton",
+           background=[("selected", p["text"]), ("active", p["line"])],
+           foreground=[("selected", p["bg"]), ("active", p["text"])])
+    st.configure("Compact.TCombobox", padding=0)
+    st.configure("Compact.TSpinbox", padding=0)
 
     st.configure("TEntry", padding=7, borderwidth=0)
     st.configure("TCombobox", padding=7, borderwidth=0, arrowcolor=p["dim"])
@@ -394,7 +417,7 @@ def apply_theme(root, palette=None):
     st.configure("TProgressbar", background=p["accent"], troughcolor=p["field"],
                  borderwidth=0, thickness=6)
     st.configure("Treeview", background=p["field"], fieldbackground=p["field"],
-                 foreground=p["text"], borderwidth=0, rowheight=28)
+                  foreground=p["text"], borderwidth=0, rowheight=20)
     st.configure("Treeview.Heading", background=p["bg"], foreground=p["dim"],
                  borderwidth=0, font=(ui, 9))
     st.map("Treeview", background=[("selected", p["line"])],
@@ -854,6 +877,28 @@ def _dark_titlebar(win):
         return
 
 
+class _NoticeLabel:
+    """Stands in for the fill/ComfyUI label of the retired defaults panel.
+
+    Callers still say ``lbl_fill.configure(text=...)``; the text now lands in
+    the notice on the picture, where it is read, instead of in a label that
+    was never on screen."""
+
+    def __init__(self, app):
+        self._app = app
+        self._text = ""
+
+    def configure(self, text="", **_kw):
+        self._text = text or ""
+        if self._text:
+            self._app._notify(self._text)
+
+    config = configure
+
+    def cget(self, key):
+        return self._text if key == "text" else ""
+
+
 def _attach_tooltip(widget, text):
     """A plain hover tooltip; no dependency beyond Tk itself."""
     tip = {"t": None}
@@ -932,10 +977,13 @@ class ReviewPanel(tk.Frame):
         # Each cell carries half the cross on its inner sides and the full
         # border on its outer ones, so the dark shows through at exactly
         # CROSS_GAP between fields and CROSS_BORDER around the panel.
-        self.cell_before.grid(row=0, column=0, sticky="nsew", padx=(b, g), pady=(b, g))
-        self.cell_after.grid(row=0, column=1, sticky="nsew", padx=(g, b), pady=(b, g))
-        self.loader.grid(row=1, column=0, sticky="nsew", padx=(b, g), pady=(g, b))
-        self.cell_ui.grid(row=1, column=1, sticky="nsew", padx=(g, b), pady=(g, b))
+        # The pictures run to the top edge (user, 2026-10-20); left and right
+        # keep CROSS_SIDE (8 px), the strip a ruler is pulled from.
+        sd = layout.CROSS_SIDE
+        self.cell_before.grid(row=0, column=0, sticky="nsew", padx=(sd, g), pady=(0, g))
+        self.cell_after.grid(row=0, column=1, sticky="nsew", padx=(g, sd), pady=(0, g))
+        self.loader.grid(row=1, column=0, sticky="nsew", padx=(sd, g), pady=(g, b))
+        self.cell_ui.grid(row=1, column=1, sticky="nsew", padx=(g, sd), pady=(g, b))
         self.session = None
         self.settings = None
         self.dest_path = None
@@ -948,6 +996,11 @@ class ReviewPanel(tk.Frame):
         self._busy = False
         self._before_scale = 1.0
         self._redraw_tries = 0
+        # Fit-once-then-lock: the (before, after) canvas size the picture is
+        # rendered at.  Set on the first real draw, reused for every redraw, so
+        # a change in the control strip's height (mode switch, collapse) cannot
+        # re-scale the picture and make it jump.  Reset to None on a new photo.
+        self._img_box = None
         self._show_hint()
 
     def _show_hint(self):
@@ -985,6 +1038,7 @@ class ReviewPanel(tk.Frame):
         self._busy = False
         self._before_scale = 1.0
         self._redraw_tries = 0
+        self._img_box = None
         self._after_guides = []
         self._guide_drag = None
         self._cross_pull = None
@@ -1003,6 +1057,13 @@ class ReviewPanel(tk.Frame):
                      f"Perspective Correction  v{__version__}")
             app.title(title.strip())
         self._build()
+        # The mode switch mirrors the horizontal-auto state the photograph
+        # opened with, so the strip shows the right controls from the start.
+        # A manual session is a choice, not an HA state, so it survives the
+        # next photograph; only auto/horizontal follow the corrected flag.
+        if self.v_corr_mode.get() != "manual":
+            self.v_corr_mode.set("horizontal" if self.settings.correct_horizontal else "auto")
+        self._mode_frames[self.v_corr_mode.get()].tkraise()
         self.v_overwrite.set(bool(overwrite))
         self._refresh_file_names()
         self.v_alpha.set(self.session.mask_alpha)
@@ -1024,6 +1085,10 @@ class ReviewPanel(tk.Frame):
             # divergence so the user can pick a facade if they want to.
             self._set_status("multiple main directions detected -- pick a facade with the Facade strip if you want to")
         self.after(60, self._sync_from_session)
+        # "Unchanged" is the state once opening has settled -- the automatic
+        # crop and the widget sync above are the program's, not the user's.
+        self._mark_clean()
+        self.after(120, self._mark_clean)
 
     def _fire_closed(self):
         if self.on_closed and not self._closed_sent:
@@ -1038,7 +1103,7 @@ class ReviewPanel(tk.Frame):
     def destroy(self):
         """Every way this window goes away drops its listener.
 
-        `_save` and `_keep` call `destroy()` directly, so hanging the removal
+        `_save` and `_skip` call `destroy()` directly, so hanging the removal
         off `_on_close` would leave a dead widget in the App's list after the
         commonest exit of all.  `_show_comfy_state` catches and drops a stale
         listener anyway -- but that net is for the unexpected, not for the
@@ -1060,8 +1125,9 @@ class ReviewPanel(tk.Frame):
             return
         src = os.path.basename(self.session.path)
         dst = os.path.basename(self._target_path())
-        self._before_lbl.configure(text=f"before   {_shorten_middle(src)}")
-        self._after_lbl.configure(text=f"after   {_shorten_middle(dst)}")
+        self._before_title = f"before  {_shorten_middle(src)}"
+        self._after_title = f"after  {_shorten_middle(dst)}"
+        self._schedule_redraw()
 
     # -- layout ----------------------------------------------------------
     def _build(self):
@@ -1077,8 +1143,8 @@ class ReviewPanel(tk.Frame):
         # the loader, and the batch defaults that used to clip first are gone):
         # the controls keep their full height and the spare lands above them,
         # never the run bar at the foot.
-        top = ttk.Frame(self.cell_ui, padding=6)
-        top.pack(side="top", fill="x", expand=True)
+        top = ttk.Frame(self.cell_ui, padding=0)
+        top.pack(side="top", fill="x", anchor="n")
 
         # The two previews are the upper fields.  Nothing here divides
         # anything: the split between them is the cross's own grid, so the two
@@ -1091,8 +1157,9 @@ class ReviewPanel(tk.Frame):
         # P15: name the photograph on each side.  `before` is what you are
         # correcting; `after` is where Save will write it.  The names are filled
         # in by `_refresh_file_names` once the overwrite decision is known.
-        self._before_lbl = ttk.Label(self.cell_before, text="before")
-        self._before_lbl.pack(anchor="w")
+        # The picture titles are drawn into the pictures (user, 2026-10-20:
+        # "Bildtitel als Overlay, alles Bild"): no label row above the canvas.
+        self._before_title = "before"
         self.c_before = tk.Canvas(self.cell_before, bg=INK["field"],
                                   highlightthickness=0, width=1, height=1)
         self.c_before.pack(fill="both", expand=True)
@@ -1141,7 +1208,9 @@ class ReviewPanel(tk.Frame):
         # over its top-left corner, in front of whatever the picture shows.  A
         # placed child is drawn above the canvas's own content and stays fixed at
         # that corner -- it does not scroll or rescale with the image.
-        addbar.place(x=8, y=8, anchor="nw")
+        # Vertically centred on the field's left edge (user, 2026-10-21:
+        # "tools too high up, middle them out").
+        addbar.place(x=8, rely=0.5, anchor="w")
         # Lines and Mask draw on *this* image, so their switches sit on it --
         # top-right, opposite the add icons, and mirroring the Grid switch on the
         # after pane (2026-09-13, user-directed).  Made once and reused because
@@ -1172,8 +1241,7 @@ class ReviewPanel(tk.Frame):
                   orient="horizontal", length=80,
                   command=lambda _v: self._on_mask_alpha()).pack(side="left", padx=2)
         ovbar.place(relx=1.0, x=-8, y=8, anchor="ne")
-        self._after_lbl = ttk.Label(self.cell_after, text="after")
-        self._after_lbl.pack(anchor="w")
+        self._after_title = "after"
         self.c_after = tk.Canvas(self.cell_after, bg=INK["field"],
                                  highlightthickness=0, width=1, height=1)
         self.c_after.pack(fill="both", expand=True)
@@ -1222,6 +1290,13 @@ class ReviewPanel(tk.Frame):
         # erase silently degraded to erasing the press and release points
         # only, with the whole dragged stroke dropped. Measured, not read.
         self.c_before.bind("<Alt-ButtonRelease-3>", self._on_pen_size_end)
+        # Krita's gesture as well (user, 2026-10-20: "wie krita left shift
+        # click drag"): Shift+left dragged sideways sizes the pen.  Both stay
+        # bound.  With the brush down these handlers fall through to the plain
+        # left-button ones, so Shift+click elsewhere still clicks.
+        self.c_before.bind("<Shift-ButtonPress-1>", self._on_shift_press)
+        self.c_before.bind("<Shift-B1-Motion>", self._on_shift_motion)
+        self.c_before.bind("<Shift-ButtonRelease-1>", self._on_shift_release)
         # Alt+left had a press binding and no motion or release of its own,
         # working only through Tk falling back to the modifier-less pattern.
         # Bound explicitly rather than left to that rule.
@@ -1250,131 +1325,226 @@ class ReviewPanel(tk.Frame):
             self.c_before.drop_target_register(DND_FILES)
             self.c_before.dnd_bind("<<Drop>>", self._app()._on_drop)
 
-        hint = ttk.Label(top, style="Dim.TLabel",
-                         text="click a line in the left image to strike it out, "
-                              "or to bring it back")
-        self.lbl_status = ttk.Label(top, style="Dim.TLabel", text="",
-                                    wraplength=760, justify="left")
-
-        stat = ttk.Frame(top)
-        # The four control rows below cost ~280 px of height that the two image
-        # canvases want back.  Collapsing them is one click.  The toggle rides
-        # in this row instead of a row of its own, because a new row would cost
-        # height in the default (expanded) state -- which is the state this is
-        # trying to improve.  The state lives on the panel, not the widget:
-        # `load` destroys every child and rebuilds, and a collapse that
-        # re-opened itself on the next photograph of a queue is worse than no
-        # collapse at all.
-        # The default is the height's to decide, not the code's: with the rows
-        # open a 1080p review pane leaves the picture ~90 px, which is not a
-        # preview.  A choice already made outranks it -- `_adj_open` exists the
-        # moment anyone touches the toggle, and then it holds for the session
-        # and for every `load` of a review queue.
-        # The adjustments panel opens COLLAPSED (2026-10-19, user-directed): the
-        # two preview fields on top are maximized vertically, and the lower row
-        # only carries the per-photograph controls and the run bar.  The panel is
-        # one toggle away when the angles need a hand.  A manual choice already
-        # made outranks the default: `_adj_open` exists the moment anyone touches
-        # the toggle and must survive `load`, which destroys every child and
-        # rebuilds.
-        if hasattr(self, "_adj_open"):
-            start_open = self._adj_open
-        else:
-            start_open = False
-        self.v_adjust = tk.BooleanVar(value=start_open)
-        # The toggle that opens and closes the adjustments panel.  It rides in
-        # the `stat` row (see the comment above) rather than a row of its own,
-        # so the collapsed state costs no extra height.  Re-added 2026-10-20:
-        # the checkbox was dropped in 4724643, and with the panel now starting
-        # collapsed the per-photograph angles were left with no way back in.
-        ttk.Checkbutton(stat, text="Adjustments", variable=self.v_adjust,
-                        command=self._toggle_adjust).pack(side="left")
-
-        adj = ttk.Frame(top)
-        self._adj = adj
-        # Two columns instead of four stacked rows: the two image canvases on
-        # top want the height back, and a cross (images over controls) reads as
-        # one surface rather than a long scroll.  Left is FIND -- which detector
-        # feeds the estimator; right is EDIT -- the angles that turn it into the
-        # after pane, plus how the opened band is filled.  Each column is about
-        # half the old block, so opening the controls costs the picture ~140 px
-        # instead of ~282.
-        # The panel is the EDIT side only now: the FIND controls (line detector)
-        # moved to the lower-left tools field, beside the input image where
-        # what-the-estimator-sees belongs.  The facade strip stayed here -- it
-        # restricts horizontal evidence and nothing else, so it sits under the
-        # yaw switch it shapes.  One column, so the sliders that need
-        # horizontal room to drag take all of it -- an even split used to starve
-        # the tracks on a laptop: label + spinbox leave ~14 px.
-        rightcol = ttk.Frame(adj)
-        rightcol.pack(side="left", fill="both", expand=True)
-
-        ctl = ttk.Frame(rightcol, padding=(0, 8, 0, 0))
-        ctl.pack(fill="x")
+        # -- the control strip: one grid, one module per topic ------------------
+        # (2026-10-20, user-directed: nothing folds out, everything open, as
+        # small as it goes, rows tight, sorted into a grid by topic, no jumping.)
+        #   row 0   mode switch | fill band | crop
+        #   row 1   the active mode's controls (all three share ONE cell, so the
+        #           strip is as tall as the tallest and never changes height)
+        #   row 2   Auto / Reset | Keep, Close, Save
+        # Each topic is its own `_strip_*` method taking the cell it fills, so a
+        # topic can change without touching its neighbours.  The mode lives on
+        # the panel (`v_corr_mode`, made once) because `_build` destroys every
+        # child and rebuilds on each photograph.
+        if getattr(self, "v_corr_mode", None) is None:
+            self.v_corr_mode = tk.StringVar(value="auto")
         self.v_roll = tk.DoubleVar(value=0.0)
         self.v_pitch = tk.DoubleVar(value=0.0)
         self.v_focal = tk.DoubleVar(value=28.0)
         self.v_correct_horizontal = tk.BooleanVar(value=self.settings.correct_horizontal)
         self.v_yaw = tk.DoubleVar(value=0.0)
-        # Made once, not per photograph: this is a preference about output
-        # size, not a property of the picture, so it should survive the next
-        # one.
-        # The trace goes on with it -- `_build` re-runs per photograph and a
-        # trace added there would stack up one more copy each time.  It is the
-        # variable that is watched rather than the scale's `command`, because a
-        # `ttk.Scale` fires that only when the widget itself is moved: a plain
-        # `v_keep_px.set(...)` moved the slider and left `settings` behind.
+        # Made once: a preference about output size, not a property of the
+        # picture.  The trace goes on with it (a `ttk.Scale` fires `command`
+        # only when the widget itself moves, so the variable is watched).
         if getattr(self, "v_keep_px", None) is None:
             self.v_keep_px = tk.DoubleVar(value=self.settings.keep_pixels)
             self.v_keep_px.trace_add("write", lambda *_a: self._apply_keep_px())
+        # Tool-state variables, made once for the same reason (a rebuilt
+        # variable is a stale one: the tool died from the second photograph on).
+        if getattr(self, "v_stroke", None) is None:
+            self.v_stroke = tk.BooleanVar(value=False)
+            self.v_stroke_w = tk.IntVar(value=60)
+        if getattr(self, "v_mark", None) is None:
+            self.v_mark = tk.BooleanVar(value=False)
+        if getattr(self, "v_rect", None) is None:
+            self.v_rect = tk.BooleanVar(value=False)
+            self._rect_pending = []
+        if getattr(self, "v_sam", None) is None:
+            self.v_sam = tk.BooleanVar(value=False)
+            self._sam_box = None
+            self._sam_box_px = None
+            self._sam_points = []
+            self._sam_selection = None
+        if getattr(self, "v_autocrop", None) is None:
+            self.v_autocrop = tk.BooleanVar(value=True)
+        if getattr(self, "v_livefill", None) is None:
+            self.v_livefill = tk.BooleanVar(value=self._cfg().live_fill_preview)
+        self.v_fill = tk.StringVar(value=self._cfg().fill or "none")
+        self.v_overwrite = tk.BooleanVar(value=False)
 
-        # Row 0 used to hold an "h-marker" checkbox: tick it and the yaw came
-        # from hand-drawn horizontals instead of the vanishing point. It is
-        # gone (2026-09-20, user-directed). Its precondition -- the lines --
-        # was created by a tool on the far side of the window, so the box could
-        # refuse a click and untick itself, and a control that undoes your click
-        # is not a control. The line is the switch now: draw a horizontal and
-        # the yaw comes from it, delete it and the vanishing point has it back.
-        # `ReviewSession.marker_yaw` reads it off the lines themselves.
+        # Three rows read top to bottom as the workflow (user: logical, dense,
+        # controls fill their menus): 1 WHICH correction (mode switch, with the
+        # two actions that act on the angles), 2 ITS values (full width), 3 the
+        # OUTPUT (fill, crop, then keep / close / save).  Four equal columns, so
+        # every cell is filled edge to edge.
+        strip = ttk.Frame(top)
+        self._strip = strip
+        for _c in range(4):
+            strip.columnconfigure(_c, weight=1, uniform="strip")
 
-        # Row 1: horizontal auto (yaw) — VP-based correction + slider, as before.
-        _hchk = ttk.Checkbutton(ctl, text="horizontal auto (yaw)",
+        def cell(row, col, span=1):
+            f = ttk.Frame(strip)
+            f.grid(row=row, column=col, columnspan=span, sticky="nsew")
+            return f
+
+        # Q4's top row is split in three: the mode switch (user, 2026-10-20),
+        # the active mode light, the others dark.  Below it the mode's values,
+        # then the output.
+        self._btns2 = cell(0, 0, 4)               # row 0: the mode switch
+        self._adj = cell(1, 0, 4)                 # row 1: the active mode's values
+        self._btns = cell(2, 0, 4)                # row 2: the output
+        self._strip_mode(self._btns2)
+        self._strip_controls(self._adj)
+        # Auto-fit / Reset act on the angles, so they sit with the angle values.
+        _ang = ttk.Frame(self._adj)
+        _ang.grid(row=0, column=1, sticky="nsew")
+        self._strip_angles(_ang)
+        self._strip_fill(self._btns)
+        self._strip_crop(self._btns)
+        self._strip_actions(self._btns)
+        # The palette in the picture's top-left corner can only be finished
+        # here: it toggles the variables above.  Manual mode then presses its
+        # keys, so there is one mechanism for the tools.
+        self._build_tool_palette()
+        self._strip_manual(self._mode_frames["manual"])
+        self._show_mode()
+
+        # -- assembly: who gives up height first ---------------------------
+        # `pack` hands each child its requested height in call order, and the
+        # cavity left over goes to the expanding one, so the strip claims its
+        # height first and the picture takes whatever survives.
+        strip.pack(side="top", fill="x", anchor="n")
+        # The status text no longer has a label of its own: it is drawn as a
+        # faint overlay inside the after picture field (see
+        # _draw_status_overlay), so the strip sits directly under the pictures
+        # and the field is taller.  The text is kept as a plain string here.
+        self._status_text = ""
+
+    def _strip_mode(self, row):
+        """Topic: which correction is being driven (Auto / Horizontal / Manual)."""
+        for _txt, _val in (("Auto", "auto"), ("Horizontal auto", "horizontal"),
+                           ("Manual", "manual")):
+            ttk.Radiobutton(row, text=_txt, value=_val,
+                            style="Mode.Toolbutton",
+                            variable=self.v_corr_mode,
+                            command=self._show_mode).pack(
+                side="left", fill="x", expand=True)
+
+    @staticmethod
+    def _put(row, widget, weight=2):
+        """Put a widget in the next column of an output row.  Every column has
+        a weight and every widget fills its cell (`nsew`), so the row has no
+        gaps and no background showing: the whole width is controls."""
+        col = getattr(row, "_ncols", 0)
+        row._ncols = col + 1
+        widget.grid(row=0, column=col, sticky="nsew")
+        row.columnconfigure(col, weight=weight)
+        return widget
+
+    def _strip_fill(self, row):
+        """Topic: how the opened band is filled."""
+        self._put(row, ttk.Label(row, text="fill", anchor="center"), 0)
+        fbox = ttk.Combobox(row, textvariable=self.v_fill, width=6,
+                            style="Compact.TCombobox", state="readonly",
+                            values=["none", "telea", "lama", "comfyui"])
+        self._put(row, fbox, 2)
+        fbox.bind("<<ComboboxSelected>>", lambda e: self._apply_fill())
+        _lf = ttk.Checkbutton(row, text="live", variable=self.v_livefill,
+                              style="Compact.Toolbutton",
+                              command=self._apply_fill)
+        self._put(row, _lf, 1)
+        _attach_tooltip(
+            _lf,
+            "Preview the fill you CHOSE, instead of the telea stand-in.\n"
+            "The band is always filled here -- telea draws it in 38 ms\n"
+            "so you can see how much is being invented. Tick this to\n"
+            "see what lama will actually put there: about a second per\n"
+            "redraw (measured at preview size), fine once and unusable\n"
+            "while a slider moves. Off by default.")
+        # ComfyUI needs a server address and a workflow; the unnamed default
+        # graph is the inpainting one.  Same window as the batch panel's.
+        self.btn_comfy = ttk.Button(row, text="ComfyUI", style="Compact.TButton",
+                                    command=self._open_comfy)
+        self._put(row, self.btn_comfy, 2)
+        _attach_tooltip(self.btn_comfy, "Configure the ComfyUI server address and inpainting workflow")
+        # Status text for the ComfyUI setup; a tooltip-sized note, kept out of
+        # the row so an empty one costs no width.
+        self.lbl_comfy = ttk.Label(self._strip, text="", style="Dim.TLabel")
+        self._register_comfy()
+
+    def _strip_crop(self, row):
+        """Topic: the crop.  A SWITCH, not a one-shot (user, 2026-09-21): as a
+        button it fired once when the photograph opened and never again."""
+        _b = ttk.Checkbutton(row, text="Auto crop", variable=self.v_autocrop,
+                             style="Compact.Toolbutton",
+                             command=self._auto_crop)
+        self._put(row, _b, 2)
+        _attach_tooltip(
+            _b,
+            "Keep the crop following the correction.\n"
+            "Switches itself off when you drag a crop by hand --\n"
+            "a rectangle you drew is a decision, not a suggestion.")
+        # One tooltip per widget: Tk's bind() REPLACES a handler.
+        _b = ttk.Button(row, text="Reset crop", style="Compact.TButton",
+                        command=self._clear_crop)
+        self._put(row, _b, 2)
+        _attach_tooltip(
+            _b,
+            "Remove the crop entirely, including one you drew.\n"
+            "Different from switching Auto crop off: that only lets go\n"
+            "of the automatic rectangle and leaves yours alone.")
+
+    def _strip_controls(self, cell):
+        """Topic: the three modes' controls, stacked in ONE grid cell so the
+        strip never changes height when the mode does."""
+        self._mode_frames = {k: ttk.Frame(cell)
+                             for k in ("auto", "horizontal", "manual")}
+        for f in self._mode_frames.values():
+            f.grid(row=0, column=0, sticky="nsew")
+        cell.columnconfigure(0, weight=1)
+
+        a = self._mode_frames["auto"]
+        self._slider_h(a, 0, "roll", self.v_roll, -20, 20, 0.1, "%.2f")
+        self._slider_h(a, 1, "pitch", self.v_pitch, -30, 30, 0.1, "%.2f")
+        self._slider_h(a, 2, "focal", self.v_focal, 8, 200, 1, "%.0f")
+
+        # Horizontal: yaw -- a 2D plane extraction, not a perspective
+        # correction.  The line is the switch (a drawn horizontal gives the yaw,
+        # delete it and the vanishing point has it back): `marker_yaw`.
+        h = self._mode_frames["horizontal"]
+        _hchk = ttk.Checkbutton(h, text="horizontal auto (yaw)",
+                                style="Compact.TCheckbutton",
                                 variable=self.v_correct_horizontal,
                                 command=self._on_horizontal_toggle)
-        _hchk.grid(row=1, column=0, sticky="w")
+        _hchk.grid(row=0, column=0, sticky="w")
         _attach_tooltip(
             _hchk,
             "Square the camera onto one horizontal direction via vanishing point.\n"
             "On a corner view with two facades this necessarily makes the second "
             "one worse - it is a special case, not a default.")
-        self._yaw_scale = ttk.Scale(ctl, from_=-60, to=60, variable=self.v_yaw,
+        self._yaw_scale = ttk.Scale(h, from_=-60, to=60, variable=self.v_yaw,
                                     orient="horizontal",
                                     command=lambda _v: self._on_slider())
-        self._yaw_scale.grid(row=1, column=1, sticky="ew", padx=6)
-        self._yaw_spin = ttk.Spinbox(ctl, textvariable=self.v_yaw, from_=-60, to=60,
-                                     increment=0.1, format="%.2f", width=7,
-                                     command=self._on_slider)
-        self._yaw_spin.grid(row=1, column=2, sticky="e", padx=(6, 0))
+        self._yaw_scale.grid(row=0, column=1, sticky="ew", padx=3)
+        self._yaw_spin = ttk.Spinbox(h, textvariable=self.v_yaw, from_=-60, to=60,
+                                      increment=0.1, format="%.2f", width=6,
+                                      style="Compact.TSpinbox",
+                                      command=self._on_slider)
+        self._yaw_spin.grid(row=0, column=2, sticky="e")
         self._yaw_spin.bind("<Return>", lambda _e: self._on_slider())
-        self._sync_yaw_controls()
-
-        # Row 2: how much resolution the yaw warp may throw away.  It only
-        # bites while a yaw is being applied, so it sits under the switch that
-        # decides that and follows its state.  Built by hand rather than through
-        # `_slider`, whose command is wired to `_on_slider` (angles only) and
-        # would never reach `settings`.  The write lives on the variable's
-        # trace, set up with the variable above.
-        ttk.Label(ctl, text="detail (px kept)", width=18).grid(
-            row=2, column=0, sticky="w")
-        self._keep_px_scale = ttk.Scale(ctl, from_=0.0, to=1.0,
+        h.columnconfigure(1, weight=1, minsize=layout.SLIDER_MIN)
+        h.columnconfigure(4, weight=1, minsize=layout.SLIDER_MIN)
+        # How much resolution the yaw warp may throw away.  Built by hand: the
+        # write lives on the variable's trace, not on the scale's command.
+        ttk.Label(h, text="detail (px kept)").grid(
+            row=0, column=3, sticky="w", padx=(layout.CTRL_COL_GAP_PX, 0))
+        self._keep_px_scale = ttk.Scale(h, from_=0.0, to=1.0,
                                         variable=self.v_keep_px,
                                         orient="horizontal")
-        self._keep_px_scale.grid(row=2, column=1, sticky="ew", padx=6)
-        # A readout in the spinbox column, because the number alone says
-        # nothing: the point of the control is which END you are near.
-        self._keep_px_read = ttk.Label(ctl, text="", width=7, anchor="e",
+        self._keep_px_scale.grid(row=0, column=4, sticky="ew", padx=3)
+        self._keep_px_read = ttk.Label(h, text="", width=7, anchor="e",
                                        style="Value.TLabel")
-        self._keep_px_read.grid(row=2, column=2, sticky="e", padx=(6, 0))
+        self._keep_px_read.grid(row=0, column=5, sticky="e")
         _help = (
                  "How much detail the straightening keeps.\n"
                  "\n"
@@ -1397,207 +1567,86 @@ class ReviewPanel(tk.Frame):
         _attach_tooltip(self._keep_px_read, _help)
         self._sync_yaw_controls()
         self._update_keep_px_read()
-        # The variable outlives the session; a fresh session starts at the
-        # config default.  Push the shown value through so what the slider says
-        # is what the save uses, on the second photograph as on the first.
+        # The variable outlives the session; push the shown value through so
+        # what the slider says is what the save uses on the second photograph.
         if self.session is not None:
             self._apply_keep_px(redraw=False)
 
-        # Rows 3-5: roll, pitch, focal sliders.
-        self._slider(ctl, 3, "roll (level)", self.v_roll, -20, 20, "deg", 0.1, "%.2f")
-        self._slider(ctl, 4, "pitch (verticals)", self.v_pitch, -30, 30, "deg", 0.1, "%.2f")
-        self._slider(ctl, 5, "focal length", self.v_focal, 8, 200, "mm eq", 1, "%.0f")
+    def _strip_manual(self, cell):
+        """Manual mode: buttons that press the palette's own keys, whose
+        handlers keep the tools mutually exclusive."""
+        for _txt, _k in (("mark", 0), ("rect", 1), ("brush", 2), ("SAM", 4)):
+            if _k < len(self._palette_btns):
+                ttk.Button(cell, text=_txt, style="Compact.TButton",
+                           command=self._palette_btns[_k].invoke).pack(
+                    side="left", fill="x", expand=True)
 
-        # The line detector moved to the lower-left tools field with the rest of
-        # the FIND controls (see `_build_tools`) -- beside the input image, where
-        # what-the-estimator-sees belongs.  The facade strip stayed here, under
-        # the yaw switch it shapes.  This panel is EDIT only.
+    def _strip_angles(self, row):
+        """Topic: the two actions that act on the angles.  Named so they do not
+        repeat the mode switch's "Auto"."""
+        for text, cmd, tip in (
+                ("Auto-fit", self._use_auto,
+                 "Apply the auto-computed correction (roll + pitch)"),
+                ("Reset", self._reset, "Reset all angles to zero")):
+            b = ttk.Button(row, text=text, style="Compact.TButton", command=cmd)
+            b.pack(side="left", fill="x", expand=True)
+            _attach_tooltip(b, tip)
 
-        # The masking controls (source + BiRefNet model picker) live in the
-        # lower-left tools field now -- App._build calls `_build_tools`, which
-        # builds them there. They were a row here in the lower-right cell.
-
-        # A hairline between the edit block above and the output block below, so
-        # "angles" and "fill/mask/output" read as two zones instead of one column.
-        ttk.Separator(rightcol, orient="horizontal").pack(fill="x", pady=(6, 2))
-
-        fill_row = ttk.Frame(rightcol, padding=(0, 8, 0, 0))
-        fill_row.pack(fill="x")
-        self.v_fill = tk.StringVar(value=self._cfg().fill or "none")
-        ttk.Label(fill_row, text="fill band", width=18).grid(row=0, column=0, sticky="w")
-        fbox = ttk.Combobox(fill_row, textvariable=self.v_fill, width=11,
-                            state="readonly", values=["none", "telea", "lama", "comfyui"])
-        fbox.grid(row=0, column=1, sticky="w", padx=(6, 6))
-        fbox.bind("<<ComboboxSelected>>", lambda e: self._apply_fill())
-        # Made once, like the other preferences: which backend you want to
-        # watch is a habit, not a property of this photograph.
-        if getattr(self, "v_livefill", None) is None:
-            self.v_livefill = tk.BooleanVar(value=self._cfg().live_fill_preview)
-        _lf = ttk.Checkbutton(fill_row, text="live", variable=self.v_livefill,
-                              command=self._apply_fill)
-        _lf.grid(row=0, column=2, sticky="w")
-        _attach_tooltip(
-            _lf,
-            "Preview the fill you CHOSE, instead of the telea stand-in.\n"
-            "The band is always filled here -- telea draws it in 38 ms\n"
-            "so you can see how much is being invented. Tick this to\n"
-            "see what lama will actually put there: about a second per\n"
-            "redraw (measured at preview size), fine once and unusable\n"
-            "while a slider moves. Off by default.")
-        # The pad colour picker, its swatch and the "edge" button left this row
-        # (2026-09-14, user). `pad` only shows through when the fill is off, and
-        # the fill defaults to a backend rather than to `none`, so three controls
-        # were competing for
-        # width in the busiest row in the window to set something almost nobody
-        # ever sees. `--pad` and `Settings.pad` are untouched -- the setting is
-        # still there for anyone who runs with `--fill none`, it simply has no
-        # widget. (The "edge" button's tooltip described padding *width*, which
-        # it never set, so it had been lying about itself as well.)
-        # The ComfyUI mode was selectable here with no way to configure it and
-        # no indicator -- so picking it meant the default address and, worse,
-        # the *unnamed default workflow*, which is the inpainting graph. An
-        # edit model run through it produces a wrong band at a green light.
-        # Same window as the batch panel's, because there is one server.
-        self.btn_comfy = ttk.Button(fill_row, text="ComfyUI settings",
-                                    command=self._open_comfy)
-        self.btn_comfy.grid(row=0, column=5, sticky="w", padx=(12, 0))
-        _attach_tooltip(self.btn_comfy, "Configure the ComfyUI server address and inpainting workflow")
-        self.lbl_comfy = ttk.Label(fill_row, text="", style="Dim.TLabel")
-        self.lbl_comfy.grid(row=1, column=1, columnspan=5, sticky="w", padx=(6, 0))
-        fill_row.columnconfigure(5, weight=1)
-        self._register_comfy()
-
-        # Save / Keep / Close stay outside the collapsible: a queue advances on
-        # Save, so a Save button that can be hidden is a behaviour change.
-        # Two rows, not one.  The single row requested ~1795 px -- thirteen left-
-        # packed correction controls plus the four right-packed actions -- against
-        # a 910 px field at the 1920x1080 floor, so `pack` starved the action
-        # cluster (and the Grid/grid-step tail) to zero width.  Splitting keeps
-        # every control mapped; the picture yields the height, per the assembly
-        # rule below.  The display overlays (Lines / Mask / Grid / grid-step)
-        # moved to the lower-left tools field -- see `_build_tools`.
-        btns = ttk.Frame(top, padding=(0, 8))
-        self._btns = btns
-        _b = ttk.Button(btns, text="Auto", command=self._use_auto)
-        _b.pack(side="left")
-        _attach_tooltip(_b, "Apply the auto-computed correction (roll + pitch)")
-        _b = ttk.Button(btns, text="Reset", command=self._reset)
-        _b.pack(side="left", padx=6)
-        _attach_tooltip(_b, "Reset all angles to zero")
-        _b = ttk.Button(btns, text="Save As…", command=self._save_as)
-        _b.pack(side="right", padx=(0, 6))
-        _attach_tooltip(_b, "Choose a file name and location for the corrected image")
-        _b = ttk.Button(btns, text="Save", command=self._save,
-                        style="Accent.TButton")
-        _b.pack(side="right")
-        _attach_tooltip(_b, "Save the corrected image and advance to the next")
-        self.v_overwrite = tk.BooleanVar(value=False)
-        _cb = ttk.Checkbutton(btns, text="overwrite original",
+    def _strip_actions(self, row):
+        """Topic: leaving this photograph.  Never behind anything: a queue
+        advances on Save."""
+        def btn(text, cmd, tip, weight=2, style="Compact.TButton"):
+            b = ttk.Button(row, text=text, style=style, command=cmd)
+            self._put(row, b, weight)
+            _attach_tooltip(b, tip)
+        btn("Skip", self._skip, "Go to the next photograph without writing anything")
+        btn("Close", self._close, "Close this image without saving", 1)
+        btn("Save As…", self._save_as,
+            "Choose a file name and location for the corrected image")
+        _cb = ttk.Checkbutton(row, text="overwrite", style="Compact.Toolbutton",
                               variable=self.v_overwrite,
                               command=self._refresh_file_names)
-        _cb.pack(side="right", padx=8)
+        self._put(row, _cb, 2)
         _attach_tooltip(_cb, "Replace the source file instead of writing a new one")
-        _b = ttk.Button(btns, text="Close",
-                        command=self._close)
-        _b.pack(side="right", padx=(14, 6))
-        _attach_tooltip(_b, "Close this image without saving")
-        _b = ttk.Button(btns, text="Keep original",
-                        command=self._keep)
-        _b.pack(side="right", padx=6)
-        _attach_tooltip(_b, "Skip correction and keep the unmodified file")
+        btn("Save", self._save, "Save the corrected image and advance to the next",
+            3, "Accent.Compact.TButton")
 
-        # Row two: crop operations.  Mark / Strike slanted
-        # moved to the lower-left tools field (2026-09-13).
-        btns2 = ttk.Frame(top, padding=(0, 8))
-        self._btns2 = btns2
-        # Mask brush state lives here; its widgets live in the lower-left tools
-        # field -- App._build calls `_build_tools` to place them.  **Made once.**
-        # `_build` re-runs on every load while that tools field is built a single
-        # time, so rebuilding these variables handed the checkbutton a stale one:
-        # ticking the box set a variable nobody read, `_on_click_before` saw the
-        # fresh False, and the brush silently did nothing from the second
-        # photograph onwards.  Same trap as the overlay switches above.
-        if getattr(self, "v_stroke", None) is None:
-            self.v_stroke = tk.BooleanVar(value=False)
-            self.v_stroke_w = tk.IntVar(value=60)
-        if getattr(self, "v_mark", None) is None:
-            self.v_mark = tk.BooleanVar(value=False)
-        if getattr(self, "v_rect", None) is None:
-            self.v_rect = tk.BooleanVar(value=False)
-            self._rect_pending = []
-        if getattr(self, "v_sam", None) is None:
-            self.v_sam = tk.BooleanVar(value=False)
-            self._sam_box = None
-            self._sam_box_px = None
-            self._sam_points = []
-            self._sam_selection = None
-        # The palette in the picture's top-left corner can only be finished here:
-        # it toggles these variables, and they do not exist until this point.
-        self._build_tool_palette()
-        # "Clear marks" moved down to the masking panel, beside "Clear Mask"
-        # (user, 2026-09-21).  Both throw away hand work on the same picture,
-        # and they sat a panel apart.
-        # A SWITCH, not a one-shot (user, 2026-09-21). It was a button, and a
-        # button fires once: `auto_crop_if_cheap` ran when the photograph
-        # opened and never again, so turning horizontal auto on or moving the
-        # facade strip changed the whole correction while the crop stayed where
-        # it had been computed for a different picture. As a switch it keeps up.
-        if getattr(self, "v_autocrop", None) is None:
-            self.v_autocrop = tk.BooleanVar(value=True)
-        _b = ttk.Checkbutton(btns2, text="Auto crop", variable=self.v_autocrop,
-                             command=self._auto_crop)
-        _attach_tooltip(
-            _b,
-            "Keep the crop following the correction.\n"
-            "Switches itself off when you drag a crop by hand --\n"
-            "a rectangle you drew is a decision, not a suggestion.")
-        _b.pack(side="left", padx=(0, 6))
-        # The old button's tooltip lived here and replaced the switch's, because
-        # Tk's bind() REPLACES a handler for a sequence -- the rule this file
-        # already states about `<ButtonPress-3>`. Two tooltips on one widget
-        # means the first is dead, and it was.
-        _b = ttk.Button(btns2, text="Reset crop",
-                        command=self._clear_crop)
-        _b.pack(side="left", padx=(0, 6))
-        _attach_tooltip(
-            _b,
-            "Remove the crop entirely, including one you drew.\n"
-            "Different from switching Auto crop off: that only lets go\n"
-            "of the automatic rectangle and leaves yours alone.")
+    def _slider_h(self, parent, col, label, var, lo, hi, inc, fmt):
+        """One compact slider: label, track, number -- three grid columns, so
+        several sit side by side in one row instead of stacking."""
+        c = col * 3
+        gap = layout.CTRL_COL_GAP_PX if col else 0
+        ttk.Label(parent, text=label).grid(row=0, column=c, sticky="w", padx=(gap, 0))
+        sc = ttk.Scale(parent, from_=lo, to=hi, variable=var, orient="horizontal",
+                       command=lambda _v: self._on_slider())
+        sc.grid(row=0, column=c + 1, sticky="ew", padx=3)
+        parent.columnconfigure(c + 1, weight=1, minsize=layout.SLIDER_MIN)
+        sp = ttk.Spinbox(parent, textvariable=var, from_=lo, to=hi, increment=inc,
+                         format=fmt, width=6, style="Compact.TSpinbox",
+                         command=self._on_slider)
+        sp.grid(row=0, column=c + 2, sticky="e")
+        sp.bind("<Return>", lambda _e: self._on_slider())
 
-        # -- assembly: who gives up height first ---------------------------
-        # `pack` hands each child its requested height in call order and gives
-        # the cavity that is left to the expanding one, so the pack order *is*
-        # the priority order.  Packed bottom-up, so this reads as the reverse
-        # of what is on screen: the action row claims its strip first and the
-        # picture takes whatever survives.  At 1920x1080 -- the commonest
-        # desktop there is -- Save, Keep original and Close were simply not
-        # mapped before this, in the one mode that exists to be driven by hand.
-        # Same pattern as the ComfyUI dock's `side="bottom"`.
-        btns.pack(side="bottom", fill="x")
-        btns2.pack(side="bottom", fill="x")
-        self._adj_after = btns2  # remember the reference for _toggle_adjust
-        if start_open:
-            adj.pack(side="bottom", fill="x", after=btns2)
-        stat.pack(side="bottom", fill="x", pady=(6, 4))
-        self.lbl_status.pack(side="bottom", anchor="w", pady=(2, 0))
-        hint.pack(side="bottom", anchor="w", pady=(4, 0))
+    def _show_mode(self):
+        """Raise the active mode's controls.  All three share one cell, so
+        nothing is packed or forgotten and the strip never changes height.
 
-    def _toggle_adjust(self):
-        """Collapse or expand the adjustments panel.  The state lives on the
-        panel (``_adj_open``), not the widget, because ``load`` destroys every
-        child and rebuilds -- a collapse that re-opened itself on the next
-        photograph of a queue would be worse than no collapse at all."""
-        open_ = self.v_adjust.get()
-        self._adj_open = open_
-        if open_:
-            after = getattr(self, "_adj_after", None)
-            if after is not None:
-                self._adj.pack(side="bottom", fill="x", after=after)
-            else:
-                self._adj.pack(side="bottom", fill="x")
-        else:
-            self._adj.pack_forget()
+        The mode switch IS the horizontal-auto switch: choosing "horizontal"
+        turns the yaw on, choosing "auto" turns it off, and "manual" is its own
+        territory and changes nothing here. The flag stops the two faces of the
+        same switch from re-triggering each other."""
+        self._mode_top = self.v_corr_mode.get()
+        self._mode_frames[self._mode_top].tkraise()
+        if self._mode_top == "horizontal" and not self.v_correct_horizontal.get():
+            self._syncing_mode = True
+            self.v_correct_horizontal.set(True)
+            self._on_horizontal_toggle()
+            self._syncing_mode = False
+        elif self._mode_top == "auto" and self.v_correct_horizontal.get():
+            self._syncing_mode = True
+            self.v_correct_horizontal.set(False)
+            self._on_horizontal_toggle()
+            self._syncing_mode = False
 
     def _apply_detector(self):
         """Switch detector and say what it found.
@@ -1610,10 +1659,14 @@ class ReviewPanel(tk.Frame):
         if err:
             self.v_detector.set(self.session.settings.detector)
             self.lbl_mask.configure(text=err)
+            # On the picture as well: the combobox snapping back with the
+            # reason only in a small label read as a stuck control.
+            self._notify(f"{err} -- still on {self.session.settings.detector}")
         else:
-            self.lbl_mask.configure(
-                text=f"{self.session.detector}: {len(self.session.vert)} vertical "
-                     f"candidate(s), {len(self.session.horiz)} horizontal")
+            msg = (f"{self.session.detector}: {len(self.session.vert)} vertical "
+                   f"candidate(s), {len(self.session.horiz)} horizontal")
+            self.lbl_mask.configure(text=msg)
+            self._notify(f"detector {msg}")
         if self.session.mode == AUTO:
             self._sync_from_session()
         else:
@@ -1666,6 +1719,9 @@ class ReviewPanel(tk.Frame):
             self._sync_from_session()
         else:
             self._redraw()
+        # The strip changes which facade the yaw is taken from, so the automatic
+        # crop must follow it even when the session is not in AUTO mode.
+        self._autocrop_follow()
 
     def _apply_mask(self):
         if not self.session:
@@ -2164,6 +2220,17 @@ class ReviewPanel(tk.Frame):
             # sit on the picture claiming to do something.
             self._finish_strip()
             self._schedule_redraw()
+        # The checkbox is the second face of the mode switch, so it moves the
+        # mode too -- unless the user is in "manual", which is its own
+        # territory. `_syncing_mode` is set when the mode switch drove this
+        # call, so the two faces do not chase each other around.
+        if not getattr(self, "_syncing_mode", False):
+            if self.v_corr_mode.get() != "manual":
+                self.v_corr_mode.set("horizontal" if on else "auto")
+                self._mode_frames[self.v_corr_mode.get()].tkraise()
+        # The correction changed (a yaw came in or went away), so the automatic
+        # crop must follow it even when the session is not in AUTO mode.
+        self._autocrop_follow()
 
     def _on_slider(self):
         self.session.set_manual(roll_deg=self.v_roll.get(), pitch_deg=self.v_pitch.get(),
@@ -2606,6 +2673,31 @@ class ReviewPanel(tk.Frame):
         cy = by + bh // 2 - py
         return max(0, cx - size // 2), max(0, cy - size // 2)
 
+    def _loupe_place(self, size, px=None, py=None):
+        """Centre the glass on where source pixel (px, py) lands in the
+        after picture; park it in the gutter when that cannot be mapped."""
+        p = None
+        if px is not None and self.session is not None:
+            try:
+                p = self.session.source_to_preview(px, py)
+            except Exception:
+                p = None
+        if p is None:
+            return self._loupe_park(size)
+        try:
+            ox = self.c_after.winfo_rootx() - self.winfo_rootx()
+            oy = self.c_after.winfo_rooty() - self.winfo_rooty()
+            cw, ch = self.c_after.winfo_width(), self.c_after.winfo_height()
+        except tk.TclError:
+            return self._loupe_park(size)
+        ax = p[0] + self._after_off[0]
+        ay = p[1] + self._after_off[1]
+        x = int(round(ox + ax - size // 2))
+        y = int(round(oy + ay - size // 2))
+        x = max(ox, min(x, ox + cw - size))
+        y = max(oy, min(y, oy + ch - size))
+        return x, y
+
     def _loupe_show(self):
         """Create the glass.  A canvas placed over the panel, not a Toplevel:
         it only has to live while the cursor is over the before field, which
@@ -2713,7 +2805,7 @@ class ReviewPanel(tk.Frame):
         # trailing the cursor across whatever switch happens to be underneath.
         # A fixed place is one you learn once; a wandering one has to be dodged
         # every time.
-        c.place(**dict(zip(("x", "y"), self._loupe_park(size))))
+        c.place(**dict(zip(("x", "y"), self._loupe_place(size, cx, cy))))
 
     def _on_strip_icon_click(self, event=None):
         """Toggle ROI on/off; apply the strip from the rulers."""
@@ -3018,6 +3110,7 @@ class ReviewPanel(tk.Frame):
         # inside the frame to host it.
         ph, _ = _to_photo(arr, box)
         aox = (box[0] - ph.width()) // 2
+        # Centred on both axes (user, 2026-10-21: "always on middle axis").
         aoy = (box[1] - ph.height()) // 2
         self._after_off = (aox, aoy)
         self.c_after.delete("all")
@@ -3046,10 +3139,25 @@ class ReviewPanel(tk.Frame):
         ow, oh = self.session.output_size()
         cw = max(1, int(round((x1 - x0) * ow)))
         ch = max(1, int(round((y1 - y0) * oh)))
-        self.c_after.create_text(
-            8, box[1] - 6, anchor="sw",
-            text=f"{ow}×{oh}  {cw}×{ch}",
-            fill=OVERLAY["label"], font=("Segoe UI", 9))
+        # Q2: output dimensions + crop size, top-left, inside the picture (the
+        # picture sits flush to the top of the field, so the label lives over its
+        # corner with a small backing so it reads on any photo).
+        label_x = aox + layout.LABEL_INSET_PX
+        label_y = aoy + layout.LABEL_INSET_PX
+        label_text = f"{self._after_title}   {ow}×{oh}  {cw}×{ch}"
+        tid = self.c_after.create_text(label_x, label_y, anchor="nw",
+                                       text=label_text, fill=OVERLAY["label"],
+                                       font=("Segoe UI", 9))
+        bb = self.c_after.bbox(tid)
+        if bb:
+            pad = 2
+            self.c_after.create_rectangle(bb[0] - pad, bb[1] - pad,
+                                          bb[2] + pad, bb[3] + pad,
+                                          fill=INK["bg"], outline="")
+            self.c_after.tag_raise(tid)
+        # The redraw above wiped the canvas, so the faint status word has to be
+        # laid down again here to survive it.
+        self._draw_status_overlay()
 
     def _draw_crop_outline(self, rx0, ry0, rx1, ry1):
         """The kept rectangle's border and handles on the after canvas.
@@ -3277,78 +3385,48 @@ class ReviewPanel(tk.Frame):
         input image, not with the angles that edit the result."""
         # FIND controls, beside the input image: which detector feeds the
         # estimator.
-        det = ttk.Frame(parent)
-        det.pack(fill="x", pady=(0, 4))
+        # One grid, one TOPIC per row, every cell filled edge to edge (user,
+        # 2026-10-20: compact, no half-empty areas, sorted by topic -- not
+        # arbitrarily):
+        #   row 0  LINES      detector | weights | clear marks (2 cells)
+        #   row 1  MASK FROM  source | folder | BiRefNet model | file polarity
+        #   row 2  MASK USE   active | invert all | opacity | clear mask
+        g = ttk.Frame(parent)
+        g.pack(fill="x")
+        for _c, _w in enumerate((0, 2, 2, 2, 2)):
+            g.columnconfigure(_c, weight=_w)
+
+        def put(w, row, col):
+            w.grid(row=row, column=col, sticky="nsew")
+            return w
+
+        for _r, _t in enumerate(("lines", "mask from", "mask use")):
+            put(ttk.Label(g, text=_t, anchor="w", width=9), _r, 0)
+
+        # -- row 0: lines --------------------------------------------------
         self.v_detector = tk.StringVar(value=self.settings.detector)
-        ttk.Label(det, text="line detector", width=18).grid(row=0, column=0, sticky="w")
-        dbox = ttk.Combobox(det, textvariable=self.v_detector, width=11,
-                            state="readonly", values=list(DETECTORS))
-        dbox.grid(row=0, column=1, sticky="w", padx=(6, 6))
+        dbox = put(ttk.Combobox(g, textvariable=self.v_detector, width=6,
+                                style="Compact.TCombobox", state="readonly",
+                                values=list(DETECTORS)), 0, 1)
         dbox.bind("<<ComboboxSelected>>", lambda e: self._apply_detector())
         app = self._app()
         if app is not None:
-            app.btn_weights = ttk.Button(det, text="weights...",
-                                         command=app._download_models)
-            app.btn_weights.grid(row=0, column=2, sticky="w", padx=(6, 0))
+            app.btn_weights = put(ttk.Button(g, text="weights", style="Compact.TButton",
+                                             command=app._download_models), 0, 2)
             _attach_tooltip(app.btn_weights, "Download or check detector model weights")
-        # Mask active toggle: sits beside the line detector (what-the-estimator-
-        # sees belongs together).  The variable is made here, once; the msk row
-        # in Q1 no longer carries its own checkbox.
-        if getattr(self, "v_mask_active", None) is None:
-            self.v_mask_active = tk.BooleanVar(value=True)
-        self.msk_active_cb = ttk.Checkbutton(det, text="mask active",
-                        variable=self.v_mask_active,
-                        command=self._on_mask_active_toggle)
-        self.msk_active_cb.grid(row=0, column=3, sticky="w", padx=(12, 0))
-        _attach_tooltip(self.msk_active_cb,
-                        "Toggle mask on/off without clearing the painted region")
-        det.columnconfigure(4, weight=1)
+        # No brush-width field: the pen is sized on the picture, Shift+left
+        # or Alt+right dragged sideways (user, 2026-10-20).
+        _b = ttk.Button(g, text="Clear marks", style="Compact.TButton",
+                        command=self._clear_marks)
+        _b.grid(row=0, column=3, columnspan=2, sticky="nsew")
+        _attach_tooltip(_b, "Remove all manually placed control lines,\n"
+                            "vertical and horizontal.")
 
-        # The facade strip (the former ROI-x control) moved up beside the
-        # horizontal (yaw) checkbox in `_build` -- it restricts horizontal
-        # evidence and nothing else, so it sits with the switch it shapes.  Its
-        # variables are made there, once, for the stale-variable reason written
-        # out there.
-
-        # The three tools that used to sit here -- Mask brush, SAM, Mark --
-        # are buttons in the picture-corner palette now (2026-09-15, user).
-        # What stays is the one thing that is a *setting* rather than a tool:
-        # how wide the brush paints.  Its variables are still made in `_build`,
-        # once, for the stale-variable reason written out there.
-        row = ttk.Frame(parent)
-        row.pack(fill="x", pady=(0, 4))
-        ttk.Label(row, text="brush width", width=18).pack(side="left")
-        ttk.Spinbox(row, from_=8, to=160, increment=4, width=3,
-                    textvariable=self.v_stroke_w).pack(side="left", padx=(4, 0))
-
-        # Strike slanted moved to the picture-corner palette (2026-09-15, user).
-
-        msk = ttk.Frame(parent)
-        msk.pack(fill="x")
-        # Eleven widgets sat in one `grid(row=0, ...)` and did not fit: measured
-        # at the 1920x1080 window floor the row asked for ~1097 px of a 910 px
-        # field, so "Clear Mask" was clipped to "Cle".  It overflowed at
-        # 2560x1400 too.  Nothing caught it, because `pack`/`grid` still MAP a
-        # clipped child -- `winfo_ismapped()` is 1 and `winfo_width()` is the
-        # full requested width -- so the existing "every child has width > 0"
-        # assertion this project already wrote for the same bug in `btns` reads
-        # green here.  Only the container's allocation tells the truth.
-        #
-        # Split in two, by what the controls mean rather than by where they
-        # fitted: where the mask COMES FROM on top, what is DONE to it below.
-        # Two packed sub-frames, not two grid rows -- grid columns are shared
-        # between rows, so a 189 px checkbutton in column 0 would widen the
-        # "mask" label's column with it.
-        msk_src = ttk.Frame(msk)
-        msk_src.grid(row=0, column=0, columnspan=9, sticky="w")
-        msk_act = ttk.Frame(msk)
-        msk_act.grid(row=1, column=0, columnspan=9, sticky="w", pady=(4, 0))
+        # -- row 1: where the mask comes from --------------------------------
         self.v_maskmode = tk.StringVar(value=self.settings.mask_mode)
-        ttk.Label(msk_src, text="mask", width=18).pack(side="left")
-        self.cb_maskmode = ttk.Combobox(msk_src, textvariable=self.v_maskmode, width=8,
-                                        state="readonly",
-                                        values=["off", "file", "birefnet", "gdino"])
-        self.cb_maskmode.pack(side="left", padx=(6, 6))
+        self.cb_maskmode = put(ttk.Combobox(g, textvariable=self.v_maskmode, width=6,
+                                            style="Compact.TCombobox", state="readonly",
+                                            values=["off", "file", "birefnet", "gdino"]), 1, 1)
         self.cb_maskmode.bind("<<ComboboxSelected>>", lambda e: self._apply_mask())
         _attach_tooltip(self.cb_maskmode,
                         "Where the ignore mask comes from.\n"
@@ -3358,81 +3436,55 @@ class ReviewPanel(tk.Frame):
                         "gdino finds the building by name, then mattes inside "
                         "that box with BiRefNet - so it needs a BiRefNet model "
                         "set below, or it refuses.")
-        _b = ttk.Button(msk_src, text="mask folder...", command=self._pick_mask_folder)
-        _b.pack(side="left")
+        _b = put(ttk.Button(g, text="mask folder", style="Compact.TButton",
+                            command=self._pick_mask_folder), 1, 2)
         _attach_tooltip(_b, "Choose the folder containing mask PNG files (one per image)")
-        # The "active" toggle moved to the line-detector row (det) in Q4 --
-        # what-the-estimator-sees belongs together.  The variable is made there.
+        _b = put(ttk.Button(g, text="BiRefNet model", style="Compact.TButton",
+                            command=self._pick_birefnet_model), 1, 3)
+        _attach_tooltip(_b, "Select the BiRefNet segmentation model to use")
         self.v_maskinv = tk.BooleanVar(value=self.settings.mask_invert)
-        # Two checkboxes about inverting sat side by side, one saying "marks
-        # what to KEEP" and one "invert mask", and neither said what it acted
-        # ON. They are different things: this one is the polarity of the FILE
-        # mask alone (masks.load: white means ignore unless inverted), the
-        # other flips the finished union of every source. Named for their
-        # scope now (user, 2026-09-21: "ui hat noch einige unlogik").
-        _mi = ttk.Checkbutton(msk_act, text="file mask: white = keep",
-                              variable=self.v_maskinv, command=self._apply_mask)
-        _mi.pack(side="left")
+        _mi = put(ttk.Checkbutton(g, text="file: white = keep",
+                                  style="Compact.Toolbutton",
+                                  variable=self.v_maskinv, command=self._apply_mask), 1, 4)
         _attach_tooltip(
             _mi,
             "The polarity of a mask PNG loaded from disk.\n"
             "Off: white marks what to ignore. On: white marks what to keep.\n"
             "Affects the file mask only -- not the brush, SAM or BiRefNet.")
+
+        # -- row 2: what is done with the mask -------------------------------
+        if getattr(self, "v_mask_active", None) is None:
+            self.v_mask_active = tk.BooleanVar(value=True)
+        self.msk_active_cb = put(ttk.Checkbutton(
+            g, text="mask active", style="Compact.Toolbutton",
+            variable=self.v_mask_active, command=self._on_mask_active_toggle), 2, 1)
+        _attach_tooltip(self.msk_active_cb,
+                        "Toggle mask on/off without clearing the painted region")
         self.v_invert = tk.BooleanVar(value=False)
-        _cb = ttk.Checkbutton(msk_act, text="invert ALL sources",
-                              variable=self.v_invert,
-                              command=self._on_invert_toggle)
+        _cb = put(ttk.Checkbutton(g, text="invert ALL", style="Compact.Toolbutton",
+                                  variable=self.v_invert,
+                                  command=self._on_invert_toggle), 2, 2)
         _attach_tooltip(_cb, "Swap it: what is red becomes the part that "
                              "counts, and the rest is ignored.\n"
                              "Applies to every source at once - brush, SAM, "
                              "gdino, BiRefNet and the facade strip together.")
-        _cb.pack(side="left", padx=(10, 0))
-        _b = ttk.Button(msk_src, text="BiRefNet model...", command=self._pick_birefnet_model)
-        _b.pack(side="left", padx=(10, 0))
-        _attach_tooltip(_b, "Select the BiRefNet segmentation model to use")
-        # "Mask Apply" stood here and was removed (user, 2026-09-21: "mask
-        # apply soll weg").  It was inert: every control in this panel already
-        # calls `_apply_mask` when it changes -- the source combobox on
-        # <<ComboboxSelected>>, both invert boxes, the active box, and both file
-        # pickers after they pick.  Pressing it twice in a row over a brushed
-        # mask left enabled at 56 of 76 both times.  The METHOD stays; it has
-        # five live callers.  What went is the button that repeated them.
-        #
-        # The two clears sit together (user, 2026-09-21: "clear marks und clear
-        # mask sollten zusammen im ui sein").  They are the same gesture on the
-        # same picture -- throw away what I drew -- and they were a panel apart.
-        _b = ttk.Button(msk_act, text="Clear marks", command=self._clear_marks)
-        _b.pack(side="left", padx=(14, 0))
-        _attach_tooltip(_b, "Remove all manually placed control lines,\n"
-                            "vertical and horizontal.")
-        _b = ttk.Button(msk_act, text="Clear Mask", command=self._clear_mask)
-        _b.pack(side="left", padx=(6, 0))
+        self.v_alpha = tk.DoubleVar(value=0.28)
+        op = put(ttk.Frame(g), 2, 3)
+        ttk.Label(op, text="opacity").pack(side="left", padx=(4, 4))
+        ttk.Scale(op, from_=0.0, to=1.0, variable=self.v_alpha, orient="horizontal",
+                  command=lambda _v: self._on_alpha()).pack(side="left", fill="x", expand=True)
+        _b = put(ttk.Button(g, text="Clear Mask", style="Compact.TButton",
+                            command=self._clear_mask), 2, 4)
         _attach_tooltip(_b, "Remove the painted mask and the SAM selection,\n"
                             "and give back the lines they struck out.\n"
                             "The mask source above is left as it is.")
-        self.lbl_mask = ttk.Label(msk, text="", wraplength=760, justify="left")
-        self.lbl_mask.grid(row=2, column=0, columnspan=4, sticky="w", pady=(4, 0))
-        self.v_alpha = tk.DoubleVar(value=0.28)
-        ttk.Label(msk, text="mask opacity", width=18).grid(row=3, column=0, sticky="w")
-        ttk.Scale(msk, from_=0.0, to=1.0, variable=self.v_alpha, orient="horizontal",
-                  command=lambda _v: self._on_alpha()
-                  ).grid(row=3, column=1, columnspan=3, sticky="ew", padx=6)
-        # The gdino prompt is the interactive half of that mask mode: type a word,
-        # press Enter, and the box (and the matte inside it) is re-found.  It is
-        # only read when the source combobox says gdino, so it stays inert in the
-        # other three modes rather than needing to be hidden.
+        # Mask status text: its own thin row under the grid, and only as tall as
+        # the words in it.
+        self.lbl_mask = ttk.Label(parent, text="", wraplength=760, justify="left",
+                                  style="Dim.TLabel")
+        self.lbl_mask.pack(anchor="w")
         self.v_gdino_prompt = tk.StringVar(value=self.settings.gdino_prompt or "building")
-        # The prompt row left this panel (user, 2026-09-15): it belongs to the
-        # dinosaur key in the palette, which is where it is asked for now.  A
-        # labelled entry three rows away from anything that used it was the only
-        # way in.  The variable stays -- `_apply_mask` reads it.
-        msk.columnconfigure(3, weight=1)
 
-        # The Lines/Mask/Grid overlay switches used to live here.  They now sit on
-        # the image each one draws on -- Lines and Mask in the before pane's
-        # top-right, Grid in the after pane's -- built in `_build` beside those
-        # canvases (2026-09-13, user-directed).  A switch for an overlay belongs
-        # on the picture it changes, not in a box on the far side of the window.
 
     def _on_before_b1motion(self, event):
         if getattr(self, "_loupe", None) is not None:
@@ -3680,6 +3732,21 @@ class ReviewPanel(tk.Frame):
         self._draw_brush_ring(x0, y0, max(8, int(self.v_stroke_w.get())))
         return "break"
 
+    def _on_shift_press(self, event):
+        if self._brush_live():
+            return self._on_pen_size_start(event)
+        return self._on_click_before(event)
+
+    def _on_shift_motion(self, event):
+        if getattr(self, "_pen_anchor", None) is not None:
+            return self._on_pen_size_drag(event)
+        return self._on_before_b1motion(event)
+
+    def _on_shift_release(self, event):
+        if getattr(self, "_pen_anchor", None) is not None:
+            return self._on_pen_size_end(event)
+        return self._on_before_b1release(event)
+
     def _on_alt_erase_press(self, event):
         """Alt+Left-click erases mask paint (same as right-click)."""
         if not self._brush_live():
@@ -3852,7 +3919,7 @@ class ReviewPanel(tk.Frame):
                 b[0] // 2, b[1] // 2, anchor="center",
                 text="Drop a photograph here\nor click the + to pick one",
                 fill=INK["dim"], font=("Segoe UI", 13))
-        self._set_status("no photograph loaded")
+        self._set_status("")
 
     def _redraw(self):
         self._busy = False
@@ -3890,22 +3957,34 @@ class ReviewPanel(tk.Frame):
                     self.after(120, self._redraw)
                 return
             self._redraw_tries = 0
-            before = self.session.render_before(max_edge=max(box_b),
+            # Fit-once-then-lock (see _img_box in __init__): render the picture
+            # at the canvas size it FIRST filled, not the live size. Switching
+            # the correction mode changes the strip's height and resizes the
+            # canvas; re-rendering at the new size re-scales the picture and it
+            # jumps. Lock the render box so the picture keeps one size for the
+            # whole photo; it is centred in the live canvas (box_b/box_a stay
+            # the live size for the offset below -- clipped if it shrank,
+            # padded if it grew).
+            if self._img_box is None:
+                self._img_box = (box_b, box_a)
+            lock_b, lock_a = self._img_box
+            before = self.session.render_before(max_edge=max(lock_b),
                                                 show_lines=self.v_show_lines.get())
             # Un-cropped on purpose: `_show_after` bakes a veil over what the crop
             # discards, so the picture keeps one size and one scale for the whole
             # session instead of leaping every time a corner moves.
-            after = self.session.render_after(max_edge=max(box_a), apply_crop=False)
+            after = self.session.render_after(max_edge=max(lock_a), apply_crop=False)
             self._after_base = after      # un-veiled, preview-sized; _show_after bakes it
-            self._after_box = box_a
+            self._after_box = lock_a
             import logging as _log
             _log.getLogger("pc.gui").info(
                 "render_after done: shape=%s mean=%.1f",
                 getattr(after, "shape", "?"),
                 float(after.mean()) if after is not None else -1)
-            ph_b, s_b = _to_photo(before, box_b)
+            ph_b, s_b = _to_photo(before, lock_b)
             # scale from the *original* image to what is on screen
             self._before_scale = s_b * (before.shape[1] / self.session.w)
+            # Centred on both axes, like the after pane (user, 2026-10-21).
             self._before_off = ((box_b[0] - ph_b.width()) // 2,
                                 (box_b[1] - ph_b.height()) // 2)
             self.c_before.delete("all")
@@ -3926,11 +4005,33 @@ class ReviewPanel(tk.Frame):
             if (self.session.model is not None
                     and self.v_correct_horizontal.get()):
                 self._draw_horiz_vp_markers(ph_b.width(), ph_b.height())
-            # Q1: original image dimensions, bottom-left.
-            self.c_before.create_text(
-                8, box_b[1] - 6, anchor="sw",
-                text=f"{self.session.w}×{self.session.h}",
-                fill=OVERLAY["label"], font=("Segoe UI", 9))
+            # Q1: original image dimensions, top-left, inside the picture.  The
+            # picture now sits flush to the top of the field, so the label lives
+            # over its corner with a small backing so it reads on any photo.
+            label_x = self._before_off[0] + layout.LABEL_INSET_PX
+            label_y = self._before_off[1] + layout.LABEL_INSET_PX
+            # The tool palette is centred on the left edge; start the title
+            # right of it only where the two would share a row.
+            _bar = getattr(self, "_addbar", None)
+            try:
+                if (_bar is not None and _bar.winfo_ismapped()
+                        and _bar.winfo_y() <= label_y + layout.LABEL_INSET_PX * 3
+                        and label_y <= _bar.winfo_y() + _bar.winfo_height()):
+                    label_x = max(label_x, _bar.winfo_x() + _bar.winfo_width()
+                                  + layout.LABEL_INSET_PX)
+            except tk.TclError:
+                pass
+            label_text = f"{self._before_title}   {self.session.w}×{self.session.h}"
+            tid = self.c_before.create_text(label_x, label_y, anchor="nw",
+                                            text=label_text, fill=OVERLAY["label"],
+                                            font=("Segoe UI", 9))
+            bb = self.c_before.bbox(tid)
+            if bb:
+                pad = 2
+                self.c_before.create_rectangle(bb[0] - pad, bb[1] - pad,
+                                               bb[2] + pad, bb[3] + pad,
+                                               fill=INK["bg"], outline="")
+                self.c_before.tag_raise(tid)
             # Rectangle quad LAST: drawn over everything (loupe, marks, guides)
             self._draw_rect_quad()
             self._show_after(self.session.crop_rect)
@@ -4032,13 +4133,17 @@ class ReviewPanel(tk.Frame):
             return b
 
         _mk_btn = tool("mark", self.v_mark, self._on_mark_toggle,
-                       "Mark a straight edge by hand -- which way it leans\n"
-                       "decides whether it counts as vertical or horizontal",
+                       "Mark (M): click two points on a straight edge.\n"
+                       "It comes out exactly vertical or horizontal --\n"
+                       "the way it leans decides which. Click a line to\n"
+                       "remove it. 2 lines of a direction override the\n"
+                       "detector. Hold Alt for a slow, fine loupe.",
                        lead=True)
         _pr_btn = tool("rect", self.v_rect, self._on_rect_toggle,
                        "PC Rectangle: click 4 corners of a facade\n"
                        "(TL, TR, BR, BL) to rectify it.\n"
-                       "Drag corners to adjust. 5th click clears.")
+                       "Drag corners to adjust. 5th click clears.\n"
+                       "Hold Alt for a slow, fine loupe.")
         # Brush and box-select joined Mark here (2026-09-15, user: "either the
         # toolbar or the marker, I would prefer only the tool").  They were
         # text controls in the lower-left field while Mark was in both places,
@@ -4057,8 +4162,11 @@ class ReviewPanel(tk.Frame):
         # and renders as a perfectly symmetric hollow circle, while the one
         # actually called StatusCircleOuter is lopsided with a filled centre.
         self._brush_chk = tool("brush", self.v_stroke, self._on_stroke_toggle,
-                               "Paint a mask over regions to exclude from line "
-                               "detection. Right-click or Alt+click to erase.",
+                               "Brush (B): paint over regions to exclude from\n"
+                               "line detection.\n"
+                               "Left drag paints, right drag or Alt+left erases.\n"
+                               "Shift+left or Alt+right dragged sideways sizes\n"
+                               "the pen.",
                                invert=True)
         # The dinosaur moved up here from the prompt label (user, 2026-09-15),
         # and lost its colours on the way: one coloured glyph among five
@@ -4077,8 +4185,9 @@ class ReviewPanel(tk.Frame):
             emoji=True)
         self._gdino_btn.bind("<Button-3>", lambda _e: self._ask_gdino_prompt())
         self._sam_btn = tool("sam", self.v_sam, self._on_sam_toggle,
-                             "Box-select the subject with SAM; right-click "
-                             "clears the prompt")
+                             "SAM (S): drag a box around the building;\n"
+                             "everything outside is masked out.\n"
+                             "Right-click clears the prompt.")
         # Strike slanted moved here from Q3 (2026-09-15, user): a one-shot
         # action on the before image's line evidence, so it belongs with the
         # other tools that act on the original.
@@ -4102,8 +4211,9 @@ class ReviewPanel(tk.Frame):
         # and said nothing about measuring. Two rulers with the span between
         # them is the actual idea, and it is now in the same pen as the rest.
         _strip_btn = tool("strip", self.v_strip, self._on_strip_icon_click,
-                        "Facade strip : restrict horizontal\n"
-                        "evidence to one facade on corner views.")
+                        "Facade strip: restrict horizontal evidence\n"
+                        "to one facade on corner views.\n"
+                        "Drag the two rulers on the before picture.")
         # NOTE: this used to say the quad had left the palette and that
         # nothing in the window pointed at it -- sitting directly above
         # `tool("rect", ...)`. The quad came back and the comment stayed, which
@@ -4617,12 +4727,64 @@ class ReviewPanel(tk.Frame):
         self.c_before.delete("sam_prompts")
 
     def _set_status(self, text):
-        lbl = getattr(self, "lbl_status", None)
-        if lbl is not None:
-            lbl.configure(text=text or "")
+        # The status word no longer has a label: it is kept as a plain string
+        # and drawn as a faint overlay inside the after picture field (see
+        # _draw_status_overlay).
+        self._status_text = text or ""
+        self._draw_status_overlay()
 
     def _set_status_extra(self, text):
         self._set_status(text)
+
+    def _notify(self, text):
+        """A state-change prompt (fullscreen on/off ...). Shown above the status
+        text for layout.NOTICE_MS, so a redraw cannot wipe it the moment it lands."""
+        self._notice = text or ""
+        job = getattr(self, "_notice_job", None)
+        if job is not None:
+            try:
+                self.after_cancel(job)
+            except Exception:
+                pass
+        self._notice_job = self.after(layout.NOTICE_MS, self._clear_notice)
+        self._draw_status_overlay()
+
+    def _clear_notice(self):
+        self._notice = ""
+        self._notice_job = None
+        self._draw_status_overlay()
+
+    def _draw_status_overlay(self):
+        # The status word, drawn faintly inside the after field so the pictures
+        # keep their full height (the old label sat above the strip and cost the
+        # field a band).  It is re-drawn at the end of every after-pane redraw,
+        # because that redraw wipes the canvas.  No backing: where the picture
+        # covers the corner the word simply rides over it, dim enough to read as
+        # a watermark.
+        c = getattr(self, "c_after", None)
+        if c is None:
+            return
+        c.delete("status_ov")
+        notice = getattr(self, "_notice", "") or ""
+        text = getattr(self, "_status_text", "") or ""
+        w = c.winfo_width()
+        h = c.winfo_height()
+        if notice:
+            # Top centre: the top-left corner is the after title's.
+            c.create_text(
+                w // 2, layout.LABEL_INSET_PX, anchor="n",
+                text=notice, fill=INK["text"],
+                font=("Segoe UI", layout.CTRL_FONT_PT),
+                width=max(60, w // 2),
+                justify="center", tags="status_ov")
+        if not text:
+            return
+        c.create_text(
+            layout.LABEL_INSET_PX, h - layout.LABEL_INSET_PX, anchor="sw",
+            text=text, fill=OVERLAY["status_faint"],
+            font=("Segoe UI", layout.CTRL_FONT_PT),
+            width=max(60, w - 2 * layout.LABEL_INSET_PX),
+            justify="left", tags="status_ov")
 
     # -- output ----------------------------------------------------------
     def _save(self):
@@ -4633,7 +4795,7 @@ class ReviewPanel(tk.Frame):
         if (self.v_overwrite.get()
                 and not messagebox.askyesno(
                     "Overwrite", f"Replace the original?\n\n{dst}", parent=self)):
-            return
+            return False
         # The file that gets written must use the ComfyUI settings as they are
         # now, not as they were when this window opened.
         self._sync_comfy()
@@ -4648,8 +4810,9 @@ class ReviewPanel(tk.Frame):
         except Exception as exc:
             self._wait_hide()
             messagebox.showerror("Save", str(exc), parent=self)
-            return
+            return False
         self._wait_hide()
+        self._clean_key = self.session.state_key()
         # A hand-placed strip is the one thing in this window that cannot be
         # recovered by looking at the result: it says where THIS building's
         # corner falls, and it was gone the moment the photograph closed.
@@ -4657,6 +4820,16 @@ class ReviewPanel(tk.Frame):
         if self.on_saved:
             self.on_saved(self.session.path, dst)
         self._fire_closed()
+        return True
+
+    def is_dirty(self):
+        """Has anything been changed since the photograph opened or was saved?"""
+        s = self.session
+        return s is not None and s.state_key() != getattr(self, "_clean_key", None)
+
+    def _mark_clean(self):
+        if self.session is not None:
+            self._clean_key = self.session.state_key()
 
     def _remember_strip(self):
         """Store the facade strip beside the photograph, as fractions.
@@ -4704,15 +4877,12 @@ class ReviewPanel(tk.Frame):
             self.on_saved(self.session.path, dst)
         self._fire_closed()
 
-    def _keep(self):
-        try:
-            from .imageio import copy_through
-            dst = self._target_path()
-            if os.path.abspath(dst) != os.path.abspath(self.session.path):
-                copy_through(self.session.path, dst)
-        except Exception as exc:
-            messagebox.showerror("Save", str(exc), parent=self)
-            return
+    def _skip(self):
+        """Next photograph, nothing written (user, 2026-10-20: "Skip instead of
+        Keep original").  Keep original copied the untouched file to the
+        output -- a batch-era gesture; in manual review a copy nobody asked
+        for is clutter, and leaving a photo alone means writing nothing."""
+        self._set_status("skipped -- nothing written")
         self._fire_closed()
 
 
@@ -4753,8 +4923,11 @@ class App(_ROOT_CLASS):
         # value as their initial state rather than being set afterwards.
         self._remembered = prefs.load()
         self._build()
-        if self._remembered.get("output"):
-            self.v_output.set(self._remembered["output"])
+        # The remembered "output" folder is deliberately NOT restored any more
+        # (2026-10-21): with the output row gone nothing on screen would show
+        # where Save writes, and the stored one pointed into an off-limits
+        # sibling checkout.  Save writes <name>_corr next to the source; Save
+        # As... is the way to put it elsewhere.
         # The mask setup is machine configuration like the model path: a mode
         # picked once and a path typed once must survive a restart, or both are
         # re-picked on every launch.  (The output folder stays offered, not
@@ -4771,6 +4944,9 @@ class App(_ROOT_CLASS):
             self._add(list(initial))
         self._fullscreen = start_fullscreen
         self.bind("<F11>", lambda _e: self._toggle_fullscreen())
+        # Ctrl+V pastes a picture (or copied files) without the paste icon.
+        self.bind("<Control-v>", self._paste_key)
+        self.bind("<Control-V>", self._paste_key)
         self.bind("<Escape>", self._esc)
         self.bind("<m>", lambda _e: self._tool_key("v_mark", "_on_mark_toggle"))
         self.bind("<b>", lambda _e: self._tool_key("v_stroke", "_on_stroke_toggle"))
@@ -4788,6 +4964,17 @@ class App(_ROOT_CLASS):
             pass
         _dark_titlebar(self)         # a state change can re-lay the caption
 
+    def _set_status(self, text):
+        """App-level status word: the review panel owns the label."""
+        rev = getattr(self, "review", None)
+        if rev is not None:
+            rev._set_status(text)
+
+    def _notify(self, text):
+        rev = getattr(self, "review", None)
+        if rev is not None:
+            rev._notify(text)
+
     def _enter_fullscreen(self):
         """Open borderless: no title bar, no menu -- the review working state.
         F11 returns to the windowed view."""
@@ -4798,6 +4985,7 @@ class App(_ROOT_CLASS):
         self._fullscreen = True
         if hasattr(self, "v_fullscreen"):
             self.v_fullscreen.set(True)
+        self._notify("fullscreen -- F11 or ESC exits")
 
     def _toggle_fullscreen(self):
         """F11: borderless fullscreen and back.  Maximized keeps the title bar
@@ -4809,13 +4997,21 @@ class App(_ROOT_CLASS):
             pass
         if hasattr(self, "v_fullscreen"):
             self.v_fullscreen.set(self._fullscreen)
+        if self._fullscreen:
+            self._notify("fullscreen -- F11 or ESC exits")
+        else:
+            self._maximize()
+            # Windows re-creates the caption after the state change, so the
+            # dark title bar does not stick on the first pass.
+            self.after(100, lambda: _dark_titlebar(self))
+            self.after(400, lambda: _dark_titlebar(self))
+            self._notify("windowed -- F11 for fullscreen")
 
     def _esc(self, _e):
         """ESC exits fullscreen (F11 still toggles).  A no-op while windowed, so
         it never steals ESC from a dialog or entry."""
         if self._fullscreen:
             self._toggle_fullscreen()
-            self._set_status("fullscreen off (ESC)")
 
     def _tool_key(self, var_name, handler_name):
         """Flip one tool mode from the keyboard.
@@ -4881,7 +5077,7 @@ class App(_ROOT_CLASS):
         sb = getattr(self, "_status_bar", None)
         wlbl = getattr(sb, "_wordmark_lbl", None) if sb is not None else None
         if wlbl is not None:
-            mark = _wordmark_image(18, _hex_rgba(INK["text"]))
+            mark = _wordmark_image(14, _hex_rgba(INK["text"]))
             if mark is not None:
                 try:
                     photo = ImageTk.PhotoImage(mark)
@@ -4898,27 +5094,40 @@ class App(_ROOT_CLASS):
         App, not the review panel, so `load` never rebuilds it.
         """
         bar = ttk.Frame(self)
-        bar.pack(side="bottom", fill="x", padx=8, pady=(2, 4))
+        bar.pack(side="bottom", fill="x", padx=8, pady=(0, 1))
         # Wordmark in the left corner: the v07 typography, tinted to the active
         # palette so it follows the theme like every other mark.
-        mark = _wordmark_image(18, _hex_rgba(INK["text"]))
+        mark = _wordmark_image(14, _hex_rgba(INK["text"]))
         if mark is not None:
             photo = ImageTk.PhotoImage(mark)
             lbl = ttk.Label(bar, image=photo)
             lbl.image = photo
             lbl.pack(side="left", padx=(2, 8))
             bar._wordmark_lbl = lbl
+        # The running status word lives here as a slim low-contrast stripe: it
+        # is read, not operated on, so it sits at the foot of the window where
+        # the eye rests, out of the controls field.
+        self._status_lbl = ttk.Label(bar, text="", style="Dim.TLabel", anchor="w")
+        self._status_lbl.pack(side="left", fill="x", expand=True, padx=(8, 8))
         # Theme + update in the right corner, moved here from the killed brand row.
         self.btn_update = ttk.Button(bar, text="update", width=8)
         self.btn_update.pack(side="right", padx=(0, 4))
         self.btn_update.configure(command=self._check_for_update)
+        # The whole batch, rudimentary: one button, which turns into its own
+        # stop button and counter while it runs.
+        self.btn_batch = ttk.Button(bar, text="batch", width=12, command=self._batch_click)
+        self.btn_batch.pack(side="right", padx=(0, 8))
+        _attach_tooltip(self.btn_batch,
+                        "Correct every added photograph unattended and write\n"
+                        "<name>_corr next to each one. Click again to stop.\n"
+                        "Photographs it skips open for review afterwards.")
         self._theme_var = tk.StringVar(value="Minimal Black")
         self._theme_var.trace_add(
             "write", lambda *_a: self._switch_theme(self._theme_var.get()))
         self._theme_combo = ttk.Combobox(bar, textvariable=self._theme_var,
                                          values=list(THEMES.keys()),
                                          state="readonly", width=14)
-        self._theme_combo.pack(side="right", padx=(0, 8), pady=2)
+        self._theme_combo.pack(side="right", padx=(0, 8), pady=0)
         return bar
 
     def _build(self):
@@ -4944,7 +5153,8 @@ class App(_ROOT_CLASS):
         # lower-right one, so a resize grows four equal fields and re-decides
         # nothing.
         self.review = ReviewPanel(self)
-        self.review.pack(fill="both", expand=True, padx=8, pady=(0, 4))
+        # No margin of its own: the panel's CROSS_SIDE is the whole side edge.
+        self.review.pack(fill="both", expand=True, padx=0, pady=(0, 4))
 
         # The loader is the cross's lower-left field, not a strip across the
         # top of the window.  Four fields of the same size, previews above and
@@ -4976,18 +5186,13 @@ class App(_ROOT_CLASS):
         # the results tree; it now rides the Start/Stop bar (see `bar` below), which
         # frees this space for the tree.
 
-        # The batch options are the lower-right field's own business, not a
-        # strip under the cross: packed side="bottom" they hold the foot of the
-        # controls whatever `load` rebuilds above them.
-        # Titled, because the same words appear twice in this window and nothing
-        # used to say which was which: "detector", "mask" and "fill" live here
-        # *and* in the panel above.  These are the values every photograph opens
-        # with (`_settings()` feeds them to each `review.load`); the panel's
-        # copies override them for the photograph on screen and nothing else.
-        opt = ttk.Labelframe(self.review.cell_ui, padding=(14, 4, 14, 8),
-                             text="defaults every photograph opens with")
-        opt._bpc_persistent = True
-        self._w_opt = opt
+        # The batch is a rudiment now (user, 2026-10-21: "keep it but only
+        # rudimentary"): no defaults panel, no results table, no run bar with
+        # progress and output path -- one footer button (`_build_status_bar`).
+        # These variables are what `_settings()` feeds every `review.load`; the
+        # widgets that once edited them were never on screen after 2026-10-19
+        # and are gone.  The review strip's own controls override them per
+        # photograph.
         self.v_strength = tk.DoubleVar(value=1.0)
         self.v_conf = tk.DoubleVar(value=Settings.min_confidence)
         self.v_maxpitch = tk.DoubleVar(value=Settings.max_pitch_deg)
@@ -4995,59 +5200,17 @@ class App(_ROOT_CLASS):
         self.v_recursive = tk.BooleanVar(value=False)
         self.v_overwrite = tk.BooleanVar(value=False)
         self.v_review = tk.BooleanVar(value=True)
-        # The detector combobox and weights button moved to the lower-left
-        # tools field (_build_tools) beside the input image.  App.v_detector
-        # is set by the review panel's combobox; _settings() reads it back.
+        # The detector combobox lives in the tools field (_build_tools);
+        # App.v_detector follows it so _settings() reads the right value.
         self.v_detector = tk.StringVar(value=Settings.detector)
         self.v_jpegq = tk.IntVar(value=int(self._remembered.get("jpeg_quality", Settings.jpeg_quality)))
         self.v_jpegq.trace_add("write", lambda *_a: prefs.save(jpeg_quality=self.v_jpegq.get()))
-        self._spin(opt, 0, 4, "max pitch (deg)", self.v_maxpitch, 0.0, 45.0, 1.0)
-        self._spin(opt, 1, 0, "strength", self.v_strength, 0.0, 1.0, 0.05)
-        ttk.Label(opt, text="crop").grid(row=1, column=4, sticky="e", padx=4)
-        ttk.Combobox(opt, textvariable=self.v_crop,
-                     values=["auto", "aspect", "inside", "none"],
-                     width=8, state="readonly").grid(row=1, column=5, sticky="w")
-        self._spin(opt, 2, 0, "min confidence", self.v_conf, 0.0, 1.0, 0.05)
-        self._spin(opt, 2, 4, "jpeg quality", self.v_jpegq, 10, 100, 1)
-
-        ttk.Label(opt, text="mask").grid(row=0, column=7, sticky="e", padx=4)
         self.v_mask = tk.StringVar(value=Settings.mask_mode)
-        mask_cb = ttk.Combobox(opt, textvariable=self.v_mask,
-                               values=["off", "file", "birefnet", "gdino"],
-                               width=6, state="readonly")
-        mask_cb.grid(row=0, column=8, sticky="w")
-        mask_cb.bind("<<ComboboxSelected>>", self._on_mask_mode)
         self.v_maskpath = tk.StringVar(value="")
-        _b = ttk.Button(opt, text="mask source...", command=self._pick_mask_source)
-        _b.grid(row=0, column=9, sticky="w", padx=(6, 0))
-        _attach_tooltip(_b, "Choose the folder containing mask PNG files (one per image)")
-        # Generating the band a rotation opens up is ON by default (lama, user
-        # 2026-09-22) and says so when it cannot run: a batch that quietly
-        # writes padded frames because the backend was missing is the silent
-        # failure this tool avoids. This comment said "off by default" while
-        # config.py had read `fill = "telea"` for a long time.
-        ttk.Label(opt, text="fill gaps").grid(row=1, column=7, sticky="e", padx=4)
         self.v_fill = tk.StringVar(value=Settings.fill)
-        fbox = ttk.Combobox(opt, textvariable=self.v_fill,
-                            values=["none", "telea", "lama", "comfyui"],
-                            width=11, state="readonly")
-        fbox.grid(row=1, column=8, sticky="w")
-        fbox.bind("<<ComboboxSelected>>", lambda e: self._check_fill())
-        # The ComfyUI address and workflow used to be reachable only from the
-        # Setup menu; with the menus gone they are one button away from the
-        # fill mode that needs them.  It opens the same small settings window
-        # as before -- there is one server, so there is one set of settings.
-        _b = ttk.Button(opt, text="server...", command=self._open_comfy)
-        _b.grid(row=1, column=9, sticky="w", padx=(6, 0))
-        _attach_tooltip(_b, "Configure the ComfyUI server address and inpainting workflow")
-        ttk.Checkbutton(opt, text="subfolders", variable=self.v_recursive
-                        ).grid(row=2, column=7, sticky="w")
-        ttk.Checkbutton(opt, text="overwrite originals", variable=self.v_overwrite
-                        ).grid(row=2, column=8, columnspan=2, sticky="w")
-
-        self.lbl_fill = ttk.Label(opt, text="", style="Dim.TLabel", wraplength=900,
-                                  justify="left")
-        self.lbl_fill.grid(row=3, column=0, columnspan=12, sticky="w", pady=(4, 0))
+        # Fill/ComfyUI verdicts: once a label in the killed panel, now the
+        # notice on the picture, so they are seen rather than written nowhere.
+        self.lbl_fill = _NoticeLabel(self)
 
         # The ComfyUI settings live in their own window rather than in this
         # panel.  Two reasons, both found by looking: the panel is hidden until
@@ -5082,78 +5245,7 @@ class App(_ROOT_CLASS):
         for var in (self.v_comfy_host, self.v_comfy_port):
             var.trace_add("write", lambda *_a: self._show_comfy_state(
                 "unknown", "the address changed -- press Test connection"))
-        ttk.Checkbutton(opt, text="offer manual review for unclear images",
-                        variable=self.v_review).grid(row=2, column=0, columnspan=3, sticky="w")
-
-        bar = ttk.Frame(self.review.cell_ui, padding=8)
-        bar._bpc_persistent = True
-        self._w_bar = bar
-        # Manual review is the product (2026-09-13, see "Project in one paragraph"),
-        # so the prominent gesture is the one that *asks*: it opens one window per
-        # photograph and writes only what was confirmed by hand. The unattended run
-        # stays reachable for anyone who wants it, demoted rather than removed --
-        # nothing about it changed except that it is no longer the default.
-        self.btn_run = ttk.Button(bar, text="Review each", command=self._review_each,
-                                  style="Accent.TButton")
-        self.btn_run.pack(side="left")
-        _attach_tooltip(self.btn_run, "Open one review window per photograph; write only what was confirmed by hand")
-        self.btn_batch = ttk.Button(bar, text="Unattended", command=self._start)
-        self.btn_batch.pack(side="left", padx=6)
-        _attach_tooltip(self.btn_batch, "Run the batch automatically without manual review")
-        self.btn_stop = ttk.Button(bar, text="Stop", command=self._stop, state="disabled")
-        self.btn_stop.pack(side="left", padx=6)
-        _attach_tooltip(self.btn_stop, "Abort the current batch run")
-        self.progress = ttk.Progressbar(bar, mode="determinate")
-        self.lbl_count = ttk.Label(bar, text="", style="Value.TLabel")
-        # The batch output destination moved here from the loader field: an output
-        # concern that belongs with the run controls, and the options frame above has
-        # no vertical headroom for another row (the cross fixes the field height). It
-        # rides this bar's existing height. No "Output" caption -- at 1280 the bar is
-        # already full of buttons, and the path the entry holds says enough.
-        _browse_btn = ttk.Button(bar, text="Browse", command=self._pick_out)
-        self._w_out = [
-            ttk.Entry(bar, textvariable=self.v_output, width=15),
-            _browse_btn]
-        _attach_tooltip(_browse_btn, "Choose the output folder for corrected images")
-        # Pack order is allocation priority in Tk: when the bar runs out of room at
-        # 1280 the *last* widget packed is the one that gets clipped.  So the path
-        # field packs before the progress bar and keeps its width; the progress bar
-        # is the expander, so it is what gives way (the count label and the results
-        # tree already report progress).
-        self._w_out[0].pack(side="right", padx=(6, 6))
-        self._w_out[1].pack(side="right")
-        self.lbl_count.pack(side="right")
-        self.progress.pack(side="left", fill="x", expand=True, padx=10)
-        # Start row at the very foot of the field. The per-photograph controls
-        # (`top`, packed side="top" without expand in ReviewPanel._build) claim
-        # their full height first, then this run bar takes its strip from the
-        # foot. The batch defaults (`opt`) were killed (2026-10-19, user-directed):
-        # their variables are still created above so `_settings()` feeds each
-        # `review.load`, but the Labelframe is never packed, so the lower row only
-        # carries the per-photograph controls and this run bar.
-        bar.pack(side="bottom", fill="x")
-        # `opt` is deliberately not packed: the "defaults every photograph opens
-        # with" section is gone from the layout, keeping the two top preview
-        # fields maximized vertically.
-
-        # The results list is the lower half of the loader field: files and
-        # what happened to them in one place, under the list that names them.
-        # The lower row sizes to its content and the previews take the rest, so
-        # the tree asks for only a couple of rows here; it is packed expand and
-        # fills whatever the row allows, the height option just keeps its
-        # *request* small so the loader field does not drive the row tall.
-        self._w_tree = ttk.Frame(self.review.loader)
-        cols = ("status", "file", "roll", "pitch", "conf", "note")
-        self.tree = ttk.Treeview(self._w_tree, columns=cols, show="headings",
-                                 selectmode="browse", height=2)
-        for c, w in zip(cols, (80, 320, 70, 70, 60, 380)):
-            self.tree.heading(c, text=c)
-            self.tree.column(c, width=w, anchor="w")
-        self.tree.pack(fill="both", expand=True)
-        self._w_tree.pack(fill="both", expand=True, pady=(6, 0))
-        self.tree.bind("<Double-1>", lambda e: self._review_selected())
-        for status, colour in STATUS_COLOUR.items():
-            self.tree.tag_configure(status, foreground=colour)
+        self._batch_total = 0
 
         # Built once and kept withdrawn: the popup costs nothing on screen
         # until it is opened, and the server can be configured before there
@@ -5568,7 +5660,10 @@ class App(_ROOT_CLASS):
         if self._comfy_open():
             self.lbl_comfy_state.configure(text=label, foreground=INK[ink])
             self.lbl_comfy_detail.configure(text=text)
-        self.lbl_fill.configure(text=f"ComfyUI: {label} -- {text}")
+        # A verdict is news; "not checked yet" (start-up, an address being
+        # typed) is not, and on the picture it read as an error.
+        if state != "unknown":
+            self.lbl_fill.configure(text=f"ComfyUI: {label} -- {text}")
         for listen in list(self._comfy_listeners):
             try:
                 listen(state, text)
@@ -5650,34 +5745,75 @@ class App(_ROOT_CLASS):
 
     def _add(self, paths):
         added = 0
+        new_files = []
         first_new = len(self.items)
         for p in paths:
             p = os.path.abspath(p)
-            if not os.path.exists(p) or p in self.items:
+            if not os.path.exists(p):
                 continue
+            # Opening something already in the list opens it again; it used to
+            # be skipped, so re-opening a photograph (or retrying after Cancel)
+            # silently did nothing.
             if os.path.isdir(p):
                 files = self._expand(p)
                 if not files:
                     continue
-                self.items.append(p)
-                added += 1
-                for f in files:
-                    self.tree.insert("", "end", tags=(QUEUED,),
-                                     values=(QUEUED, os.path.basename(f), "", "", "", ""))
+                new_files.extend(files)
             elif os.path.splitext(p)[1].lower() in READABLE:
+                new_files.append(p)
+            else:
+                continue
+            if p not in self.items:
                 self.items.append(p)
-                added += 1
-                self.tree.insert("", "end", tags=(QUEUED,),
-                                 values=(QUEUED, os.path.basename(p), "", "", "", ""))
+            added += 1
         if added:
-            # The newest entry is what the user just pointed at; put the panel on
-            # it so a single dropped photograph goes straight to work with no
-            # second click.  When several arrive at once, the first new one is the
-            # current item -- the question of which to look at is real there.
+            # User, 2026-10-21: opening something replaces what is on screen --
+            # it is never appended to a queue.  Changes on the current photo are
+            # offered for saving first; unchanged, the new one simply opens.  A
+            # folder (or several files at once) is walked one by one; a single
+            # file just opens.
+            if not self._leave_current():
+                self._refresh_items()
+                return added
             self._cur = first_new
-            self._preview_index(self._cur)
+            folder = any(os.path.isdir(os.path.abspath(p)) for p in paths)
+            if folder or len(new_files) > 1:
+                self._walk(new_files)
+                self._notify(f"{len(new_files)} photograph(s) -- Save, Skip or "
+                             "Close moves to the next")
+            else:
+                self._review_queue = []
+                self._review_total = 0
+                self._walking = False
+                src = new_files[0]
+                self.review.load(src, self._settings(), self._dest_corr(src),
+                                 overwrite=self.v_overwrite.get(),
+                                 on_saved=self._forget_saved)
         self._refresh_items()
         return added
+
+    def _leave_current(self):
+        """May the photograph on screen be replaced?  Asks only if it changed."""
+        r = self.review
+        if r.session is None or not r.is_dirty():
+            return True
+        name = os.path.basename(r.session.path)
+        ans = messagebox.askyesnocancel(
+            "Unsaved changes",
+            f"Save the changes to {name} first?\n\n"
+            "Yes saves it, No discards the changes, Cancel stays on it.",
+            parent=self)
+        if ans is None:
+            self._notify(f"stayed on {name} -- nothing opened")
+            return False
+        if ans:
+            r.on_closed = None          # the old walk must not advance now
+            if not r._save():
+                return False
+            self._notify(f"saved {name}")
+        else:
+            self._notify(f"changes to {name} discarded")
+        return True
 
     def _add_files(self):
         pats = " ".join("*" + e for e in sorted(READABLE))
@@ -5691,6 +5827,19 @@ class App(_ROOT_CLASS):
         if d:
             self._add([d])
 
+    def _paste_key(self, _e=None):
+        """Ctrl+V anywhere in the window -- except in a text field, where it
+        is that field's own paste (same rule as the tool keys)."""
+        w = self.focus_get()
+        try:
+            if w is not None and w.winfo_class() in ("Entry", "TEntry", "Spinbox",
+                                                     "TSpinbox", "TCombobox", "Text"):
+                return None
+        except Exception:
+            pass
+        self._paste_screenshot()
+        return "break"
+
     def _paste_screenshot(self):
         """Grab an image from the clipboard and load it into the queue.
 
@@ -5698,8 +5847,13 @@ class App(_ROOT_CLASS):
         review path handles it without any special-casing."""
         from PIL import Image, ImageGrab
         img = ImageGrab.grabclipboard()
+        # Files copied in Explorer arrive as a list of paths, not an image.
+        if isinstance(img, list):
+            n = self._add([p for p in img if isinstance(p, str)])
+            self._notify(f"pasted {n} file(s)" if n else "nothing usable on the clipboard")
+            return
         if img is None:
-            messagebox.showinfo("Paste", "no image on the clipboard")
+            self._notify("no image on the clipboard -- copy one, then Ctrl+V")
             return
         if img.mode != "RGB":
             img = img.convert("RGB")
@@ -5718,7 +5872,7 @@ class App(_ROOT_CLASS):
 
     def _clear(self):
         self.items = []
-        self.tree.delete(*self.tree.get_children())
+        self._review_queue = []
         self._refresh_items()
 
     def _on_drop(self, event):
@@ -5749,54 +5903,14 @@ class App(_ROOT_CLASS):
         ComfyUI address typed -- survives emptying the list, and the window
         never changes shape underneath whoever is looking at it.
         """
-        # One persistent layout: the work UI -- start bar, results list, output
-        # row and review -- is always on screen, all inside the cross. There is no
-        # separate "empty" landing screen; an empty window shows the same controls
-        # with nothing in them, so the layout never changes shape when a folder
-        # arrives. The drop target lives in the loader field. The output row now
-        # lives inside the persistent start bar, so it is mapped whenever that bar
-        # is -- nothing of its own to re-map here. The batch defaults (`_w_opt`)
-        # were killed and are never packed, so they are not re-mapped.
-        for w in (self._w_bar,):
-            if not w.winfo_ismapped():
-                w.pack(side="bottom", fill="x")
+        # Nothing left to re-map: the run bar and results list are gone
+        # (2026-10-21) and everything else is built once inside the cross.
+        return
 
     def _refresh_items(self):
-        # The file listbox is gone, so there is no queue view to repaint here: the
-        # queue lives in self.items, and what will be processed shows in the results
-        # tree once a run has happened. All that remains is to keep the current-item
-        # index honest and make sure the one persistent layout is mapped.
         if self._cur >= len(self.items):
             self._cur = len(self.items) - 1
         self._set_stage()
-        self._update_run_label()
-
-    def _update_run_label(self):
-        """The prominent button names what it will do. One loose photograph is a
-        single review; anything else walks the selection a photograph at a time.
-        The command is `_review_each` either way -- it opens one window per image
-        and writes only on Save -- so only the label changes to match."""
-        single = len(self.items) == 1 and os.path.isfile(self.items[0])
-        self.btn_run.configure(text="Review" if single else "Review each")
-
-    def _preview_index(self, i):
-        """Load the queue entry at ``i`` into the review panel.
-
-        A folder resolves to its first readable image. The guard keeps a refresh
-        that re-points at the same photograph from re-detecting it."""
-        if not self.items or not (0 <= i < len(self.items)):
-            return
-        item = self.items[i]
-        if os.path.isdir(item):
-            inside = [f for f in self._expand(item) if os.path.isfile(f)]
-            if not inside:
-                return
-            item = inside[0]
-        if self.review.session is not None and self.review.session.path == item:
-            return
-        self.review.load(item, self._settings(), self._dest_corr(item),
-                         overwrite=self.v_overwrite.get(),
-                         on_saved=self._forget_saved)
 
     def _review_single(self):
         """Open the *current* image in the review window.
@@ -5842,34 +5956,29 @@ class App(_ROOT_CLASS):
             self.items.remove(src)
             self._refresh_items()
 
-    def _review_each(self):
-        """Walk the whole selection, one review window at a time.
-
-        The batch decides and writes; this asks. Every photograph is opened,
-        corrected as it comes, and becomes a file only when Save is pressed --
-        so the run cannot produce a single output nobody looked at.
+    def _walk(self, files):
+        """Review ``files`` one photograph at a time.
 
         Chained rather than looped: Tk has one event loop, and a `for` around a
-        modal window either blocks it or opens thirty windows at once. Each
-        window's `on_closed` opens the next, whichever way it was closed, so
-        closing one with the X advances the queue instead of stalling it.
-        """
-        files = self._files()
+        review either blocks it or opens them all at once.  Each photograph's
+        `on_closed` opens the next, whichever way it was left -- Save, Skip or
+        Close -- so the queue advances instead of stalling.  A new walk
+        replaces any walk under way (user, 2026-10-21: never append)."""
         if not files:
-            messagebox.showinfo("Review", "add some images or a folder first")
             return
         self._review_queue = list(files)
         self._review_total = len(files)
+        self._walking = True
         self._open_next_review()
 
     def _open_next_review(self):
         queue_left = getattr(self, "_review_queue", [])
         if not queue_left:
-            if getattr(self, "_review_total", 0):
-                self.lbl_count.configure(
-                    text=f"reviewed {self._review_total} file(s); "
-                         f"{len(self.items)} left in the list")
-                self._review_total = 0
+            if getattr(self, "_review_total", 0) > 1:
+                self._notify(f"reviewed {self._review_total} photograph(s) -- "
+                             "add more with +, the folder icon, a drop or Ctrl+V")
+            self._review_total = 0
+            self._walking = False
             return
         src = queue_left.pop(0)
         done = self._review_total - len(queue_left)
@@ -5880,13 +5989,8 @@ class App(_ROOT_CLASS):
                          # rebuilt, and loading inside that rebuild is asking for
                          # a half-dead parent.
                          on_closed=lambda: self.after(50, self._open_next_review),
-                         position=f"[{done}/{self._review_total}]")
-
-    def _pick_out(self):
-        d = filedialog.askdirectory(title="output folder")
-        if d:
-            self.v_output.set(d)
-            prefs.save(output=d)
+                         position=f"[{done}/{self._review_total}]"
+                                  if self._review_total > 1 else "")
 
     # -- run -------------------------------------------------------------
     def _expand(self, item):
@@ -5895,9 +5999,9 @@ class App(_ROOT_CLASS):
             return [item]
         if self.v_recursive.get():
             return [os.path.join(b, n) for b, _, names in os.walk(item)
-                    for n in sorted(names)
+                    for n in sorted(names, key=str.casefold)
                     if os.path.splitext(n)[1].lower() in READABLE]
-        return [os.path.join(item, n) for n in sorted(os.listdir(item))
+        return [os.path.join(item, n) for n in sorted(os.listdir(item), key=str.casefold)
                 if os.path.splitext(n)[1].lower() in READABLE
                 and os.path.isfile(os.path.join(item, n))]
 
@@ -6002,41 +6106,51 @@ class App(_ROOT_CLASS):
         messagebox.showinfo("BiRefNet", BN.describe(path) + "\n\nSaved as the model path.")
         return True
 
+    def _batch_click(self):
+        """Idle: start the unattended run.  Running: stop it."""
+        if self.worker is not None and self.worker.is_alive():
+            self.stop_flag.set()
+            self.btn_batch.configure(text="stopping...")
+            return
+        self._start()
+
     def _start(self):
         files = self._files()
         if not files:
-            messagebox.showinfo("Batch", "add some images or a folder first")
+            self._notify("batch: add photographs first (+, folder, drop or Ctrl+V)")
             return
         if not self._ensure_birefnet_model():
             return
-        if self.v_overwrite.get() and not messagebox.askyesno(
-                "Overwrite", f"Replace {len(files)} original file(s)?"):
+        if not messagebox.askyesno(
+                "Batch", f"Correct {len(files)} photograph(s) unattended?\n\n"
+                         "Each is written as <name>_corr next to its original; "
+                         "the ones it is not sure about are left alone and "
+                         "opened for review afterwards."):
             return
-        self.tree.delete(*self.tree.get_children())
-        self.results.clear()
-        self.progress.configure(maximum=len(files), value=0)
+        self.results = {OK: [], SKIPPED: [], ERROR: []}
+        self._batch_total = len(files)
         self.stop_flag.clear()
-        # Both entry points go dark while the unattended run writes: starting a
-        # review walk over files a worker thread is rewriting is a race, and
-        # pressing Unattended twice would run the folder twice.
-        self.btn_run.configure(state="disabled")
-        self.btn_batch.configure(state="disabled")
-        self.btn_stop.configure(state="normal")
+        self.btn_batch.configure(text=f"stop 0/{len(files)}")
+        self._notify(f"batch started: {len(files)} photograph(s) -- "
+                     "click 'stop' in the footer to end it")
         settings = self._settings()
-        self.worker = threading.Thread(target=self._run, args=(files, settings), daemon=True)
+        # Destinations resolved here, on the Tk thread: `_dest` reads a Tk
+        # variable, and touching one from the worker raises unless mainloop
+        # happens to be running -- every file then "failed" with no reason.
+        jobs = [(src, self._dest(src)) for src in files]
+        self.worker = threading.Thread(target=self._run, args=(jobs, settings), daemon=True)
         self.worker.start()
 
-    def _run(self, files, settings):
-        for i, src in enumerate(files, 1):
+    def _run(self, jobs, settings):
+        for i, (src, dst) in enumerate(jobs, 1):
             if self.stop_flag.is_set():
                 self.queue.put(("done", "stopped"))
                 return
             try:
-                r = process(src, self._dest(src), settings)
-            except Exception as exc:                  # never let one file kill the run
-                self.queue.put(("error", (src, str(exc))))
-                continue
-            self.queue.put(("row", (i, r)))
+                r = process(src, dst, settings)
+                self.queue.put(("row", (i, r.status, src, r.reason)))
+            except Exception as exc:              # never let one file kill the run
+                self.queue.put(("row", (i, ERROR, src, str(exc))))
         self.queue.put(("done", "finished"))
 
     def _stop(self):
@@ -6047,60 +6161,44 @@ class App(_ROOT_CLASS):
             while True:
                 kind, payload = self.queue.get_nowait()
                 if kind == "row":
-                    i, r = payload
-                    self._add_row(r)
-                    self.progress.configure(value=i)
+                    i, status, src, why = payload
+                    self.results.setdefault(status, []).append(src)
+                    if status == ERROR:
+                        self._log_error(f"batch: {src}: {why}")
+                    self.btn_batch.configure(text=f"stop {i}/{self._batch_total}")
                 elif kind == "comfy":
                     self._comfy_result(*payload)
-                elif kind == "error":
-                    src, msg = payload
-                    self.tree.insert("", "end", values=(ERROR, os.path.basename(src),
-                                                        "", "", "", msg), tags=(ERROR,))
                 elif kind == "done":
-                    self.btn_run.configure(state="normal")
-                    self.btn_batch.configure(state="normal")
-                    self.btn_stop.configure(state="disabled")
-                    n_skip = sum(1 for r in self.results.values() if r.status == SKIPPED)
-                    self.lbl_count.configure(text=f"{payload}: {len(self.results)} file(s)")
-                    if n_skip and self.v_review.get():
-                        messagebox.showinfo(
-                            "Manual review",
-                            f"{n_skip} image(s) were left unchanged because the detection "
-                            f"was not clear enough.\n\nDouble-click any SKIPPED row to "
-                            f"correct it by hand.")
+                    self._batch_done(payload)
         except queue.Empty:
             pass
         self.after(120, self._pump)
 
-    def _add_row(self, r):
-        iid = self.tree.insert("", "end", tags=(r.status,), values=(
-            r.status, os.path.basename(r.src),
-            f"{r.roll_deg:+.2f}" if r.status == OK else "",
-            f"{r.pitch_deg:+.2f}" if r.status == OK else "",
-            f"{r.confidence:.2f}",
-            r.reason if r.status != OK else
-            f"f={r.focal_35mm:.0f}mm ({r.focal_source}), keeps {r.coverage * 100:.0f}%"))
-        self.results[iid] = r
-        self.tree.see(iid)
+    def _batch_done(self, how):
+        self.btn_batch.configure(text="batch")
+        res = self.results
+        ok, skip, err = (len(res.get(k, [])) for k in (OK, SKIPPED, ERROR))
+        msg = f"batch {how}: {ok} written, {skip} skipped, {err} failed"
+        left = res.get(SKIPPED, []) + res.get(ERROR, [])
+        for src in res.get(OK, []):
+            if src in self.items:
+                self.items.remove(src)
+        if left and self.v_review.get():
+            msg += f" -- reviewing the {len(left)} left over"
+            self._walk(left)
+        if err:
+            msg += " (reasons in pc_errors.log)"
+        self._notify(msg)
 
-    def _review_selected(self):
-        sel = self.tree.selection()
-        if not sel:
-            messagebox.showinfo("Review", "select a row first")
-            return
-        r = self.results.get(sel[0])
-        if r is None:
-            return
-        self.review.load(r.src, self._settings(), self._dest_corr(r.src),
-                         overwrite=self.v_overwrite.get(),
-                         on_saved=lambda s, d: (self._mark_manual(sel[0]),
-                                                self._forget_saved(s, d)))
-
-    def _mark_manual(self, iid):
-        vals = list(self.tree.item(iid, "values"))
-        vals[0] = OK
-        vals[5] = "corrected manually"
-        self.tree.item(iid, values=vals, tags=(OK,))
+    def _log_error(self, text):
+        """The same file the preview's failures go to."""
+        try:
+            log = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                               "..", "..", "pc_errors.log")
+            with open(log, "a", encoding="utf-8") as fh:
+                fh.write(text + "\n" + "=" * 60 + "\n")
+        except OSError:
+            pass
 
 
 def run(initial=None) -> int:

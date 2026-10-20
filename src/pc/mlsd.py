@@ -16,7 +16,7 @@ and the large 6.1 MB, both Apache-2.0, both vendored in ``models/``.
 
 The decoding below follows the reference implementation's `pred_lines`
 (Apache-2.0, NAVER Corp.) -- see models/LICENSE.mlsd.  Requires a TFLite
-runtime, which is an optional dependency: ``pip install tflite-runtime``.
+runtime, which is an optional dependency: ``pip install --no-deps ai-edge-litert``.
 """
 from __future__ import annotations
 
@@ -54,7 +54,7 @@ def _interpreter_class():
         return tf.lite.Interpreter
     except Exception as exc:
         raise MLSDUnavailable(
-            "M-LSD needs a TFLite runtime: pip install tflite-runtime"
+            "M-LSD needs a TFLite runtime: pip install --no-deps ai-edge-litert"
         ) from exc
 
 

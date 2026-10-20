@@ -92,14 +92,14 @@ step("canvas after load", lambda: f"{r.c_before.winfo_width()}x{r.c_before.winfo
 # pc_errors.log instead, which this script already checks at the end.
 step("action row mapped", lambda: f"mapped={r._btns.winfo_ismapped()}" if hasattr(r,"_btns") else "no _btns attr")
 step("previews match", lambda: check_previews_match(app))
-step("results tree height", lambda: f"{app._w_tree.winfo_height()}px")
+step("batch button", lambda: f"mapped={app.btn_batch.winfo_ismapped()} text={app.btn_batch.cget('text')}")
 
 print("== 3. resize sweep ==")
 for w,h in [(1280,800),(1920,1080),(2560,1400)]:
     def _rs(w=w,h=h):
         app.geometry(f"{w}x{h}-4000+0"); pump(app, 25)
         return (f"{w}x{h} -> canvas {r.c_before.winfo_height()}px "
-                f"tree {app._w_tree.winfo_height()}px "
+                f"strip {r.cell_ui.winfo_height()}px "
                 f"btns {r._btns.winfo_ismapped() if hasattr(r,'_btns') else '?'}")
     step(f"resize {w}x{h}", _rs)
 

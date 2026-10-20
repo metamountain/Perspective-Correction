@@ -223,7 +223,10 @@ def test_the_perfect_cross_is_flat_twenty_on_every_real_screen():
     dark, on every screen -- a constant, not a fraction that drifts with the
     window.  The four fields it cuts out are exactly equal by construction."""
     assert L.CROSS_GAP == 20, "the cross width is a directive, not a tuning knob"
-    assert L.CROSS_BORDER == 20, "the border width is a directive, not a tuning knob"
+    # The outer edges were re-decided by the user on 2026-10-20: bottom 10,
+    # left/right 8 (enough to pull a guide from), top 0.
+    assert L.CROSS_BORDER == 10, "the bottom edge is a directive, not a tuning knob"
+    assert L.CROSS_SIDE == 8, "the side edge is a directive, not a tuning knob"
     for w, h in SCREENS:
         fw, fh = L.perfect_cross_field(w, h)
         assert 2 * fw + L.CROSS_GAP + 2 * L.CROSS_BORDER <= w + 1, (

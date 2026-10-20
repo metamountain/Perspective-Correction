@@ -334,3 +334,98 @@ def test_the_time_estimate_is_honest_about_what_it_does_not_know():
     assert PR.estimate("fill:telea", 108.0) > PR.estimate("fill:lama", 108.0), (
         "measured 13.1 s against 4.5 s on a 108 MPx canvas -- telea is the "
         "slow one at full size, however cheap it is in the preview")
+
+
+def test_eave_y_is_the_topmost_long_horizontal_in_the_band():
+    # Identity warp: mapped length equals source length.  EAVE_MIN_LEN * ow is
+    # the length floor, so the short segment is ignored and the topmost of the
+    # long ones (y=50, above y=80) is the eave.
+    H = np.identity(3)
+    ow = 1000.0
+    segs = np.array([
+        [100.0, 10.0, 120.0, 10.0],    # length 20 < 0.15*1000=150, too short
+        [0.0, 50.0, 1000.0, 50.0],     # length 1000, counts, mid-y 50
+        [0.0, 80.0, 1000.0, 80.0],     # length 1000, counts, mid-y 80
+    ])
+    assert W.eave_y(H, segs, ow, 0.0, ow) == 50.0
+
+    # A segment whose midpoint falls outside the x-band is not the eave.
+    segs_off = np.array([
+        [2000.0, 50.0, 3000.0, 50.0],  # mid-x 2500, outside [0, 1000]
+    ])
+    assert W.eave_y(H, segs_off, ow, 0.0, ow) is None
+
+    # All short -> no eave.
+    segs_short = np.array([
+        [100.0, 10.0, 120.0, 10.0],
+        [200.0, 60.0, 210.0, 60.0],
+    ])
+    assert W.eave_y(H, segs_short, ow, 0.0, ow) is None
+
+
+def _quad_cases():
+    """Quadrilaterals a user might trace around a facade, corners in the order
+    top-left, top-right, bottom-right, bottom-left (image y down)."""
+    yield "square", [(300, 200), (700, 200), (700, 600), (300, 600)]
+    yield "rhombus", [(500, 150), (750, 400), (500, 650), (250, 400)]
+    yield "parallelogram", [(320, 180), (760, 230), (700, 620), (260, 570)]
+    yield "steep parallelogram", [(420, 120), (640, 150), (520, 680), (300, 650)]
+    yield "keystone trapezoid", [(380, 160), (620, 160), (760, 640), (240, 640)]
+    yield "sideways trapezoid", [(260, 120), (740, 260), (740, 540), (260, 680)]
+    rng = np.random.default_rng(7)
+    n = 0
+    while n < 40:
+        base = np.array([(300, 200), (700, 200), (700, 600), (300, 600)], float)
+        q = base + rng.uniform(-110, 110, size=(4, 2))
+        # keep it convex and in the clockwise corner order
+        def _z(a, b):
+            return a[0] * b[1] - a[1] * b[0]
+        cross = [_z(q[(i + 1) % 4] - q[i], q[(i + 2) % 4] - q[(i + 1) % 4])
+                 for i in range(4)]
+        if all(c > 0 for c in cross):
+            n += 1
+            yield f"random {n}", [tuple(p) for p in q]
+
+
+def test_a_drawn_rhombus_parallelogram_or_trapezoid_becomes_a_rectangle():
+    """Two drawn verticals and two drawn horizontals are a rectangle (user,
+    2026-10-20): whatever quadrilateral was traced -- rhombus, parallelogram
+    (both vanishing points at infinity), trapezoid, any convex quad -- the
+    warp makes every side axis-aligned and every corner 90 degrees."""
+    w, h = 1000, 800
+    for name, (tl, tr, br, bl) in _quad_cases():
+        verts = np.array([[*tl, *bl], [*tr, *br]], float)
+        horiz = np.array([[*tl, *tr], [*bl, *br]], float)
+        vv = W.vp_from_lines(verts, np.array([0.0, 1.0, 0.0]))
+        vh = W.vp_from_lines(horiz, np.array([1.0, 0.0, 0.0]))
+        H = W.rectify(vv, vh, w, h)
+        assert H is not None, name
+        q = W.G.apply_h(H, np.array([tl, tr, br, bl], float))
+        for i in range(4):
+            a, b, c = q[i - 1], q[i], q[(i + 1) % 4]
+            u, v = a - b, c - b
+            cos = float(u @ v) / (np.linalg.norm(u) * np.linalg.norm(v))
+            assert abs(cos) < 1e-7, (name, "corner", i, math.degrees(math.acos(cos)))
+        # and axis-aligned, not merely a rotated rectangle
+        assert abs(q[0, 1] - q[1, 1]) < 1e-6 * h and abs(q[3, 1] - q[2, 1]) < 1e-6 * h, name
+        assert abs(q[0, 0] - q[3, 0]) < 1e-6 * w and abs(q[1, 0] - q[2, 0]) < 1e-6 * w, name
+
+
+def test_one_drawn_line_is_exact_and_leaves_the_rest_to_the_detector():
+    """One line per direction: exact for that line, and the detector's
+    vanishing point is only moved onto it (the shortest way), not replaced."""
+    w, h = 1000, 800
+    auto_vp = np.array([480.0, -9000.0, 1.0])            # detector: verticals converge up
+    drawn = np.array([[300.0, 100.0, 320.0, 700.0]])      # the user disagrees a little
+    vv = W.vp_from_lines(drawn, auto_vp)
+    x1, y1, x2, y2 = drawn[0]
+    assert abs(np.cross([x1, y1, 1], [x2, y2, 1]) @ vv) < 1e-6 * np.linalg.norm(vv), \
+        "the vanishing point must lie on the drawn line"
+    l = np.cross([x1, y1, 1.0], [x2, y2, 1.0])
+    l = l / np.hypot(l[0], l[1])
+    moved = np.hypot(vv[0] / vv[2] - auto_vp[0], vv[1] / vv[2] - auto_vp[1])
+    assert abs(moved - abs(l @ auto_vp)) < 1e-6 * abs(auto_vp[1]), \
+        "one line moves the detector's point the shortest way onto it, it does not replace it"
+    H = W.rectify(vv, np.array([1.0, 0.0, 0.0]), w, h)
+    p = W.G.apply_h(H, np.array([[x1, y1], [x2, y2]]))
+    assert abs(p[0, 0] - p[1, 0]) < 1e-6 * w
