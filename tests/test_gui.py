@@ -22,6 +22,10 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ASSET = os.path.join(HERE, "assets", "79cb33878fd0ed76d368e7cfa8827e15.jpg")
 
 
+def _no_dialog(*a, **k):
+    raise AssertionError(f"a modal dialog would block the run: {a[:2]}")
+
+
 def _app():
     """An off-screen App, or a clean skip where there is no display/Tkinter."""
     try:
@@ -31,6 +35,12 @@ def _app():
     if not os.path.exists(ASSET):
         raise SkipTest("asset missing")            # noqa: F821
     from pc.gui import App
+    from pc import gui as GUI
+    # A real modal blocks the whole run with nobody there to press it -- the
+    # suite once hung for an hour on "Unsaved changes".  An unexpected one fails
+    # its test instead; a test that wants the dialog installs its own fake.
+    if getattr(GUI.messagebox.askyesnocancel, "__module__", "") == "tkinter.messagebox":
+        GUI.messagebox.askyesnocancel = _no_dialog
     try:
         app = App(start_maximized=False)
     except Exception as exc:
@@ -652,7 +662,8 @@ def test_guides_are_pulled_off_the_black_cross():
 
     Cross press starts a pull (no guide yet); dragging shows a dashed preview;
     dropping over the corrected pane commits the guide.  Guides can also be
-    created from the 15 px border zone of Q2 and grabbed on the canvas.
+    pulled from the band GUIDE_BAND_PX either side of Q2's picture edge,
+    and grabbed on the canvas.
     Guides live in ``_after_guides`` as ``(kind, pos)`` tuples and are drawn
     as plain grey lines with tag "after_guide" on ``c_after``.
     """
@@ -732,11 +743,47 @@ def test_guides_are_pulled_off_the_black_cross():
         assert len(r._after_guides) == before, (
             "dropping back on the cross should discard the guide")
 
-        # --- Canvas border-zone creation: click in left 15px of Q2 → v-guide ---
+        # --- The guide band: GUIDE_BAND_PX outside and inside every edge ---
+        # A press in the band creates a guide that is already being dragged;
+        # a press that never travels is a click and adds nothing.
+        from pc.layout import GUIDE_BAND_PX as B
+        pulls = (  # (press x, press y, drag dx, drag dy, kind) -- all four sides
+            (-(B - 3), ih_ // 3, 60, 0, "v"),       # outside left
+            (B - 3, ih_ // 3, 60, 0, "v"),          # inside left
+            (iw_ + (B - 3), ih_ // 3, -60, 0, "v"),  # outside right
+            (iw_ // 3, -(B - 3), 0, 40, "h"),       # outside top
+            (iw_ // 3, ih_ - (B - 3), 0, -40, "h"),  # inside bottom
+        )
+        for px, py, dx, dy, kind in pulls:
+            before = len(r._after_guides)
+            r._on_crop_press(_E(aox + px, aoy + py))
+            assert len(r._after_guides) == before + 1, (
+                f"a press in the band at ({px},{py}) should start a guide")
+            assert r._guide_drag is not None, "the new guide is already dragging"
+            r._on_crop_drag(_E(aox + px + dx, aoy + py + dy))
+            want = (px + dx) if kind == "v" else (py + dy)
+            assert r._after_guides[-1] == (kind, want), (
+                f"the guide should follow the drag: {r._after_guides[-1]} != {(kind, want)}")
+            r._on_crop_release(_E(aox + px + dx, aoy + py + dy))
+            assert r._guide_drag is None and len(r._after_guides) == before + 1, (
+                "release keeps the pulled guide")
+            _settle(app, 2)
+        # A bare click in the band adds nothing.
         before = len(r._after_guides)
-        r._on_crop_press(_E(aox + 5, aoy + ih_ // 3))
-        assert len(r._after_guides) == before + 1, "border-zone click should add a guide"
-        assert r._after_guides[-1][0] == "v", "left border zone should make a v-guide"
+        r._on_crop_press(_E(aox + 2, aoy + ih_ // 3))
+        r._on_crop_release(_E(aox + 2, aoy + ih_ // 3))
+        assert len(r._after_guides) == before, "a click in the band is not a pull"
+        # Outside the band, nothing starts.
+        r._on_crop_press(_E(aox - (B + 4), aoy + ih_ // 3))
+        assert r._guide_drag is None and len(r._after_guides) == before, (
+            "a press beyond the band must not start a guide")
+        r._on_crop_release(_E(aox - (B + 4), aoy + ih_ // 3))
+        r._crop_drag_start = None
+        # Hovering the band shows which way the guide will run.
+        r._on_crop_motion(_E(aox - 3, aoy + ih_ // 3))
+        assert r.c_after.cget("cursor") == "sb_h_double_arrow"
+        r._on_crop_motion(_E(aox + iw_ // 3, aoy + ih_ + 3))
+        assert r.c_after.cget("cursor") == "sb_v_double_arrow"
         _settle(app, 4)
 
         # --- Canvas grab: press on an existing guide grabs it (no new guide) ---
@@ -1735,7 +1782,9 @@ def test_the_detail_slider_is_greyed_out_unless_a_yaw_is_being_corrected():
         _settle(app, 5)
         assert str(scale.cget("state")) == "disabled"
 
-        # ...and now the trap.
+        # ...and now the trap.  Moving the dial is a change, so opening the next
+        # photograph would ask to save it; this test is about the reload.
+        r._mark_clean()
         app._add([ASSET])                      # second load: rebuilds the panel
         _settle(app)
         r = app.review

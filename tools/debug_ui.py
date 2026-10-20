@@ -29,24 +29,29 @@ def pump(app, n=30):
         app.update(); time.sleep(0.02)
 
 def check_previews_match(app):
-    """Both previews must be the same height and each fill most of its field.
+    """Each preview must fill its own field along one axis.
 
-    Written by the local Qwen worker to its spec; applied by hand because that
-    worker has no file-edit tool (see the Ledger). The 70 % floor is not a
-    measurement, it is a tripwire: the failure it exists to catch is one pane
-    silently rendering smaller than the other, which is what an inset applied to
-    only one of them did.
+    This used to demand the SAME HEIGHT for both, which stopped being the rule
+    once each pane fits its own picture: the corrected frame is a warp with
+    another aspect, so on a portrait-ish source before 923x923 and after
+    942x911 are both right (measured 2026-10-21). The failure this still exists
+    to catch is one pane silently rendering smaller than its field -- an inset
+    applied to only one of them -- so: the longer relative side of each picture
+    must reach its render box to within 2 px.
     """
     r = app.review
-    cb_w, cb_h = r.c_before.winfo_width(), r.c_before.winfo_height()
+    lock_b, lock_a = r._img_box
     b_w, b_h = r._ph_b.width(), r._ph_b.height()
     a_w, a_h = r._ph_a.width(), r._ph_a.height()
-    same_h = (b_h == a_h)
-    fill_b = 100.0 * b_w * b_h / max(1, cb_w * cb_h)
-    fill_a = 100.0 * a_w * a_h / max(1, cb_w * cb_h)
-    ok = same_h and fill_b >= 70.0 and fill_a >= 70.0
-    print("  %s previews: before %dx%d (%.1f%%)  after %dx%d (%.1f%%)  same height: %s"
-          % ("ok  " if ok else "FAIL", b_w, b_h, fill_b, a_w, a_h, fill_a, same_h))
+
+    def fills(w, h, box):
+        return box[0] - w <= 2 or box[1] - h <= 2
+
+    ok = fills(b_w, b_h, lock_b) and fills(a_w, a_h, lock_a)
+    print("  %s previews: before %dx%d in %dx%d  after %dx%d in %dx%d"
+          % ("ok  " if ok else "FAIL", b_w, b_h, *lock_b, a_w, a_h, *lock_a))
+    if not ok:
+        raise AssertionError("a preview does not fill its field")
     return ok
 
 

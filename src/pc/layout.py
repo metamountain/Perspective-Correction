@@ -262,6 +262,11 @@ CROSS_GAP = 20
 CROSS_BORDER = 10   # halved 2026-10-20 (user: outer edge thinner); bottom edge only now
 CROSS_SIDE = 8      # left/right outer edge, the whole of it: just enough to pull a
                     #   ruler from (user, 2026-10-20: "kleinen Rand ... jeweils 8 Pixel")
+# Guides are pulled from a band hugging the corrected picture's edge, this far
+# outside AND this far inside it -- 16 px all round (user, 2026-10-21: finding
+# the old pull zone was "a fuck up").
+GUIDE_BAND_PX = 8
+GUIDE_CLICK_PX = 3     # a press that travels less than this is a click, not a pull
 # The cross is broken vertically (2026-10-19, user-directed): the two preview
 # fields on top take every extra pixel, because a photograph judged by eye wants
 # them all while the controls below want only what they need. The lower row is

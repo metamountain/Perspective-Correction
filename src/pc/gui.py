@@ -1001,6 +1001,13 @@ class ReviewPanel(tk.Frame):
         # a change in the control strip's height (mode switch, collapse) cannot
         # re-scale the picture and make it jump.  Reset to None on a new photo.
         self._img_box = None
+        # Guide state exists before any photograph: the after canvas takes
+        # presses and releases while it is still empty, and `_on_crop_release`
+        # used to raise AttributeError on `_guide_drag` there.
+        self._after_guides = []
+        self._guide_drag = None
+        self._guide_new = None
+        self._crop_drag_start = None
         self._show_hint()
 
     def _show_hint(self):
@@ -1041,6 +1048,7 @@ class ReviewPanel(tk.Frame):
         self._img_box = None
         self._after_guides = []
         self._guide_drag = None
+        self._guide_new = None
         self._cross_pull = None
         self._clear_cells()
         try:
@@ -2893,8 +2901,8 @@ class ReviewPanel(tk.Frame):
         if grab is not None:
             self._crop_drag_start = grab
             return
-        # Reference guides: grab an existing one or add a new one from the
-        # 15 px border zone.
+        # Reference guides: grab an existing one, else pull a new one from
+        # the band around the picture's edge.
         hit = self._after_guide_at(x, y, iw, ih)
         if hit is not None:
             kind, idx = hit
@@ -2904,15 +2912,20 @@ class ReviewPanel(tk.Frame):
             except tk.TclError:
                 pass
             return
-        border = 15
-        in_v_zone = (0 <= x < border or iw - border < x <= iw)
-        in_h_zone = (0 <= y < border or ih - border < y <= ih)
-        if in_v_zone and not in_h_zone:
-            self._after_guides.append(("v", max(0.0, min(iw, x))))
-            self._draw_after_guides()
-            return
-        if in_h_zone and not in_v_zone:
-            self._after_guides.append(("h", max(0.0, min(ih, y))))
+        # The guide band: GUIDE_BAND_PX outside and inside every picture edge.
+        # A press there creates a guide and is already dragging it, so the
+        # gesture is one pull; `_on_guide_release` drops it again if the press
+        # never travelled (a click is not a pull).
+        band = self._guide_band_kind(x, y, iw, ih)
+        if band is not None:
+            pos = float(x if band == "v" else y)
+            self._after_guides.append((band, pos))
+            self._guide_drag = (band, len(self._after_guides) - 1)
+            self._guide_new = pos
+            try:
+                self.c_after.grab_set()
+            except tk.TclError:
+                pass
             self._draw_after_guides()
             return
         # A press inside the kept region pans the whole rectangle; a press in the
@@ -2923,6 +2936,19 @@ class ReviewPanel(tk.Frame):
             self._crop_drag_start = ("move", x - cx0, y - cy0)
         else:
             self._crop_drag_start = ("corner", x, y)
+
+    def _guide_band_kind(self, x, y, iw, ih):
+        """'v' or 'h' when (x, y), in after-image pixels, lies in the guide band
+        around the picture's edge, else None.  Left/right edges give a vertical
+        guide, top/bottom a horizontal one; in a corner the nearer edge wins."""
+        b = layout.GUIDE_BAND_PX
+        if not (-b <= x <= iw + b and -b <= y <= ih + b):
+            return None
+        dx = min(abs(x), abs(iw - x))
+        dy = min(abs(y), abs(ih - y))
+        if dx > b and dy > b:
+            return None
+        return "v" if dx <= dy else "h"
 
     def _grab_handle(self, x, y, iw, ih, radius=14):
         """Answer a press on a crop handle with what the drag should do.
@@ -2995,12 +3021,12 @@ class ReviewPanel(tk.Frame):
         x = event.x - self._after_off[0]
         y = event.y - self._after_off[1]
         iw, ih = self._ph_a.width(), self._ph_a.height()
-        # Border zone (ruler margin): show crosshair as ruler indicator
-        in_border = (event.x < RULER_MARGIN or event.y < RULER_MARGIN
-                     or event.x > self.c_after.winfo_width() - RULER_MARGIN
-                     or event.y > self.c_after.winfo_height() - RULER_MARGIN)
-        if in_border:
-            cur = "crosshair"
+        # The guide band shows which way the guide will run; a crop handle,
+        # which outranks it on press, keeps the plain pointer.
+        band = (self._guide_band_kind(x, y, iw, ih)
+                if self._grab_handle(x, y, iw, ih) is None else None)
+        if band is not None:
+            cur = "sb_h_double_arrow" if band == "v" else "sb_v_double_arrow"
         else:
             move = False
             if 0 <= x <= iw and 0 <= y <= ih:
@@ -4395,6 +4421,21 @@ class ReviewPanel(tk.Frame):
         iw, ih = self._ph_a.width(), self._ph_a.height()
         pos = self._after_guides[idx][1]
         margin = 20
+        start = getattr(self, "_guide_new", None)
+        self._guide_new = None
+        if start is not None and abs(pos - start) < layout.GUIDE_CLICK_PX:
+            # Pressed in the band and let go: a click, not a pull.
+            del self._after_guides[idx]
+            self._guide_drag = None
+            try:
+                self.c_after.grab_release()
+            except tk.TclError:
+                pass
+            self._draw_after_guides()
+            self._notify("guides: press on the picture's edge and drag inward")
+            return
+        if start is not None:
+            self._notify("guide added -- drag it back off the picture to remove it")
         if kind == "v":
             if pos < -margin or pos > iw + margin:
                 del self._after_guides[idx]

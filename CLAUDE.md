@@ -647,7 +647,23 @@ features ahead of everything else.*
 - **[UI, user-directed] Pictures centred on both axes; tool palette centred on the left edge.** The before title dodges the palette only where they share a row.
 - **Environment:** installed `piexif` (a hard dependency in `requirements.txt` that was missing; 3 tests) and `simple-lama-inpainting --no-deps`. The default fill is lama, and without the package every Save silently fell back to TELEA and preflight refused the defaults (3 tests). Pillow 12.3 / numpy 2.5.3 / cv2 5.0 unchanged. `test_layout` now asserts the 2026-10-20 edge directives (bottom 10, sides 8) instead of the retired flat 20.
 - **`--full`: 364 tests, 1 failed, 4 skipped.** The failure is the known untracked `3zb3nbpvnp9njrb76wymv5m8pp.jpg` without a cached mask (see 2026-09-26).
-- **Open, found on the way:** in **Auto** mode wohnheim gets pitch +7.38° (conf 0.34, "would skip") although its verticals are plumb, so the after preview splays them.
+- **Open, diagnosed, NOT fixed (night of 10-21):** in **Auto** mode wohnheim gets pitch +7.38° (conf 0.34, "would skip") although its verticals are plumb, so the after preview splays them.
+  - **Cause:** the (roll, pitch, f) Nelder-Mead refinement in `model.estimate`. Before it the vertical VP gives pitch **0.90°**. The horizontal-VP term in `_cost_terms` then pulls it to 7.38°, following clusters off the sloping street (horizon support 0.09). The verticals' own cost goes up **7.8x** (median residual 0.53° → 1.47°).
+  - **Three guards tried and measured over the whole pool round trip (`PC_TEST_ASSETS=0`); none separates the cases:**
+    - drop the horizontals when horizon support < 0.3: hospital goes 0.61° → 1.01°;
+    - when they raise the vertical cost > 5x: Platte_1 goes 0.29° → 3.16°. Synthetic round trips reach growth **23** with the horizontals *right*, because they fix the f : tilt ambiguity;
+    - growth > 5 *and* start pitch < 2°: Mariánské Hory goes 0.54° → 1.39°.
+  - Reverted; `model.py` is unchanged. Wohnheim's growth (7.8) sits inside the range of legitimate pulls, so the signal that tells a street from a facade is not in these two numbers. Probably it is in *which* segments formed the horizontal cluster (ground vs. facade, i.e. the mask or a below-horizon test). Measure that before building anything.
+  - Mitigated already: **HA** uses the lines' own VP (`_data_vertical_vp`) and is right on wohnheim, and Auto flags it "would skip".
+- **[UI, user-directed] Guides are pulled from a band around the picture**, `GUIDE_BAND_PX = 8` outside and 8 inside every edge, so 16 px all round (user: finding them was "a fuck up").
+  - A press in the band creates the guide and is already dragging it. A press that travels less than `GUIDE_CLICK_PX` is a click and leaves nothing.
+  - Hover shows the direction cursor. Crop handles still win. A notice says how to remove a guide.
+  - The old 15 px inside-only zone that added a guide on a bare click is gone; the cross pull is unchanged.
+  - Pinned in `test_guides_are_pulled_off_the_black_cross`: all four sides, inside and outside, follow-the-drag, bare click, beyond the band, cursors.
+- **[bug] `_on_crop_release` raised AttributeError on an empty canvas.** `_guide_drag` was only set in `load()`; it is now initialised in `__init__`.
+- **[test infra] A real modal dialog hung the whole `--full` run for over an hour** ("Unsaved changes": `test_the_detail_slider_...` moved the dial, which counts as a change, then opened the next photo). `_app()` now replaces `askyesnocancel` with a function that raises, so an unexpected dialog fails its test by name. That test marks the photo clean before the reload.
+- **`debug_ui` "previews same height: False" was a stale premise**, not a defect: each pane fits its own picture, and the warp has another aspect. The check now asks that each picture fill its render box on one axis, and it counts as a FAILURE when it does not (it used to print FAIL without counting).
+- **Night-end suite:** `--full` 364 tests, 0 failed, 4 skipped. The whole pool, `PC_TEST_ASSETS=0 test_assets`: 11 tests, 0 failed, 2 skipped. `debug_ui`: FAILURES none, log clean.
 
 - **[UI, user-directed] The batch is a rudiment: one footer button.** Removed from the window: the results table, the run bar (Review each / Unattended / Stop / progress / output path + Browse), and the never-shown defaults Labelframe (its vars stay, `_settings()` reads them). The control strip went from ~180 px to 88 px.
   - **Adding photographs starts the review walk** (`App._walk`). Save / Skip / Close opens the next one; photographs added during a walk join its end.
