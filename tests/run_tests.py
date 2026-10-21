@@ -42,7 +42,8 @@ MODULES = ["test_geometry", "test_lines", "test_layout", "test_warp", "test_esti
            "test_distortion",
            "test_sam2seg",
            "test_correction_log",
-           "test_horizontal"]
+           "test_horizontal",
+           "test_selfupdate"]
 
 MAX_WORKERS = 8
 
@@ -54,7 +55,7 @@ class _Skip(Exception):
 try:
     from _pytest.outcomes import Skipped as _PytestSkip
 except Exception:          # pytest not installed
-    _PytestSkip = ()
+    _PytestSkip = _Skip
 
 
 # At top level on purpose: worker processes re-import this file before running

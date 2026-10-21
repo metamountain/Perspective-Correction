@@ -100,7 +100,7 @@ They outrank convenience; a session that skips one is a failed session.
   away. **`PC_TEST_ASSETS=0` restores the whole pool and must be
   used before writing any pool-wide number into this file.**
 - A new `test_*.py` must be added to `MODULES` in `run_tests.py` or `_unlisted()`
-  fails the run. There are **23** modules. (`test_selfupdate.py` exists on disk but is not yet in `MODULES`; `_unlisted()` flags it.)
+  fails the run. There are **23** modules. (`test_selfupdate` is in `MODULES` since 2026-10-21.)
 - `src/pc/selfupdate.py` (229 lines) holds the update button's logic — kept out of `gui.py` so it can be tested without a window; it checks and applies a fast-forward-only pull, refusing a dirty tree or diverged history. Tested by `tests/test_selfupdate.py` (193 lines), which builds throwaway git repos rather than mocking.
 - GUI off-screen pattern: `App(start_maximized=False)`,
   `geometry("<WxH>-4000+0")`, pump with `update()` + `sleep(0.02)`, then
@@ -637,6 +637,11 @@ features ahead of everything else.*
 
 **2026-10-21**
 
+- **[fix] CI was red on every job, Windows included; two causes, read from the real Actions logs** (job logs fetched through the API with the stored git credential):
+  - `run_tests.py` set `_PytestSkip = ()` when pytest is missing, and `except (_Skip, ())` is a TypeError. So the first failing test crashed the whole run with no summary. The fallback is now `_Skip`.
+  - The failing test was `test_diagnostics_go_into_the_log_file_too`. Since lama became the default fill, the CLI refused its own default (`--fill lama needs simple-lama-inpainting`, exit 2) on any install from `requirements.txt` alone, which is what CI and a new user have. That broke `deps.py`'s contract that a default run works on the core install. Now `deps.preflight(settings, fill_asked=False)` counts lama only when `--fill` was given. Left at the default, the CLI steps down to telea and prints a note saying so and how to install lama. An explicit `--fill lama` still exits 2. Pinned by `test_cli.test_the_default_fill_steps_down_to_telea_when_lama_is_missing`, red with the step-down removed.
+  - `test_selfupdate` is in `MODULES` now (10/0).
+  - Clean venv with only `requirements.txt`, the fast run: 322 tests, 1 failed, 4 skipped. The one failure is the untracked `3zb3...jpg`, which is not in the repo and so not in CI. Local `--full`: 375 tests, same 1 failure, 3 skipped. Linux itself is still untested here (no WSL or Docker). The next CI run is the test.
 - **[user-directed] Detector choice is `lsd` | `mlsd` only** (GUI and `--detector`). `hybrid`/`deep-hybrid` were plain LSD under another name and are deleted with `gate_by`. `fld` is gone from the choice because it needs `cv2.ximgproc`, which is not installed. `union` is gone too. Measured with `tools/benchmark_detectors.py tests/assets` (8 photos x 6 rotations): lsd 0.38/0.71/1.69 (mean/p90/worst), union 0.46/0.92/1.38 at 4x the time, mlsd 1.08/1.88/5.37. That benchmark measures round-trip consistency, not M-LSD's clutter filtering, which is why mlsd stays. A remembered detector outside the list opens as lsd. `union`/`fld`/`deeplsd` stay callable in `lines.py` for the benchmark tool. `test_detectors`+`test_cli`+`test_gui` 50/0/1, `debug_ui` clean.
 - **[fix, user-caught] Horizontal auto warps without a facade strip.** The warp (`_rectify_active`) required a strip or mask, and the strip is off by default (`86e62f7`). So HA usually fell back to the camera rotation, which bent the already-plumb verticals of wohnheim by up to 4.7°. Through `tools/drive_review.py`, all 12 Horizontal photos, before → after:
   - mean |vertical lean| 0.36° → 0.12°; mean |horizontal slope| 0.45° → 0.10°.

@@ -691,7 +691,19 @@ def main(argv=None) -> int:
             return 1
 
     settings = settings_from(args)
-    pre_errs = deps.preflight(settings)
+    # lama is the default fill but an optional package: a run that left --fill
+    # alone must still work on the core install (deps.py's contract), so it
+    # steps down to telea and says so. An explicit --fill lama still refuses.
+    given = sys.argv[1:] if argv is None else argv
+    fill_asked = any(a.startswith("--fill=") or a == "--fill" for a in given)
+    if settings.fill == "lama" and not fill_asked:
+        from . import inpaint as FILL
+        if not FILL.available("lama", settings):
+            settings = settings.replace(fill="telea")
+            print("note: simple-lama-inpainting is not installed, so the default fill "
+                  "is telea this run (pip install --no-deps simple-lama-inpainting, "
+                  "or pass --fill none)", file=sys.stderr)
+    pre_errs = deps.preflight(settings, fill_asked=fill_asked)
     if pre_errs:
         print("cannot run -- the requested backends are not available:", file=sys.stderr)
         for e in pre_errs:

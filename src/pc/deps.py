@@ -87,14 +87,16 @@ def core_errors():
     return errs
 
 
-def preflight(settings):
+def preflight(settings, fill_asked=False):
     """Errors for backends the command line *asked for* that this interpreter
     cannot run. Empty = go.
 
     Includes the core check so it is safe to call on its own, though main() gates
     on core_errors() first and never reaches here with a broken core.  The test is
     "was this backend selected", not "is it installed" -- a default run must stay
-    runnable wherever the core is.
+    runnable wherever the core is.  lama is the default fill, so it counts as
+    selected only with ``fill_asked``; left at the default it falls back to
+    telea at run time (``inpaint``) instead of refusing.
     """
     errs = list(core_errors())
 
@@ -111,7 +113,7 @@ def preflight(settings):
                         f"+ models/deeplsd_md.tar; run --doctor for detail")
 
     fill = settings.fill
-    if fill == "lama":
+    if fill == "lama" and fill_asked:
         from . import inpaint as FILL
         if not FILL.available(fill, settings):
             errs.append("--fill lama needs simple-lama-inpainting "

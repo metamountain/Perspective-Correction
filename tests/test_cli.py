@@ -133,3 +133,27 @@ def test_overwrite_with_yes_skips_the_prompt_even_off_a_tty():
     out = buf.getvalue()
     assert "needs --yes" not in out, "--yes should skip the gate's refusal entirely"
     assert rc != 1, f"--yes must not be treated like a refused, unanswered prompt (rc={rc})"
+
+
+def test_the_default_fill_steps_down_to_telea_when_lama_is_missing():
+    """lama is the default but optional: a run that left --fill alone must work
+    on the core install, while an explicit --fill lama still refuses."""
+    import os
+    import shutil
+    import tempfile
+
+    import cv2
+    import synth
+    from pc import inpaint
+
+    d = tempfile.mkdtemp()
+    real = inpaint.available
+    inpaint.available = lambda mode, settings=None: mode != "lama" and real(mode, settings)
+    try:
+        cv2.imwrite(os.path.join(d, "a.jpg"), synth.Scene(pitch_deg=8, seed=72).img)
+        assert Settings.fill == "lama"
+        assert cli.main([d, "-n", "-q"]) == 0
+        assert cli.main([d, "-n", "-q", "--fill", "lama"]) == 2
+    finally:
+        inpaint.available = real
+        shutil.rmtree(d, ignore_errors=True)
