@@ -82,6 +82,15 @@ def _settle_until(app, done, n=120):
     return done()
 
 
+def _skip_if_window_cannot_grow(h0, h1):
+    """A CI runner's virtual display is small, and Windows clamps a window to
+    the screen (measured: asked 800 and 1200, got 1044 both times). A test of
+    what a bigger window does then has nothing to measure; skip only then."""
+    if h1 <= h0:
+        raise SkipTest(f"the display cannot hold a taller window "   # noqa: F821
+                       f"({h0} -> {h1} px)")
+
+
 def _loaded(app, w, h):
     app.geometry(f"{w}x{h}-4000+0")                # off-screen, per skills/ui.md
     app.update_idletasks(); app.update()
@@ -287,11 +296,12 @@ def test_the_window_is_the_cross_and_nothing_else():
     bigger window grows the four equal fields -- and with them the previews.
     """
     sizes = [(1280, 800), (1920, 1200)]
-    seen = []
+    seen, heights = [], []
     for w, h in sizes:
         app = _app()
         try:
             _loaded(app, w, h)
+            heights.append(app.winfo_height())
             below = app.winfo_height() - app.review.winfo_y() \
                     - app.review.winfo_height()
             # The status bar is a fixed-height strip; it must not grow with the
@@ -302,6 +312,7 @@ def test_the_window_is_the_cross_and_nothing_else():
         finally:
             app.destroy()
 
+    _skip_if_window_cannot_grow(*heights)
     r0, r1 = seen
     assert r1 > r0, f"the cross did not take the window's extra height " \
                     f"({r0} -> {r1} px)"
@@ -652,7 +663,9 @@ def test_the_preview_gives_up_retrying_instead_of_spinning_forever():
         # not enough -- Tk fires no <Configure> for a widget that comes back
         # at the size it had, and without one nothing reschedules the draw.
         r.c_before.pack(fill="both", expand=True)
+        h0 = app.winfo_height()
         app.geometry("2560x1440-4000+0"); _settle(app, 25)
+        _skip_if_window_cannot_grow(h0, app.winfo_height())
         assert r.c_before.winfo_height() > 20, "the resize did not free height"
         assert r._redraw_tries == 0, "a successful redraw must reset the count"
     finally:

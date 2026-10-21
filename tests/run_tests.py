@@ -17,6 +17,7 @@ restores the old sequential run for debugging.
 import importlib
 import os
 import sys
+import unittest
 import time
 import traceback
 
@@ -129,7 +130,7 @@ def _run_module(name):
         try:
             getattr(mod, t)()
             out.append((t, "ok", time.time() - t1, None))
-        except (_Skip, _PytestSkip) as exc:
+        except (_Skip, _PytestSkip, unittest.SkipTest) as exc:
             out.append((t, "skip", time.time() - t1, str(exc)))
         except Exception:
             out.append((t, "fail", time.time() - t1, traceback.format_exc()))

@@ -59,8 +59,10 @@ SLIDER_THUMB = 30      # px, thumb length along the track (~circular with width)
 # on a narrow window the label + spinbox can squeeze it to a useless sliver; a
 # grid `minsize` is a hard floor the weighted column cannot shrink past (unlike
 # the Scale's own `length`, which yields under pressure). Wide windows still
-# stretch it far beyond this via sticky="ew".
-SLIDER_MIN = 80        # px, minimum track-column width
+# stretch it far beyond this via sticky="ew". Also the Scale's requested
+# `length`, so the row asks for no more than the floor: 60 lets the control
+# strip fit a 1366 px wide window (2026-10-21).
+SLIDER_MIN = 60        # px, minimum track-column width
 
 # --- The per-photograph control strip (2026-10-20, user-directed) ------------
 # The cross's lower-right field is a dense two-column strip: General (mask,
@@ -120,6 +122,18 @@ def sash_position(available_h, n_rows, min_review=MIN_REVIEW_H):
     if review < floor:
         review = floor
     return max(0, min(review, available_h))
+
+
+# The window's floor. It was a fixed 1920x1080, larger than many screens (a
+# 1366x768 laptop, 125 % scaling, a CI runner), so the window hung off the
+# display. Measured 2026-10-21: with the sliders at SLIDER_MIN no control row
+# clips at 1366x768.
+MIN_WINDOW = (1366, 768)
+
+
+def min_window(screen_w, screen_h, floor=MIN_WINDOW):
+    """``(w, h)`` the window may not shrink below: the floor, never past the screen."""
+    return min(floor[0], screen_w), min(floor[1], screen_h)
 
 
 def initial_window(screen_w, screen_h, frac=0.85, min_w=1024, min_h=680):

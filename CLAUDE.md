@@ -637,6 +637,15 @@ features ahead of everything else.*
 
 **2026-10-21**
 
+- **[UI, user-directed] The window adapts to smaller screens ("bisschen flex").** The floor was a fixed `minsize(1920, 1080)`, larger than a 1366x768 laptop, a 125 % scaled screen or a CI runner, so the window hung off the display. Now it is `layout.min_window(screen)`: `MIN_WINDOW = (1366, 768)`, never larger than the screen.
+  - Two changes make 1366x768 fit; measured, no row asks more than it gets:
+    - every Scale requests `length=layout.SLIDER_MIN`, which went 80 → 60. The ttk default of 100 px was a hidden floor;
+    - `Compact.TButton` gets `width=-6`, i.e. at least 6 characters, else as wide as the text. The ttk default of ~11 characters made every key 89 px.
+  - Rows went from 765/782 to 575/600 px, inside a 671 px field. Looked at in a 1366x768 screenshot.
+  - Pinned by `test_layout.test_the_window_floor_never_exceeds_the_screen`, red when sabotaged.
+  - The two GUI tests that need a taller window than a runner's display holds now skip only when the window could not grow at all (`_skip_if_window_cannot_grow`). They still run here: the screen is 2048x1152.
+  - `run_tests.py` also catches `unittest.SkipTest`, which `test_gui` imports.
+  - `--full`: 376 tests, 1 failed (the untracked asset), 3 skipped. `debug_ui` clean.
 - **[user-directed] The public repo carries only what users and developers need.** Untracked but kept on disk, now in `.gitignore`: `QWEN.md`, `knowledge.md`, `powerdebug-report.md`, `.qwen/`, `.claude/`, `skills/`, `analysis/`, the internal plans in `docs/` (overhaul, ha-layout, layout spec/plan, qwen-knowledge, worker-*), and the worker/one-off tools (`worker_agent`, `worker_bench`, `powerdebug`, `verify_findings`, `probe_gestures`, `cap_sweep`, `measure_cost`, `shoot`). Root scratch (layout mockups, screenshots, `.playwright-mcp/`, the C64 font) is ignored. CLAUDE.md stays tracked (user). The files below that point at these paths still work locally. They are still in the git history.
 - **CI after `766a0ef`:** ubuntu 3.9/3.12 and windows 3.9/3.12 are green for the first time. `full-windows` has 2 failures, both the runner's display: the window cannot grow past 1044 px (`test_the_window_is_the_cross_and_nothing_else`) and `test_the_preview_gives_up_retrying...`. This is the experiment Open B.7 predicted. Not fixed.
 - **[fix] CI was red on every job, Windows included; two causes, read from the real Actions logs** (job logs fetched through the API with the stored git credential):

@@ -458,9 +458,12 @@ def apply_theme(root, palette=None):
                                          ("disabled", p["line"])])
 
     # The control strip's compact set (2026-10-20): same colours, minimum height.
-    st.configure("Compact.TButton", padding=(padx, 0))
+    # width=-6: at least six characters, otherwise as wide as the text. The ttk
+    # default (~11 characters) made every key 89 px and the action row 782 px,
+    # too wide for a 1366 px window (2026-10-21).
+    st.configure("Compact.TButton", padding=(padx, 0), width=-6)
     st.configure("Accent.Compact.TButton", background=p["accent"],
-                 foreground=on_accent(p["accent"]), padding=(10, 0))
+                 foreground=on_accent(p["accent"]), padding=(10, 0), width=-6)
     st.map("Accent.Compact.TButton", background=[("active", p["accent"]),
                                                  ("disabled", p["line"])])
     st.configure("Compact.TCheckbutton", background=p["bg"], foreground=p["text"],
@@ -1611,7 +1614,7 @@ class ReviewPanel(tk.Frame):
             "On a corner view with two facades this necessarily makes the second "
             "one worse - it is a special case, not a default.")
         self._yaw_scale = ttk.Scale(h, from_=-60, to=60, variable=self.v_yaw,
-                                    orient="horizontal",
+                                    orient="horizontal", length=layout.SLIDER_MIN,
                                     command=lambda _v: self._on_slider())
         self._yaw_scale.grid(row=0, column=1, sticky="ew", padx=3)
         self._yaw_spin = ttk.Spinbox(h, textvariable=self.v_yaw, from_=-60, to=60,
@@ -1626,7 +1629,7 @@ class ReviewPanel(tk.Frame):
         # write lives on the variable's trace, not on the scale's command.
         ttk.Label(h, text="detail (px kept)").grid(
             row=0, column=3, sticky="w", padx=(layout.CTRL_COL_GAP_PX, 0))
-        self._keep_px_scale = ttk.Scale(h, from_=0.0, to=1.0,
+        self._keep_px_scale = ttk.Scale(h, from_=0.0, to=1.0, length=layout.SLIDER_MIN,
                                         variable=self.v_keep_px,
                                         orient="horizontal")
         self._keep_px_scale.grid(row=0, column=4, sticky="ew", padx=3)
@@ -1697,7 +1700,7 @@ class ReviewPanel(tk.Frame):
         gap = layout.CTRL_COL_GAP_PX if col else 0
         ttk.Label(parent, text=label).grid(row=0, column=c, sticky="w", padx=(gap, 0))
         sc = ttk.Scale(parent, from_=lo, to=hi, variable=var, orient="horizontal",
-                       command=lambda _v: self._on_slider())
+                       length=layout.SLIDER_MIN, command=lambda _v: self._on_slider())
         sc.grid(row=0, column=c + 1, sticky="ew", padx=3)
         parent.columnconfigure(c + 1, weight=1, minsize=layout.SLIDER_MIN)
         sp = ttk.Spinbox(parent, textvariable=var, from_=lo, to=hi, increment=inc,
@@ -2237,7 +2240,7 @@ class ReviewPanel(tk.Frame):
     def _slider(self, parent, row, label, var, lo, hi, unit, inc, fmt):
         ttk.Label(parent, text=label, width=18).grid(row=row, column=0, sticky="w")
         sc = ttk.Scale(parent, from_=lo, to=hi, variable=var, orient="horizontal",
-                       command=lambda _v: self._on_slider())
+                       length=layout.SLIDER_MIN, command=lambda _v: self._on_slider())
         sc.grid(row=row, column=1, sticky="ew", padx=6)
         parent.columnconfigure(1, weight=1, minsize=layout.SLIDER_MIN)
         # The scale reaches a region by eye; the spinbox is for the last fraction
@@ -5061,12 +5064,10 @@ class App(_ROOT_CLASS):
         sw, sh = self.winfo_screenwidth(), self.winfo_screenheight()
         gw, gh = layout.initial_window(sw, sh)
         self.geometry(f"{gw}x{gh}")
-        # Floor raised to 1920x1080 (user, 2026-09-13): below that the review
-        # controls under-subscribe -- the angle columns and status box clip.
-        # Note this alone does NOT fit the single-row Save/queue buttons: at
-        # 1920 wide the controls field is ~910px while that row needs ~1791px,
-        # so those stay unreachable until the btns sub-row split lands.
-        self.minsize(1920, 1080)
+        # Floor follows the screen (layout.min_window): at most 1366x768, the
+        # size the control strip was measured to fit, never larger than the
+        # display. It was a fixed 1920x1080 that hung off smaller screens.
+        self.minsize(*layout.min_window(sw, sh))
         apply_theme(self)
         self._last_applied_theme = "Minimal Black"
         # Deferred: the caption is only honoured once the window is mapped, and

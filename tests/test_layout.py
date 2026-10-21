@@ -295,3 +295,12 @@ def test_the_drawn_glyph_pen_is_one_number_and_follows_the_glyph_size():
         assert L.glyph_stroke(size) >= 2, size
         assert L.glyph_stroke(size) <= size // 4, (
             f"a {L.glyph_stroke(size)} px pen in a {size} px glyph is a blob")
+
+
+def test_the_window_floor_never_exceeds_the_screen():
+    """The floor was a fixed 1920x1080, larger than many screens."""
+    assert L.MIN_WINDOW == (1366, 768)
+    for sw, sh in ((1024, 768), (1366, 768), (1536, 864), (1920, 1080), (3840, 2160)):
+        w, h = L.min_window(sw, sh)
+        assert w <= sw and h <= sh
+        assert (w, h) == (min(1366, sw), min(768, sh))
