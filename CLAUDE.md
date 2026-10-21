@@ -637,6 +637,9 @@ features ahead of everything else.*
 
 **2026-10-21**
 
+- **[docs/UI, user-directed] README short, Horizontal auto featured, detail in hover help.** README 272 → ~95 lines: both modes up front, an HA section with a before/after (`docs/horizontal-auto.jpg`, Mariánské Hory, CC BY-SA 2.5, via `drive_review --strip 0.30 0.70`: yaw 59.4°, after lean -0.06°/slope -0.11°; without the strip the save refuses at yaw 60, folds) aimed at 3D textures / street-view grabs. The tool table, overlay prose, option table and log section are gone; their content lives in the tooltips (`--help` for the CLI). The weights table moved to `docs/masking.md`. New/rewritten tooltips: the two mode buttons, horizontal auto (the old one called it "a special case, not a default"), Check lines.
+- **[UI, user] Hover help waits `layout.TOOLTIP_DELAY_MS = 1000` ms**; leaving or clicking before then cancels it. Pinned by `test_hover_help_waits_a_second_before_it_appears`, red with the delay at 0. `test_gui` 43/0, `debug_ui` clean.
+
 - **[UI, user-directed] The window adapts to smaller screens ("bisschen flex").** The floor was a fixed `minsize(1920, 1080)`, larger than a 1366x768 laptop, a 125 % scaled screen or a CI runner, so the window hung off the display. Now it is `layout.min_window(screen)`: `MIN_WINDOW = (1366, 768)`, never larger than the screen.
   - Two changes make 1366x768 fit; measured, no row asks more than it gets:
     - every Scale requests `length=layout.SLIDER_MIN`, which went 80 → 60. The ttk default of 100 px was a hidden floor;

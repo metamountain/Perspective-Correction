@@ -304,3 +304,16 @@ model runs in whichever interpreter can load it, and everything afterwards --
 batch runs, the GUI, another machine -- consumes a folder of PNGs. A user who
 prefers a different segmenter gets the same benefit through `--mask file`
 without this project learning about it.
+
+## Model weights (not in this repository)
+
+Several gigabytes, single files over GitHub's 100 MB limit, so not committed:
+
+| what | where it goes | download |
+|---|---|---|
+| BiRefNet HR (`--mask birefnet`) | `models/BiRefNet/` | [ZhengPeng7/BiRefNet_HR](https://huggingface.co/ZhengPeng7/BiRefNet_HR) |
+| Grounding DINO (`--mask gdino`) | `models/GroundingDINO/` | [IDEA-Research/GroundingDINO](https://github.com/IDEA-Research/GroundingDINO) (`transformers` build: `config.json` + `.safetensors`) |
+| SAM 2.1 | `models/sam2/` | [facebookresearch/sam2](https://github.com/facebookresearch/sam2) |
+
+`--mask-info` reports whether they load; `--birefnet-model auto` finds them in
+the usual ComfyUI folders. The M-LSD model is small and vendored in `models/`.

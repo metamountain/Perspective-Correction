@@ -981,11 +981,28 @@ class _NoticeLabel:
 
 
 def _attach_tooltip(widget, text):
-    """A plain hover tooltip; no dependency beyond Tk itself."""
-    tip = {"t": None}
+    """A plain hover tooltip; no dependency beyond Tk itself.
+
+    It waits ``layout.TOOLTIP_DELAY_MS`` (user: not at once, after 1 s), so a
+    pointer passing over the palette does not flash help.
+    """
+    tip = {"t": None, "job": None}
+
+    def arm(_e=None):
+        cancel()
+        tip["job"] = widget.after(layout.TOOLTIP_DELAY_MS, show)
+
+    def cancel():
+        if tip["job"] is not None:
+            try:
+                widget.after_cancel(tip["job"])
+            except tk.TclError:
+                pass
+            tip["job"] = None
 
     def show(_e=None):
-        if tip["t"] is not None:
+        tip["job"] = None
+        if tip["t"] is not None or not widget.winfo_exists():
             return
         t = tk.Toplevel(widget)
         t.configure(bg=INK["cross"])
@@ -1000,12 +1017,14 @@ def _attach_tooltip(widget, text):
         tip["t"] = t
 
     def hide(_e=None):
+        cancel()
         if tip["t"] is not None:
             tip["t"].destroy()
             tip["t"] = None
 
-    widget.bind("<Enter>", show)
+    widget.bind("<Enter>", arm)
     widget.bind("<Leave>", hide)
+    widget.bind("<ButtonPress>", hide, add="+")
 
 
 # ==========================================================================
@@ -1349,8 +1368,11 @@ class ReviewPanel(tk.Frame):
                               variable=self.v_after_outline)
         _ol.pack(side="left", padx=(4, 0))
         _attach_tooltip(_ol, "Draw the photograph's own border where the warp put it")
-        ttk.Checkbutton(gridbar, text="Check lines", command=self._schedule_redraw,
-                        variable=self.v_after_lines).pack(side="left", padx=(4, 0))
+        _cl = ttk.Checkbutton(gridbar, text="Check lines", command=self._schedule_redraw,
+                              variable=self.v_after_lines)
+        _cl.pack(side="left", padx=(4, 0))
+        _attach_tooltip(_cl, "Re-detect lines on the corrected picture:\n"
+                             "green = truly vertical or level, red = still leans.")
         gridbar.place(relx=1.0, x=-8, y=8, anchor="ne")
         self._pending_mark = None
         self._after_off = (0, 0)
@@ -1514,12 +1536,21 @@ class ReviewPanel(tk.Frame):
 
     def _strip_mode(self, row):
         """Topic: which correction is being driven (Auto / Horizontal auto)."""
+        tips = {
+            "auto": "Straighten converging verticals and level the frame:\n"
+                    "roll, pitch and focal length, a camera rotation.",
+            "horizontal": "Turn an obliquely shot facade into a frontal view:\n"
+                          "verticals plumb AND horizontals level, a true rectangle.\n"
+                          "For textures, street-view grabs and elevation tracing.\n"
+                          "On a corner view place the facade strip on one wall.",
+        }
         for _txt, _val in (("Auto", "auto"), ("Horizontal auto", "horizontal")):
-            ttk.Radiobutton(row, text=_txt, value=_val,
-                            style="Mode.Toolbutton",
-                            variable=self.v_corr_mode,
-                            command=self._show_mode).pack(
-                side="left", fill="x", expand=True)
+            _rb = ttk.Radiobutton(row, text=_txt, value=_val,
+                                  style="Mode.Toolbutton",
+                                  variable=self.v_corr_mode,
+                                  command=self._show_mode)
+            _rb.pack(side="left", fill="x", expand=True)
+            _attach_tooltip(_rb, tips[_val])
 
     @staticmethod
     def _put(row, widget, weight=2):
@@ -1610,9 +1641,10 @@ class ReviewPanel(tk.Frame):
         _hchk.grid(row=0, column=0, sticky="w")
         _attach_tooltip(
             _hchk,
-            "Square the camera onto one horizontal direction via vanishing point.\n"
-            "On a corner view with two facades this necessarily makes the second "
-            "one worse - it is a special case, not a default.")
+            "Send the facade's horizontal vanishing point to infinity:\n"
+            "the wall comes out frontal, horizontals level.\n"
+            "A drawn horizontal line overrules the detector.\n"
+            "On a corner view only one wall can be frontal.")
         self._yaw_scale = ttk.Scale(h, from_=-60, to=60, variable=self.v_yaw,
                                     orient="horizontal", length=layout.SLIDER_MIN,
                                     command=lambda _v: self._on_slider())

@@ -1965,3 +1965,36 @@ def test_the_fill_progress_notice_goes_away_once_the_preview_is_drawn():
         assert not r._wait.winfo_ismapped(), "the fill notice outlived the redraw"
     finally:
         app.destroy()
+
+
+def test_hover_help_waits_a_second_before_it_appears():
+    import tkinter as tk
+    from pc import gui as G
+    root = tk.Tk()
+    root.geometry("200x80-4000+0")
+    try:
+        b = tk.Button(root, text="x")
+        b.pack()
+        G._attach_tooltip(b, "help")
+        root.update()
+
+        def tips():
+            return [w for w in b.winfo_children() if isinstance(w, tk.Toplevel)]
+
+        b.event_generate("<Enter>")
+        root.update()
+        assert not tips(), "help appeared at once"
+        # a pointer that leaves before the delay never sees it
+        b.event_generate("<Leave>")
+        end = time.time() + layout.TOOLTIP_DELAY_MS / 1000 + 0.3
+        while time.time() < end:
+            root.update(); time.sleep(0.02)
+        assert not tips(), "help appeared after the pointer left"
+        # staying shows it after the delay
+        b.event_generate("<Enter>")
+        end = time.time() + layout.TOOLTIP_DELAY_MS / 1000 + 0.3
+        while time.time() < end and not tips():
+            root.update(); time.sleep(0.02)
+        assert tips(), "help never appeared"
+    finally:
+        root.destroy()

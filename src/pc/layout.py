@@ -299,6 +299,7 @@ CROSS_BOT_WEIGHT = 0
 # inside the picture (top-left) rather than in the black below it.
 LABEL_INSET_PX = 6
 NOTICE_MS = 4000   # ms a state-change prompt stays on screen
+TOOLTIP_DELAY_MS = 1000   # hover this long before help appears (user)
 
 
 def perfect_cross_field(pane_w, pane_h, gap=CROSS_GAP, border=CROSS_BORDER):
