@@ -637,6 +637,8 @@ features ahead of everything else.*
 
 **2026-10-21**
 
+- **[repo, user-directed] Git carries only the test photos the suite names**: `79cb33878…jpg`, `1070912stkzg.jpg`, `Alte_Scheune.jpg` (with masks), `Horizontal/Platte_1.jpg`, plus `roi.json` and the READMEs. Untracked, kept on disk, re-ignored in `.gitignore`: 39079116, Mariánské Hory, Antibes, the avif, cedric-vilim, hospital, lochfassade, their masks, `sam2_masks/`, and the unlinked `docs/before-after.jpg`/`detection.jpg`. Two `test_gui` tests used lochfassade and now use 1070912stkzg. Checked on a `git archive HEAD` export (what CI sees): `--full` 377 tests, 0 failed, 4 skipped. **CI's `test_assets` now samples 3 photos, not 5, and the `_ALWAYS` hard cases are local-only**; the full pool runs here.
+
 - **[docs/UI, user-directed] README short, Horizontal auto featured, detail in hover help.** README 272 → ~95 lines: both modes up front, an HA section with a before/after (`docs/horizontal-auto.jpg`, Mariánské Hory, CC BY-SA 2.5, via `drive_review --strip 0.30 0.70`: yaw 59.4°, after lean -0.06°/slope -0.11°; without the strip the save refuses at yaw 60, folds) aimed at 3D textures / street-view grabs. The tool table, overlay prose, option table and log section are gone; their content lives in the tooltips (`--help` for the CLI). The weights table moved to `docs/masking.md`. New/rewritten tooltips: the two mode buttons, horizontal auto (the old one called it "a special case, not a default"), Check lines.
 - **[UI, user] Hover help waits `layout.TOOLTIP_DELAY_MS = 1000` ms**; leaving or clicking before then cancels it. Pinned by `test_hover_help_waits_a_second_before_it_appears`, red with the delay at 0. `test_gui` 43/0, `debug_ui` clean.
 

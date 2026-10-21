@@ -109,7 +109,7 @@ def test_adding_photographs_walks_them_and_the_batch_is_one_footer_button():
     try:
         app.geometry("1920x1080-4000+0")
         app.update_idletasks(); app.update()
-        second = os.path.join(os.path.dirname(ASSET), "lochfassade.jpg")
+        second = os.path.join(os.path.dirname(ASSET), "1070912stkzg.jpg")
         app._add([ASSET, second])
         _settle(app)
         assert getattr(app, "worker", None) is None, (
@@ -118,7 +118,7 @@ def test_adding_photographs_walks_them_and_the_batch_is_one_footer_button():
         assert app._review_total == 2 and app._review_queue == [os.path.abspath(second)]
         app.review._skip()
         _settle(app)
-        assert os.path.basename(app.review.session.path) == "lochfassade.jpg", (
+        assert os.path.basename(app.review.session.path) == "1070912stkzg.jpg", (
             "Skip did not walk on to the next photograph")
         assert str(app.btn_batch.cget("style")) != "Accent.TButton"
         assert app.btn_batch.winfo_ismapped(), "the batch button is not on screen"
@@ -1855,7 +1855,7 @@ def test_opening_a_file_replaces_the_photo_and_asks_only_when_it_changed():
     tmp = tempfile.mkdtemp()
     app = _app()
     try:
-        names = ("lochfassade.jpg", "Alte_Scheune.jpg", "79cb33878fd0ed76d368e7cfa8827e15.jpg")
+        names = ("1070912stkzg.jpg", "Alte_Scheune.jpg", "79cb33878fd0ed76d368e7cfa8827e15.jpg")
         a, b, c = (shutil.copy(os.path.join(os.path.dirname(ASSET), n), tmp) for n in names)
         app.geometry("1600x1000-4000+0")
         app.update_idletasks(); app.update()
@@ -1881,7 +1881,7 @@ def test_opening_a_file_replaces_the_photo_and_asks_only_when_it_changed():
         answers.append(True)                                   # Yes: save first
         app._add([a]); _settle(app)
         assert os.path.exists(os.path.join(tmp, names[2][:-4] + "_corr.jpg")), "Yes did not save"
-        assert os.path.basename(r.session.path) == "lochfassade.jpg"
+        assert os.path.basename(r.session.path) == "1070912stkzg.jpg"
         assert len(asked) == 3
 
         app._add([tmp]); _settle(app)                          # a folder walks
