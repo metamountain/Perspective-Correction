@@ -101,7 +101,7 @@ def main(argv=None):
     GUI.messagebox.showwarning = lambda title, msg, **_k: dialogs.append(f"{title}: {msg}")
     GUI.messagebox.askyesno = lambda *_a, **_k: False
 
-    app = App(start_maximized=False)
+    app = App(start_maximized=False, in_taskbar=False)
     app.geometry("1920x1080-4000+0")
     _pump(app, 20)
     r = app.review

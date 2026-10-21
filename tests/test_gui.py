@@ -42,7 +42,7 @@ def _app():
     if getattr(GUI.messagebox.askyesnocancel, "__module__", "") == "tkinter.messagebox":
         GUI.messagebox.askyesnocancel = _no_dialog
     try:
-        app = App(start_maximized=False)
+        app = App(start_maximized=False, in_taskbar=False)
     except Exception as exc:
         # Only a MISSING DISPLAY may skip.  This caught everything, so a plain
         # AttributeError in `_build` -- a button wired to a method that no
@@ -1551,8 +1551,12 @@ def test_no_tools_field_row_asks_for_more_width_than_it_gets():
     """
     app = _app()
     try:
-        app.geometry("1920x1080-4000+0")          # the window's own minsize
+        fw, fh = layout.MIN_WINDOW                # the window's own floor
+        app.geometry(f"{fw}x{fh}-4000+0")
         app.update(); time.sleep(0.02)
+        if app.winfo_width() < fw or app.winfo_height() < fh:
+            raise SkipTest(f"the display cannot hold the {fw}x{fh} floor "   # noqa: F821
+                           f"(got {app.winfo_width()}x{app.winfo_height()})")
         app._add([ASSET])
         _settle(app)
         review = app.review
@@ -1614,8 +1618,18 @@ def test_no_tools_field_row_asks_for_more_width_than_it_gets():
                     too_wide.append(
                         f"{need}px wanted in {field}px on line {key}: "
                         + ", ".join(labels))
+        # A row's own container can grow with it while the clip happens a level
+        # up, so also ask every mapped container in the panel.
+        def _walk(w):
+            for c in w.winfo_children():
+                if c.winfo_ismapped() and c.winfo_children():
+                    if c.winfo_reqwidth() > c.winfo_width() + 2:
+                        too_wide.append(f"{c.winfo_reqwidth()}px wanted in "
+                                        f"{c.winfo_width()}px by {c}")
+                    _walk(c)
+        _walk(review)
         assert not too_wide, (
-            "a control row is clipped at the 1920x1080 window floor:\n  "
+            f"a control row is clipped at the {fw}x{fh} window floor:\n  "
             + "\n  ".join(too_wide))
     finally:
         app.destroy()

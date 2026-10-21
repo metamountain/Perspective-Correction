@@ -77,7 +77,7 @@ _LOG_BEFORE = _errlog_size()
 
 
 print("== 1. construct empty, cross must build ==")
-app = App(start_maximized=False)
+app = App(start_maximized=False, in_taskbar=False)
 app.geometry("1600x1000-4000+0")
 pump(app)
 r = app.review

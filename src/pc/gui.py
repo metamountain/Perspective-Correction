@@ -5051,8 +5051,16 @@ class ReviewPanel(tk.Frame):
 # batch window
 # ==========================================================================
 class App(_ROOT_CLASS):
-    def __init__(self, initial=None, start_maximized=True, start_fullscreen=False):
+    def __init__(self, initial=None, start_maximized=True, start_fullscreen=False,
+                 in_taskbar=True):
         super().__init__()
+        if not in_taskbar:
+            # Off-screen windows of the tests and tools: a tool window has no
+            # taskbar button on Windows (user, 2026-10-21). Elsewhere a no-op.
+            try:
+                self.attributes("-toolwindow", True)
+            except tk.TclError:
+                pass
         self.title(f"Perspective Correction  v{__version__}")
         # The window opens maximized, so this is the size it *restores* to.
         # It used to be a hardcoded 1920x1080, which is too small on a 1440p or
