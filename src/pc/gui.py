@@ -4113,6 +4113,12 @@ class ReviewPanel(tk.Frame):
             # discards, so the picture keeps one size and one scale for the whole
             # session instead of leaping every time a corner moves.
             after = self.session.render_after(max_edge=max(lock_a), apply_crop=False)
+            # A live fill reports its steps through `_fill_step`, which raises
+            # the "filled -- 100%" notice; the render is synchronous, so once it
+            # returns the fill is done and the notice must go (it stayed up for
+            # good once live lama became the default).
+            if not getattr(self, "_busy", False):
+                self._wait_hide()
             self._after_base = after      # un-veiled, preview-sized; _show_after bakes it
             self._after_box = lock_a
             self._after_live = box_a      # centred in this, fitted to lock_a

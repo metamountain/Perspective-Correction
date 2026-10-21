@@ -1094,7 +1094,10 @@ def test_phosphor_lays_a_graded_ground_and_takes_it_away_again():
                 f"{name} ground is not the lowest item -- it would cover the picture")
 
         app._switch_theme("Dark Grey")
-        _settle(app)
+        # wait for the redraw, not a fixed count: with live lama the default a
+        # redraw takes about a second and a fixed pump raced it under load
+        _settle_until(app, lambda: not (review.c_before.find_withtag("ground")
+                                        or review.c_after.find_withtag("ground")), n=400)
         assert INK.get("grad") is None, (
             "the Phosphor gradient outlived Phosphor: INK still carries it")
         for name in ("c_before", "c_after"):
@@ -1915,5 +1918,23 @@ def test_the_outline_switch_draws_the_source_border_where_the_warp_put_it():
             assert min(ys) >= oy - 1 and max(ys) <= oy + r._ph_a.height() + 1, ys
         r.v_after_outline.set(False); r._toggle_outline(); r._redraw(); _settle(app, 10)
         assert not r.c_after.find_withtag("outline"), "outline survived switching it off"
+    finally:
+        app.destroy()
+
+
+def test_the_fill_progress_notice_goes_away_once_the_preview_is_drawn():
+    """With live lama the default (2026-10-21) the preview reports its fill
+    steps, which raises the "filled -- 100%" notice -- and nothing took it down
+    again, so it sat over the cross for good. Reported through the session's
+    real step callback, as the fill does."""
+    app = _app()
+    try:
+        _loaded(app, 1920, 1080)
+        r = app.review
+        r._fill_step("filled", 1.0)
+        _settle(app, 5)
+        assert r._wait.winfo_ismapped(), "premise: the step callback shows the notice"
+        r._redraw(); _settle(app, 10)
+        assert not r._wait.winfo_ismapped(), "the fill notice outlived the redraw"
     finally:
         app.destroy()

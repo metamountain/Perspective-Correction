@@ -23,7 +23,7 @@ basis, each against its own measurement.
 
 ## The window
 
-![The review window at 1920×1080: the two preview fields on top take the larger share, loader and controls below, around a black cross. Top left the original with detected lines drawn on it and the tool palette down its edge; top right the corrected frame with crop handles; bottom left the detector and mask controls; bottom right the angle sliders and the Review/Unattended bar.](docs/ui.png)
+![The review window at 1920×1080 on hospital-nikon-d60_f27.jpg: top left the original with the detected verticals (green) and horizontals (blue) and the tool palette down its edge; top right the corrected frame in Auto mode, verticals straight, with the auto crop and its handles; below, the detector and mask controls and the Auto / Horizontal auto strip with the angle sliders, fill, crop and Save.](docs/ui.png)
 
 The window *is* a cross of four fields, the two previews on top taking the
 larger share. **Top left** is the original, with
@@ -31,10 +31,13 @@ what the estimator saw drawn over it and the tools that change the input running
 down its edge. **Top right** is the result, at the same scale as the original so
 the two can be compared honestly, with a crop rectangle whose discarded area is
 shaded rather than cut — the picture never moves while you drag. Grey guides are
-pulled out of the black cross with the mouse and laid against an edge; a true
-vertical should run parallel to one. **Bottom left** finds things: line detector,
-brush width, mask source. **Bottom right** edits them: roll, pitch, yaw, crop,
-and the buttons the review ends on.
+pulled from a 16 px band around the picture's edge and laid against an edge; a
+true vertical should run parallel to one. **Outline** draws where the photo's own
+border landed, **Check lines** re-detects lines on the result. **Bottom left**
+finds things: line detector and mask source. **Bottom right** edits them: the
+Auto / Horizontal auto switch with its angles (roll, pitch, focal; yaw and detail
+in Horizontal auto), fill, crop, and the buttons the review ends on. Lines you
+draw by hand always win over the detector.
 
 Every tool sits on the picture it acts on, and the palette is one set of marks
 drawn at one pen weight:

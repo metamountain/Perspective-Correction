@@ -111,11 +111,12 @@ line, and the topmost one of those would pull the crop up into the building."""
 EAVE_HEADROOM = 0.10
 # Auto crop with a fill on is the fill-free rectangle grown by these shares of
 # its width and height, half on each side (user, 2026-10-21: "a little bigger,
-# +10%", then "add vertical 20 ... motifs need more flesh"), and never past the
+# +10%", "add vertical 20", then "increase vertical 30" -- "I always have to
+# drag it further"), and never past the
 # image outline -- the warped photograph's own extent. The fill covers what the
 # growth takes in; with no fill nothing grows.
 AUTO_CROP_GROW_X = 0.10
-AUTO_CROP_GROW_Y = 0.20
+AUTO_CROP_GROW_Y = 0.30
 """How much of the crop height the auto-crop keeps above the eave when a fill is
 active.  The fill invents the sky above the roof, so a crop that starts at the
 roofline leaves none; this much headroom reads as sky, not as a cut-off roof."""

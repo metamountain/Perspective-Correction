@@ -885,11 +885,12 @@ def test_the_auto_crop_contains_no_invented_pixel():
 # property-for-property, not just work in the one happy-path test above.
 # --------------------------------------------------------------------------
 
-def test_with_a_fill_on_the_auto_crop_grows_10_wide_20_tall_inside_the_outline():
+def test_with_a_fill_on_the_auto_crop_grows_10_wide_30_tall_inside_the_outline():
     """User, 2026-10-21: "set auto crop a little bigger, +10%", then "add
-    vertical 20 ... not more than image outline". With a fill on, the fill
+    vertical 20 ... not more than image outline", then "increase vertical 30".
+    With a fill on, the fill
     covers what the growth takes in, so the fill-free rectangle grows 10% in
-    width and 20% in height, centred, and never past the warped photograph's
+    width and 30% in height, centred, and never past the warped photograph's
     extent. Without a fill nothing grows (the previous test). A level camera's
     eave rule is kept out of it, so only the growth is measured."""
     from pc import warp as W
@@ -902,8 +903,8 @@ def test_with_a_fill_on_the_auto_crop_grows_10_wide_20_tall_inside_the_outline()
         assert s.auto_crop()
         return s
 
-    assert (W.AUTO_CROP_GROW_X, W.AUTO_CROP_GROW_Y) == (0.10, 0.20), (
-        "+10% wide, +20% tall are the user's numbers, not tuning knobs")
+    assert (W.AUTO_CROP_GROW_X, W.AUTO_CROP_GROW_Y) == (0.10, 0.30), (
+        "+10% wide, +30% tall are the user's numbers, not tuning knobs")
     for pitch in (4.0, 9.0, 20.0):
         s0, s1 = crop("none", pitch), crop("telea", pitch)
         roll, p_, f, _ = s1.current_angles()
@@ -912,7 +913,7 @@ def test_with_a_fill_on_the_auto_crop_grows_10_wide_20_tall_inside_the_outline()
         quad = W.warped_quad(H_total, s1.w, s1.h)
         a = np.array(s0.crop_rect) * [ow, oh, ow, oh]
         b = np.array(s1.crop_rect) * [ow, oh, ow, oh]
-        gx = 0.05 * (a[2] - a[0]); gy = 0.10 * (a[3] - a[1])
+        gx = 0.05 * (a[2] - a[0]); gy = 0.15 * (a[3] - a[1])
         want = [max(0, quad[:, 0].min(), a[0] - gx), max(0, quad[:, 1].min(), a[1] - gy),
                 min(ow, quad[:, 0].max(), a[2] + gx), min(oh, quad[:, 1].max(), a[3] + gy)]
         assert np.allclose(b, want, atol=1.5), f"pitch {pitch}: crop {b.round(1)} != {np.round(want, 1)}"
