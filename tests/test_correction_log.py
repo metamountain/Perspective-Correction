@@ -10,7 +10,7 @@ from pc import correction_log as CLOG
 class _FakeResult:
     def __init__(self, **kw):
         self.status = kw.get("status", "OK")
-        self.src = kw.get("src", "D:\\photos\\IMG_0421.jpg")
+        self.src = kw.get("src", os.path.join("photos", "IMG_0421.jpg"))
         self.roll_deg = kw.get("roll_deg", 1.2)
         self.pitch_deg = kw.get("pitch_deg", -3.1)
         self.yaw_deg = kw.get("yaw_deg", 7.32)
