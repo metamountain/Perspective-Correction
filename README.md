@@ -21,6 +21,33 @@ rejected on sight — and refusing early instead costs a correction that was
 wanted. The caps and confidence gates are being re-decided one at a time on that
 basis, each against its own measurement.
 
+## Detectors first, a few seconds of your hand second
+
+The strength is the mix. A line detector finds the facade's structure faster
+than anyone could trace it: LSD returns 430–575 segments in 50–200 ms, M-LSD a
+cleaner 85–110 in about half a second (three test photographs at the 1600 px
+analysis size), or run both together. The fit sorts them into the building's
+directions on its own, and on most photographs that is the whole job. Where it
+is not, the detector is wrong in a way a person sees at a glance and a model does
+not: parked cars, a sloping street, roof battens,
+scaffolding, the second wall of a corner view. So the correction is a few
+seconds of hand work on the picture itself, and every gesture goes straight back
+into the fit and the preview:
+
+- **paint it out**: one brush stroke over the cars or the street, and their
+  lines stop counting (`b`, Shift+drag sizes the pen, right drag erases);
+- **box it in**: drag a box around the building, SAM segments it and everything
+  outside is ignored (`s`); or name it and let Grounding DINO find it;
+- **strike slanted**: drop every line that is neither vertical nor horizontal,
+  usually the roof, in one click;
+- **draw the truth**: drag along one edge you know is vertical or level. A drawn
+  line comes out *exactly* vertical or horizontal (0.000° measured), one line
+  steers the detector's answer, and two plus two drawn lines make a true
+  rectangle with every corner at 90°.
+
+Detector for the bulk, a person for the part the detector cannot know. Neither
+alone gets there as fast.
+
 ## The window
 
 ![The review window at 1920×1080 on hospital-nikon-d60_f27.jpg: top left the original with the detected verticals (green) and horizontals (blue) and the tool palette down its edge; top right the corrected frame in Auto mode, verticals straight, with the auto crop and its handles; below, the detector and mask controls and the Auto / Horizontal auto strip with the angle sliders, fill, crop and Save.](docs/ui.png)
@@ -45,7 +72,7 @@ drawn at one pen weight:
 | tool | key | what it is for |
 |---|---|---|
 | **Mark** | `m` | drag a line along an edge you know is truly vertical or horizontal, and it outranks the detector. Which of the two it means is read off the drag — steeper than 45° is a vertical — and the rubber band is tinted by that decision while you drag, so you see it before you let go. A click that never moved deletes the mark under it |
-| **Mask brush** | `b` | paint over what the fit should ignore. A stroke across the parked cars says "not the building" directly, which is faster than arguing with a segmenter. Left drag paints, right drag erases, `Alt`+right drag sizes the pen |
+| **Mask brush** | `b` | paint over what the fit should ignore. A stroke across the parked cars says "not the building" directly, which is faster than arguing with a segmenter. Left drag paints, right drag erases, `Shift`+left drag or `Alt`+right drag sizes the pen |
 | **PC Rectangle** | `p` | click the four corners of one facade to rectify that surface instead of rotating the camera. The tool when one flat plane has to come out exactly square |
 | **Box-select (SAM)** | `s` | drag a box around the building; SAM segments it and everything outside is ignored |
 | **Grounding DINO** | | find the building by name instead of by hand, and mask the rest |
@@ -61,11 +88,10 @@ detector is not M-LSD, a second M-LSD pass is drawn in cyan and yellow beside it
 which answers "would another front end have found this facade?" while you are
 looking at the lines.
 
-**Review** walks the selection one photograph at a time and writes only on Save.
-**Unattended** is the old fire-and-forget run, kept for when you want it. The
-settings panel under the sliders is titled *defaults every photograph opens
-with*: the same names appear in the panel itself, where they override the default
-for the image in front of you only.
+Opening photographs walks them one at a time: **Save**, **Skip** or **Close**
+opens the next, and nothing is written until Save. The old fire-and-forget run
+is one **batch** button in the footer, kept for when you want it; whatever it
+skips opens for review afterwards.
 
 ## What it sees
 
