@@ -137,12 +137,10 @@ def build_parser():
 
     g = p.add_argument_group("detection")
     g.add_argument("--detector",
-                   choices=["lsd", "fld", "mlsd", "hybrid", "union",
-                            "deeplsd", "deep-hybrid", "deep-union"],
+                   choices=["lsd", "mlsd"],
                    default="lsd",
-                   help="line detector; mlsd/hybrid/union need a TFLite runtime, "
-                        "deeplsd/deep-* need torch and a DeepLSD checkout "
-                        "(see docs/detectors.md for the measurements)")
+                   help="line detector; mlsd needs a TFLite runtime "
+                        "(pip install --no-deps ai-edge-litert)")
     g.add_argument("--mlsd-model", default="",
                    help="M-LSD tflite model path, or a filename inside models/")
     g.add_argument("--deeplsd-model", default="",
@@ -517,9 +515,9 @@ def detector_info(args) -> int:
     from . import mlsd as ML
     print(f"interpreter: {_sys.executable}")
     print(f"  lsd/fld  opencv {cv2.__version__}")
-    print(f"  {'yes' if ML.available(args.mlsd_model) else 'no '}  mlsd, hybrid, union")
+    print(f"  {'yes' if ML.available(args.mlsd_model) else 'no '}  mlsd, union")
     print(f"  {'yes' if DL.available(args.deeplsd_model) else 'no '}  "
-          f"deeplsd, deep-hybrid, deep-union")
+          f"deeplsd, deep-union")
     print(f"       {DL.describe(args.deeplsd_model, args.deeplsd_device)}")
     return 0
 

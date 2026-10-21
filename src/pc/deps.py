@@ -99,12 +99,12 @@ def preflight(settings):
     errs = list(core_errors())
 
     det = settings.detector
-    if det in ("mlsd", "hybrid", "union"):
+    if det in ("mlsd", "union"):
         from . import mlsd as ML
         if not ML.available(settings.mlsd_model):
             errs.append(f"--detector {det} needs the M-LSD TFLite runtime "
                         f"(pip install ai-edge-litert) and a model; run --doctor for detail")
-    elif det in ("deeplsd", "deep-hybrid", "deep-union"):
+    elif det in ("deeplsd", "deep-union"):
         from . import deeplsd as DL
         if not DL.available(settings.deeplsd_model, settings.deeplsd_device):
             errs.append(f"--detector {det} needs torch + a DeepLSD checkout in tools/ "
@@ -192,9 +192,9 @@ def doctor() -> int:
         from . import birefnet as BN
         lines += ["", "optional backends (only needed when selected on the command line)"]
         ok = ML.available(st.mlsd_model)
-        lines.append(f"  [{'yes' if ok else 'no ':>3}]  mlsd / hybrid / union        TFLite runtime + vendored model")
+        lines.append(f"  [{'yes' if ok else 'no ':>3}]  mlsd / union        TFLite runtime + vendored model")
         ok = DL.available(st.deeplsd_model, st.deeplsd_device)
-        lines.append(f"  [{'yes' if ok else 'no ':>3}]  deeplsd / deep-hybrid / deep-union   {DL.describe(st.deeplsd_model, st.deeplsd_device)}")
+        lines.append(f"  [{'yes' if ok else 'no ':>3}]  deeplsd / deep-union   {DL.describe(st.deeplsd_model, st.deeplsd_device)}")
         for mode in ("telea", "lama", "comfyui"):
             ok = FILL.available(mode, st)
             lines.append(f"  [{'yes' if ok else 'no ':>3}]  fill {mode:<8} {FILL.describe(mode, st)}")

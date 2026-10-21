@@ -55,13 +55,9 @@ from . import sam2seg
 from .review import AUTO, ReviewSession, darken_outside_crop
 
 
-# Both windows offer the same list, and it has to match cli.py's --detector
-# choices; a name only one of the two knows about is a bug report waiting to
-# happen.  mlsd/hybrid/union need a TFLite runtime and the deep-* three need
-# torch and a DeepLSD checkout, so several of these can fail to load -- which
-# is why both windows report the failure rather than falling back.
-DETECTORS = ("lsd", "fld", "mlsd", "hybrid", "union",
-             "deeplsd", "deep-hybrid", "deep-union")
+# Only the detectors that work and earn a place; must match cli.py's
+# --detector choices.  mlsd needs the TFLite runtime (ai-edge-litert).
+DETECTORS = ("lsd", "mlsd")
 
 RULER_MARGIN = 20
 # The two candidates for text sitting ON the accent colour. Not part of a
@@ -3543,7 +3539,8 @@ class ReviewPanel(tk.Frame):
             put(ttk.Label(g, text=_t, anchor="w", width=9), _r, 0)
 
         # -- row 0: lines --------------------------------------------------
-        self.v_detector = tk.StringVar(value=self.settings.detector)
+        self.v_detector = tk.StringVar(value=self.settings.detector
+                                       if self.settings.detector in DETECTORS else "lsd")
         dbox = put(ttk.Combobox(g, textvariable=self.v_detector, width=6,
                                 style="Compact.TCombobox", state="readonly",
                                 values=list(DETECTORS)), 0, 1)

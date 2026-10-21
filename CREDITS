@@ -29,11 +29,11 @@ These files are redistributed with the project and keep their own licences.
 
 * **`M-LSD_512_large_fp32.tflite`** — Apache-2.0, full text in
   `models/LICENSE.mlsd`. Gu et al., "M-LSD: A Wireframe Model for Line Segment
-  Detection" (AAAI 2022). Used by `--detector mlsd`, `hybrid` and `union`; needs
+  Detection" (AAAI 2022). Used by `--detector mlsd`; needs
   a TFLite runtime (`ai-edge-litert`).
 * **`deeplsd_md.tar`** — MIT. Pautrat et al., "DeepLSD: Deep Learning Based Line
   Segment Detector" (CVPR 2023), the MegaDepth model from `cvg/DeepLSD`. Used by
-  `--detector deeplsd`, `deep-hybrid` and `deep-union`; needs torch and a checkout.
+  `tools/benchmark_detectors.py` only (deeplsd, deep-union); needs torch and a checkout.
 
 ## Dependencies (`requirements.txt`)
 

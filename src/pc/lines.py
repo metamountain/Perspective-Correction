@@ -80,45 +80,10 @@ def _deeplsd(gray, settings):
     return np.asarray(seg, dtype=float).reshape(-1, 4), "deeplsd"
 
 
-def gate_by(seg: np.ndarray, guide: np.ndarray, angle_tol_deg: float = 6.0,
-            dist_tol: float = 8.0, extent_margin: float = 0.15) -> np.ndarray:
-    """Keep only segments that lie along one of the ``guide`` segments.
-
-    The point of combining two detectors.  M-LSD is trained on wireframes and
-    knows which edges are *structural*, but it decodes endpoints from a 256x256
-    displacement map, so its geometry is coarse.  LSD has sub-pixel endpoints
-    but no idea what a building is and happily returns every plank seam and
-    twig.  Using M-LSD's segments purely as a spatial gate over LSD's keeps the
-    judgement of the first and the precision of the second.
-    """
-    if len(seg) == 0 or len(guide) == 0:
-        return seg
-    atol = math.radians(angle_tol_deg)
-    ang_s = np.arctan2(seg[:, 3] - seg[:, 1], seg[:, 2] - seg[:, 0]) % math.pi
-    ang_g = np.arctan2(guide[:, 3] - guide[:, 1], guide[:, 2] - guide[:, 0]) % math.pi
-    mid = G.segment_midpoints(seg)
-    gl = G.lines_from_segments(guide)                 # normalised: |a,b| == 1
-    g0 = guide[:, :2]
-    gd = np.column_stack([guide[:, 2] - guide[:, 0], guide[:, 3] - guide[:, 1]])
-    glen = np.linalg.norm(gd, axis=1)
-    glen[glen < 1e-9] = 1e-9
-    gd = gd / glen[:, None]
-
-    da = np.abs(ang_s[:, None] - ang_g[None, :])
-    da = np.minimum(da, math.pi - da)
-    perp = np.abs(mid @ gl[:, :2].T + gl[:, 2][None, :])
-    t = (mid[:, None, :] - g0[None, :, :]) * gd[None, :, :]
-    t = t.sum(axis=2)
-    margin = extent_margin * glen[None, :]
-    within = (t >= -margin) & (t <= glen[None, :] + margin)
-    ok = ((da <= atol) & (perp <= dist_tol) & within).any(axis=1)
-    return seg[ok]
-
-
 def detect_segments(gray: np.ndarray, min_len: float, detector: str = "lsd",
                     bgr=None, settings=None):
     """Return ``(segments, detector_name)``; segments may be empty."""
-    if detector in ("hybrid", "union", "deep-hybrid", "deep-union"):
+    if detector in ("union", "deep-union"):
         if bgr is None:
             bgr = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
         deep = detector.startswith("deep-")
@@ -128,10 +93,7 @@ def detect_segments(gray: np.ndarray, min_len: float, detector: str = "lsd",
             return guide if guide else (np.zeros((0, 4)), "none")
         if guide is None:
             return base[0], "lsd"
-        if detector in ("union", "deep-union"):
-            return np.vstack([base[0], guide[0]]), detector
-        # hybrid / deep-hybrid: plain LSD (gate removed — see debug.md)
-        return base[0], "lsd"
+        return np.vstack([base[0], guide[0]]), detector
     if detector == "deeplsd":
         got = _deeplsd(gray, settings)
         if got is not None:

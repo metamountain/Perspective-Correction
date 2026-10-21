@@ -64,8 +64,7 @@ from pc.pipeline import analyse                                  # noqa: E402
 # roll-only, pitch-only and combined cases are all represented.
 DELTAS = [(2.0, 0.0), (-3.0, 0.0), (0.0, 4.0), (0.0, -5.0), (2.5, 3.5), (-1.5, -2.5)]
 
-ALL_DETECTORS = ("lsd", "fld", "mlsd", "hybrid", "union",
-                 "deeplsd", "deep-hybrid", "deep-union")
+ALL_DETECTORS = ("lsd", "fld", "mlsd", "union", "deeplsd", "deep-union")
 
 
 BORDER_GUARD = 0.08

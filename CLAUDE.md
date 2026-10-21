@@ -190,7 +190,7 @@ the `sam2` package rather than `transformers` — `src/pc/sam2seg.py` shells int
 
 M-LSD needs no second interpreter: its TFLite runtime (`ai-edge-litert`, the
 declared `mlsd` extra) is in the **system** interpreter, so
-`--detector mlsd|hybrid|union` run there directly. Reinstall with
+`--detector mlsd` runs there directly. Reinstall with
 `pip install --no-deps ai-edge-litert`.
 
 ## Ledger — the only place status lives
@@ -637,6 +637,7 @@ features ahead of everything else.*
 
 **2026-10-21**
 
+- **[user-directed] Detector choice is `lsd` | `mlsd` only** (GUI and `--detector`). `hybrid`/`deep-hybrid` were plain LSD under another name and are deleted with `gate_by`. `fld` is gone from the choice because it needs `cv2.ximgproc`, which is not installed. `union` is gone too. Measured with `tools/benchmark_detectors.py tests/assets` (8 photos x 6 rotations): lsd 0.38/0.71/1.69 (mean/p90/worst), union 0.46/0.92/1.38 at 4x the time, mlsd 1.08/1.88/5.37. That benchmark measures round-trip consistency, not M-LSD's clutter filtering, which is why mlsd stays. A remembered detector outside the list opens as lsd. `union`/`fld`/`deeplsd` stay callable in `lines.py` for the benchmark tool. `test_detectors`+`test_cli`+`test_gui` 50/0/1, `debug_ui` clean.
 - **[fix, user-caught] Horizontal auto warps without a facade strip.** The warp (`_rectify_active`) required a strip or mask, and the strip is off by default (`86e62f7`). So HA usually fell back to the camera rotation, which bent the already-plumb verticals of wohnheim by up to 4.7°. Through `tools/drive_review.py`, all 12 Horizontal photos, before → after:
   - mean |vertical lean| 0.36° → 0.12°; mean |horizontal slope| 0.45° → 0.10°.
   - wohnheim verticals 1.18° → 0.04°, horizontals 1.14° → 0.06°.

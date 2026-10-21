@@ -106,6 +106,13 @@ model. This particular barn is the reason the legend is worth showing — the
 they are all correctly yellow. A detector that believed them would tilt the whole
 building. `--debug-dir` writes one of these per image.
 
+### Two detectors
+
+| | strength | weakness |
+|---|---|---|
+| **lsd** (default) | sub-pixel precise, fast (50–200 ms) | returns everything, seams and twigs included |
+| **mlsd** | neural net trained on wireframes: keeps the *structural* edges and drops the clutter (about 100 segments where LSD finds 500) — on busy scenes often the best choice before any mask | coarser geometry, about 0.5 s; needs `pip install --no-deps ai-edge-litert` |
+
 ![A Swiss barn seen from an angle, before and after. Both visible walls have their verticals brought plumb.](docs/before-after.jpg)
 
 <sup>Scheune Grauholzstrasse 30, Moosseedorf — [Wikimedia Commons](https://commons.wikimedia.org/wiki/File:Scheune_Grauholzstrasse_30_Moosseedorf.jpg), Uschoen, CC BY-SA 4.0. A corner view: 24 mm, pitch +7.4°.</sup>
@@ -128,7 +135,6 @@ present** before any file is touched:
 ```
 pip install -e ".[gui]"        drag-and-drop onto the batch window
 pip install -e ".[mlsd]"       the M-LSD detector (the model is vendored)
-pip install -e ".[deeplsd]"    the DeepLSD detector (also wants a checkout and 98 MB of weights)
 ```
 
 Two backends are deliberately **not** extras, because installing them the
@@ -191,8 +197,7 @@ lost, it is queued for a decision a person makes in a couple of seconds.
 | `--min-confidence` | raise to skip more, lower to correct more (0.40) |
 | `--no-pitch` / `--no-roll` | level only, or straighten verticals only |
 | `--crop auto\|aspect\|inside\|none` | **auto** (the default) crops while the loss stays small and keeps the whole frame otherwise; `inside` always crops back to real pixels; `none` never crops |
-| `--detector hybrid` | combine LSD's precision with M-LSD's judgement. Needs `pip install ai-edge-litert` ([measurements](docs/detectors.md)) |
-| `--detector deep-hybrid` | the same idea with DeepLSD as the guide, and the only one measured to beat plain LSD here ([measurements](docs/detectors.md)) |
+| `--detector mlsd` | the M-LSD detector instead of LSD (see above) |
 | `--detector-info` | which detectors this Python can actually run |
 | `--fill telea` | **the default.** Fills the band the rotation opens up by propagating the edge inwards: no model, no download, deterministic. `--fill none` keeps the pad instead |
 | `--fill lama` | generate that band with a learned model. Off by default — those pixels were never photographed |

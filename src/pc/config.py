@@ -15,9 +15,8 @@ from dataclasses import dataclass, asdict
 @dataclass
 class Settings:
     # ---- detection ----
-    # lsd | fld | mlsd | hybrid | union | deeplsd | deep-hybrid
-    # | deep-union.  The deep-* pair is the mlsd hybrid/union with DeepLSD as
-    # the guide instead of M-LSD; see lines.detect_segments.
+    # lsd | mlsd offered; fld | union | deeplsd | deep-union only for
+    # tools/benchmark_detectors.py.  See lines.detect_segments.
     detector: str = "lsd"
     mlsd_model: str = ""                # path, or a name in models/
     mlsd_score_thr: float = 0.10

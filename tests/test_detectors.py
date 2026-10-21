@@ -1,4 +1,4 @@
-"""The alternative line detectors and the hybrid gate.
+"""The alternative line detectors.
 
 The M-LSD and DeepLSD tests skip cleanly when their optional dependencies are
 missing -- a TFLite runtime for one, torch plus a checkout plus 98 MB of
@@ -28,32 +28,6 @@ def _deeplsd_or_skip():
     return deeplsd
 
 
-def test_gate_keeps_segments_that_lie_along_a_guide():
-    guide = np.array([[100., 0., 100., 400.]])
-    seg = np.array([[100., 50., 100., 120.],     # on it
-                    [103., 200., 103., 260.],    # just beside it, parallel
-                    [300., 50., 300., 120.],     # far away
-                    [100., 50., 160., 120.]])    # crossing at a large angle
-    kept = L.gate_by(seg, guide, angle_tol_deg=6.0, dist_tol=8.0)
-    assert len(kept) == 2
-    assert set(kept[:, 0].tolist()) == {100.0, 103.0}
-
-
-def test_gate_respects_the_guide_extent():
-    """A guide segment vouches for its own stretch of an edge, not for the
-    whole infinite line through it."""
-    guide = np.array([[100., 0., 100., 100.]])
-    seg = np.array([[100., 20., 100., 60.],       # inside the guide's extent
-                    [100., 900., 100., 950.]])    # same infinite line, far off the end
-    kept = L.gate_by(seg, guide, angle_tol_deg=6.0, dist_tol=8.0)
-    assert len(kept) == 1 and kept[0][1] == 20.0
-
-
-def test_gate_is_a_no_op_without_a_guide():
-    seg = np.array([[100., 0., 100., 400.]])
-    assert np.array_equal(L.gate_by(seg, np.zeros((0, 4))), seg)
-
-
 def test_mlsd_returns_long_structural_segments():
     _mlsd_or_skip()
     sc = synth.Scene(w=1200, h=800, pitch_deg=8, seed=41)
@@ -61,16 +35,6 @@ def test_mlsd_returns_long_structural_segments():
     _, vert, horiz, name, _ = L.prepare(*_grids(sc, st))
     assert name == "mlsd"
     assert len(vert) + len(horiz) > 0
-
-
-def test_hybrid_returns_plain_lsd():
-    """Gate removed (see debug.md): hybrid now returns plain LSD segments."""
-    _mlsd_or_skip()
-    sc = synth.Scene(w=1200, h=800, pitch_deg=8, seed=42)
-    st = Settings().replace(detector="hybrid")
-    _, vert, horiz, name, _ = L.prepare(*_grids(sc, st))
-    assert name == "lsd"
-    assert len(vert) >= st.min_vertical_lines
 
 
 def test_deeplsd_returns_segments():
@@ -82,22 +46,12 @@ def test_deeplsd_returns_segments():
     assert len(vert) + len(horiz) > 0
 
 
-def test_deep_hybrid_returns_plain_lsd():
-    """Gate removed (see debug.md): deep-hybrid now returns plain LSD segments."""
-    _deeplsd_or_skip()
-    sc = synth.Scene(w=1200, h=800, pitch_deg=8, seed=42)
-    st = Settings().replace(detector="deep-hybrid")
-    _, vert, horiz, name, _ = L.prepare(*_grids(sc, st))
-    assert name == "lsd"
-    assert len(vert) >= st.min_vertical_lines
-
-
 def test_every_detector_produces_a_usable_estimate():
     from pc import deeplsd, mlsd
     sc = synth.Scene(w=1200, h=800, focal_35mm=28, pitch_deg=9, roll_deg=-2, seed=43)
     tr, tp = sc.true_roll_pitch()
-    names = ["lsd"] + (["mlsd", "hybrid", "union"] if mlsd.available() else [])
-    names += (["deeplsd", "deep-hybrid", "deep-union"] if deeplsd.available() else [])
+    names = ["lsd"] + (["mlsd", "union"] if mlsd.available() else [])
+    names += (["deeplsd", "deep-union"] if deeplsd.available() else [])
     for name in names:
         st = Settings().replace(detector=name, focal_35mm=28)
         m, _, _, _, _ = analyse(sc.img, st)
