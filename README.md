@@ -128,6 +128,8 @@ Python 3.9+. numpy, OpenCV, Pillow, piexif — and nothing else. The GUI
 additionally needs Tkinter, which ships with the python.org Windows installer
 (`apt install python3-tk` on Debian/Ubuntu). The CLI works without it.
 
+**Developed and tested on Windows only. Linux and macOS are untested.**
+
 Everything beyond that is optional, imported lazily, and reports what is missing
 instead of failing at import. **`python rectify.py --doctor` says what is
 present** before any file is touched:
