@@ -105,29 +105,16 @@ tests/assets/Synthetic/
 tests/assets/**
 !tests/assets/Horizontal/
 !tests/assets/masks/
-!tests/assets/sam2_masks/
 !tests/assets/1070912stkzg.jpg
-!tests/assets/39079116-muenzstrasse-fassadenwerbung.jpg
 !tests/assets/79cb33878fd0ed76d368e7cfa8827e15.jpg
 !tests/assets/Alte_Scheune.jpg
-!tests/assets/Horizontal/Mariánské_Hory,_panelové_domy_4.jpg
 !tests/assets/Horizontal/Platte_1.jpg
-!tests/assets/Horizontal/ultra-weitwinkelfassade-von-antibesrathaus-alias-hotel-de-ville-121561796.webp
 !tests/assets/README.md
-!tests/assets/Z6TgJJbqstJ9-T43_168_6869_r1.avif
-!tests/assets/cedric-vilim-branding-bucerius-kunst-forum-34-eroeffnungskampagne-rathausmarkt.webp
-!tests/assets/hospital-nikon-d60_f27.jpg
-!tests/assets/lochfassade.jpg
 !tests/assets/masks/1070912stkzg.png
-!tests/assets/masks/39079116-muenzstrasse-fassadenwerbung.png
 !tests/assets/masks/79cb33878fd0ed76d368e7cfa8827e15.png
 !tests/assets/masks/Alte_Scheune.png
 !tests/assets/masks/README.md
-!tests/assets/masks/cedric-vilim-branding-bucerius-kunst-forum-34-eroeffnungskampagne-rathausmarkt.png
-!tests/assets/masks/hospital-nikon-d60_f27.png
-!tests/assets/masks/lochfassade.png
 !tests/assets/roi.json
-!tests/assets/sam2_masks/1070912stkzg.png
 
 # tools/drive_review.py output
 debug_out/
@@ -161,3 +148,7 @@ tools/shoot.py
 /v*-*.png
 /.playwright-mcp/
 /*.ttf
+
+# Not linked from any page any more; kept on disk only.
+docs/before-after.jpg
+docs/detection.jpg
