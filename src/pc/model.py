@@ -358,7 +358,7 @@ def _blend_focal(f_prior, sigma_prior, f_geo, sigma_geo):
 # --------------------------------------------------------------------------
 # joint refinement
 # --------------------------------------------------------------------------
-def _cost_terms(params, vert, horiz_vps, horiz_w, cx, cy, f_prior, f_sigma):
+def _cost_terms(params, vert, cx, cy, f_prior, f_sigma):
     roll, pitch, logf = params
     f = math.exp(logf)
     if not (1e-3 < f < 1e7):
@@ -375,11 +375,14 @@ def _cost_terms(params, vert, horiz_vps, horiz_w, cx, cy, f_prior, f_sigma):
     lv = np.log1p((rv * rv) / c2)
     cost = float(np.sum(vert.weight * lv) / max(vert.weight.sum(), 1e-9))
 
-    if len(horiz_vps):
-        b = G.bearings(horiz_vps, K)
-        rh = b @ u
-        lh = np.log1p((rh * rh) / c2)
-        cost += 0.5 * float(np.sum(horiz_w * lh) / max(horiz_w.sum(), 1e-9))
+    # The horizontal vanishing points used to enter here too (b . u = 0, weight
+    # 0.5). Removed 2026-10-21: that term reads pitch off the HEIGHT of the
+    # horizon, which is only a statement about pitch while the principal point
+    # is the frame centre -- false on every shifted or cropped architectural
+    # photograph. wohnheim.jpg has plumb verticals and its facade VP 170 px below
+    # centre; the term invented pitch +7.38 deg (vertical-only 0.24) and splayed
+    # the verticals. Over the whole pool round trip it was also a net loss:
+    # mean 0.679 -> 0.513 deg, worst 4.43 -> 2.94, with it off.
 
     if f_prior is not None:
         cost += 0.5 * ((math.log(f / f_prior)) / f_sigma) ** 2
@@ -511,12 +514,12 @@ def estimate(vert, horiz, w: int, h: int, settings, exif_focal_px=None,
         if fit_focal:
             def fn(p):
                 pf = max(p[2], f_floor)  # clamp inside the cost function
-                return _cost_terms([p[0], p[1], pf], inl_set, hv, hw, cx, cy, f_prior, f_sigma)
+                return _cost_terms([p[0], p[1], pf], inl_set, cx, cy, f_prior, f_sigma)
             x0 = np.array([roll, pitch, math.log(f_use)])
             step = [math.radians(0.6), math.radians(0.6), 0.05]
         else:
             lf = math.log(f_use)
-            fn = lambda p: _cost_terms([p[0], p[1], lf], inl_set, hv, hw, cx, cy,
+            fn = lambda p: _cost_terms([p[0], p[1], lf], inl_set, cx, cy,
                                        f_prior, f_sigma)
             x0 = np.array([roll, pitch])
             step = [math.radians(0.6), math.radians(0.6)]

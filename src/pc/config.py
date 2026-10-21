@@ -215,7 +215,10 @@ class Settings:
     # telea costs 50 ms and lama 1191 ms. A second per redraw is unusable while
     # a slider moves and perfectly reasonable once, to see what you picked --
     # which is a decision only the person at the window can make.
-    live_fill_preview: bool = False
+    # ON by default since 2026-10-21 (user: "set lama live as standard"): the
+    # preview shows the fill that will be saved; untick "live" for the 38 ms
+    # telea stand-in while dragging sliders.
+    live_fill_preview: bool = True
     fill_max_share: float = 0.40        # refuse to invent more of the frame than this
     fill_device: str = ""               # torch device for lama; "" = its default
     comfy_url: str = "http://127.0.0.1:8188"

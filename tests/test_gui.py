@@ -478,7 +478,7 @@ def test_the_control_strip_is_always_open_and_the_pictures_never_move():
         assert not hasattr(r, "v_adjust"), "the fold-out toggle is back"
 
         sizes = set()
-        for mode in ("auto", "horizontal", "manual"):
+        for mode in ("auto", "horizontal"):
             r.v_corr_mode.set(mode); r._show_mode(); _settle(app, 8)
             assert r._mode_top == mode, f"{mode}: showing {r._mode_top}"
             sizes.add((r.c_before.winfo_height(), r.c_after.winfo_height(),
@@ -494,11 +494,13 @@ def test_the_control_strip_is_always_open_and_the_pictures_never_move():
             f"px budget")
 
         # The queue path: the chosen mode survives the next photograph.
-        r.v_corr_mode.set("manual")
-        r.load(r.session.path, r.settings, r.dest_path)
+        r.v_corr_mode.set("horizontal"); r._show_mode(); _settle(app, 8)
+        r._mark_clean()
+        r.load(r.session.path, r.session.settings, r.dest_path)
         _settle(app, 20)
-        assert app.review.v_corr_mode.get() == "manual", (
+        assert app.review.v_corr_mode.get() == "horizontal", (
             "the mode did not survive the next photograph")
+        assert "manual" not in r._mode_frames, "Manual mode is back"
     finally:
         app.destroy()
 
@@ -861,16 +863,15 @@ def test_the_cross_breaks_vertically_with_the_pictures_on_top():
             assert top[0] >= 2 * bot[0], (
                 f"{w}x{h}: the pictures should dominate the controls: {sizes}")
 
-            # The dark shows through at exactly the constants' width: CROSS_SIDE
-            # on the left and right (the ruler strip), the border on the bottom,
-            # the cross between the fields.  The top edge has no border -- the
-            # pictures run to it (user, 2026-10-20), so the top-left field sits
-            # flush at y=0.
+            # The dark shows through at one width everywhere (user,
+            # 2026-10-21: "same width everywhere", a border on top too): left,
+            # right, top, bottom and the cross between the fields.
             assert abs(r.cell_before.winfo_x() - L.CROSS_SIDE) <= 1, (
                 f"{w}x{h}: the left border is {r.cell_before.winfo_x()}")
-            assert abs(r.cell_before.winfo_y()) <= 1, (
-                f"{w}x{h}: the pictures should run to the top edge, top is "
-                f"{r.cell_before.winfo_y()}")
+            assert abs(r.cell_before.winfo_y() - L.CROSS_BORDER) <= 1, (
+                f"{w}x{h}: the top border is {r.cell_before.winfo_y()}")
+            gap = r.cell_after.winfo_x() - (r.cell_before.winfo_x() + r.cell_before.winfo_width())
+            assert abs(gap - L.CROSS_GAP) <= 1, f"{w}x{h}: the cross is {gap} wide"
             right = r.winfo_width() - (r.cell_after.winfo_x() + r.cell_after.winfo_width())
             assert abs(right - L.CROSS_SIDE) <= 1, f"{w}x{h}: the right border is {right}"
             bottom = r.winfo_height() - (r.cell_ui.winfo_y() + r.cell_ui.winfo_height())
@@ -1039,17 +1040,17 @@ def test_theme_switch_retints_canvas_backgrounds():
         review = app.review
         assert review is not None, "no review panel"
         old_field = INK["field"]
-        # Switch to Light theme directly (bypasses the combobox trace).
-        app._switch_theme("Light")
+        # Switch to Dark Grey theme directly (bypasses the combobox trace).
+        app._switch_theme("Dark Grey")
         app.update(); time.sleep(0.02)
-        new_field = THEMES["Light"]["field"]
+        new_field = THEMES["Dark Grey"]["field"]
         assert new_field != old_field, "test needs distinct palettes"
         cb = review.c_before.cget("bg")
         ca = review.c_after.cget("bg")
         assert cb == new_field, (
-            f"c_before bg is {cb!r} after switching to Light, expected {new_field!r}")
+            f"c_before bg is {cb!r} after switching to Dark Grey, expected {new_field!r}")
         assert ca == new_field, (
-            f"c_after bg is {ca!r} after switching to Light, expected {new_field!r}")
+            f"c_after bg is {ca!r} after switching to Dark Grey, expected {new_field!r}")
         # Switch back and confirm the round-trip.
         app._switch_theme("Minimal Black")
         app.update(); time.sleep(0.02)
@@ -1066,7 +1067,7 @@ def test_phosphor_lays_a_graded_ground_and_takes_it_away_again():
     re-tint walk cannot produce it and cannot remove it.  Two halves, and the
     second is the one that bites: INK is updated and never rebuilt, so a key
     only one palette defines outlives that palette unless something pops it.
-    Switch Phosphor -> Light without that and the light panes keep the dark
+    Switch Phosphor -> Dark Grey without that and its flat panes keep the
     ramp."""
     from pc.gui import INK
 
@@ -1092,14 +1093,14 @@ def test_phosphor_lays_a_graded_ground_and_takes_it_away_again():
             assert c.find_all()[0] == ground[0], (
                 f"{name} ground is not the lowest item -- it would cover the picture")
 
-        app._switch_theme("Light")
+        app._switch_theme("Dark Grey")
         _settle(app)
         assert INK.get("grad") is None, (
             "the Phosphor gradient outlived Phosphor: INK still carries it")
         for name in ("c_before", "c_after"):
             c = getattr(review, name)
             assert not c.find_withtag("ground"), (
-                f"{name} still has a graded ground after switching to Light")
+                f"{name} still has a graded ground after switching to Dark Grey")
     finally:
         # INK is a module-level dict that `_switch_theme` mutates in place
         # (gui.py: `INK.update(new)`), so a theme left switched here outlives
@@ -1859,3 +1860,60 @@ def test_opening_a_file_replaces_the_photo_and_asks_only_when_it_changed():
         GUI.messagebox.askyesnocancel = real
         app.destroy()
         shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_both_pictures_stay_centred_when_the_canvas_grows_after_the_lock():
+    """The render box is locked on the first draw, so a canvas that grows later
+    (fullscreen, a resize) leaves room around the picture. Both panes must
+    centre in the LIVE canvas. The after pane centred in the locked box, so
+    after fullscreen it sat 64 px off the axis while the original beside it was
+    centred (user, 2026-10-21: "ha image target not on axis"). The lock is
+    shrunk here instead of going fullscreen, which is the same state."""
+    app = _app()
+    try:
+        _loaded(app, 1920, 1080)
+        r = app.review
+        assert r.session is not None
+        (bw, bh), (aw, ah) = r._img_box
+        r._img_box = ((bw - 80, bh - 60), (aw - 80, ah - 60))
+        r._redraw(); _settle(app, 20)
+        for name, canvas, ph, off in (("before", r.c_before, r._ph_b, r._before_off),
+                                      ("after", r.c_after, r._ph_a, r._after_off)):
+            left = off[0]; right = canvas.winfo_width() - off[0] - ph.width()
+            top = off[1]; bottom = canvas.winfo_height() - off[1] - ph.height()
+            assert abs(left - right) <= 1 and abs(top - bottom) <= 1, (
+                f"{name} picture off the axis: L{left} R{right} T{top} B{bottom}")
+    finally:
+        app.destroy()
+
+
+def test_the_outline_switch_draws_the_source_border_where_the_warp_put_it():
+    """"Outline" beside "Check lines" (user, 2026-10-21): the photograph's own
+    border mapped through the correction onto the after picture. Its first
+    point is the source's top-left corner, wherever the warp sent it; off
+    removes it."""
+    app = _app()
+    try:
+        _loaded(app, 1920, 1080)
+        r = app.review
+        r.session.set_manual(roll_deg=-3.0, pitch_deg=9.0, focal_35mm=24.0)
+        r._redraw(); _settle(app, 10)
+        assert not r.c_after.find_withtag("outline"), "outline drawn while off"
+        r.v_after_outline.set(True); r._toggle_outline(); r._redraw(); _settle(app, 10)
+        items = r.c_after.find_withtag("outline")
+        assert items, "outline switched on but nothing drawn"
+        k = r._ph_a.width() / float(r._after_base.shape[1])
+        qx, qy = r.session.source_to_preview(0.0, 0.0)
+        x, y = r.c_after.coords(items[0])[:2]
+        assert abs(x - (r._after_off[0] + qx * k)) < 1.0 and abs(y - (r._after_off[1] + qy * k)) < 1.0, (
+            f"top-left corner drawn at {(x, y)}")
+        # never past the picture ("dont expand for outline")
+        ox, oy = r._after_off
+        for it in items:
+            xs, ys = r.c_after.coords(it)[0::2], r.c_after.coords(it)[1::2]
+            assert min(xs) >= ox - 1 and max(xs) <= ox + r._ph_a.width() + 1, xs
+            assert min(ys) >= oy - 1 and max(ys) <= oy + r._ph_a.height() + 1, ys
+        r.v_after_outline.set(False); r._toggle_outline(); r._redraw(); _settle(app, 10)
+        assert not r.c_after.find_withtag("outline"), "outline survived switching it off"
+    finally:
+        app.destroy()

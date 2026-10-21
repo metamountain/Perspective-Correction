@@ -597,6 +597,13 @@ class ReviewSession:
         # horizontal; pull the top edge up to leave EAVE_HEADROOM of the crop
         # height above it, but only ever lower y0 (never crop into the building).
         fill_mode = getattr(self.settings, "fill", None)
+        if fill_mode not in (None, "", "none"):
+            gx = 0.5 * W.AUTO_CROP_GROW_X * (x1 - x0)
+            gy = 0.5 * W.AUTO_CROP_GROW_Y * (y1 - y0)
+            qx0, qy0 = (float(v) for v in np.min(quad, axis=0))
+            qx1, qy1 = (float(v) for v in np.max(quad, axis=0))
+            x0, x1 = max(0.0, qx0, x0 - gx), min(float(ow), qx1, x1 + gx)
+            y0, y1 = max(0.0, qy0, y0 - gy), min(float(oh), qy1, y1 + gy)
         if fill_mode not in (None, "", "none") and len(self.horiz):
             segs = np.asarray(self.horiz.seg, float)[:, :4]
             segs = segs * (self.w / self.gray.shape[1])

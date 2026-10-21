@@ -256,12 +256,15 @@ def quadrant(pane_w, pane_h, gap=PREVIEW_GAP):
             max(1, (int(pane_h) - int(gap)) // 2))
 
 
-# The 2026-09-12 directive: the cross between the four equal fields and the
-# border around them are each a flat 20 px of dark, on every screen.
-CROSS_GAP = 20
-CROSS_BORDER = 10   # halved 2026-10-20 (user: outer edge thinner); bottom edge only now
-CROSS_SIDE = 8      # left/right outer edge, the whole of it: just enough to pull a
-                    #   ruler from (user, 2026-10-20: "kleinen Rand ... jeweils 8 Pixel")
+# One width for the whole frame (user, 2026-10-21: "same width everywhere",
+# a border on top too, "no double width for cross"): the cross between the
+# fields, the top, the sides and the bottom are all CROSS_PX. 8 px is the side
+# edge the user chose on 2026-10-20 as "just enough to pull a ruler from".
+# Supersedes the flat 20 px cross of 2026-09-12 and the top-0 / bottom-10 edges.
+CROSS_PX = 8
+CROSS_GAP = CROSS_PX       # between fields: each side of it carries half
+CROSS_BORDER = CROSS_PX    # top and bottom edge
+CROSS_SIDE = CROSS_PX      # left and right edge
 # Guides are pulled from a band hugging the corrected picture's edge, this far
 # outside AND this far inside it -- 16 px all round (user, 2026-10-21: finding
 # the old pull zone was "a fuck up").

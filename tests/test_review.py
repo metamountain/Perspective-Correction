@@ -604,6 +604,8 @@ def test_auto_crop_does_by_hand_what_the_batch_gate_refuses_to_do_alone():
     s, _ = _session(seed=45)
     assert s.settings.crop == "auto"
     assert s.crop_rect is None, "the plan padded rather than cropped"
+    # the fill-free trim: with a fill on the crop is grown on purpose
+    s.settings = s.settings.replace(fill="none")
     assert s.auto_crop()
     assert s.crop_loss() > s.settings.crop_max_loss
 
@@ -856,7 +858,8 @@ def test_the_auto_crop_contains_no_invented_pixel():
     from pc import warp as W
 
     s, _ = _session(seed=31)
-    s.settings = s.settings.replace(crop="none")
+    # fill "none": with a fill on, the crop is grown on purpose (next test)
+    s.settings = s.settings.replace(crop="none", fill="none")
     s.set_manual(roll_deg=-3.0, pitch_deg=9.0, focal_35mm=24.0)
     assert s.auto_crop(), "a real correction opens a band there is something to trim"
 
@@ -881,6 +884,41 @@ def test_the_auto_crop_contains_no_invented_pixel():
 # Control-line coverage: the horizontal kind must match the vertical kind
 # property-for-property, not just work in the one happy-path test above.
 # --------------------------------------------------------------------------
+
+def test_with_a_fill_on_the_auto_crop_grows_10_wide_20_tall_inside_the_outline():
+    """User, 2026-10-21: "set auto crop a little bigger, +10%", then "add
+    vertical 20 ... not more than image outline". With a fill on, the fill
+    covers what the growth takes in, so the fill-free rectangle grows 10% in
+    width and 20% in height, centred, and never past the warped photograph's
+    extent. Without a fill nothing grows (the previous test). A level camera's
+    eave rule is kept out of it, so only the growth is measured."""
+    from pc import warp as W
+
+    def crop(fill, pitch):
+        s, _ = _session(seed=31)
+        s.settings = s.settings.replace(crop="none", fill=fill)
+        s.horiz = s.horiz.subset(np.zeros(len(s.horiz), bool))   # no eave rule
+        s.set_manual(roll_deg=-3.0, pitch_deg=pitch, focal_35mm=24.0)
+        assert s.auto_crop()
+        return s
+
+    assert (W.AUTO_CROP_GROW_X, W.AUTO_CROP_GROW_Y) == (0.10, 0.20), (
+        "+10% wide, +20% tall are the user's numbers, not tuning knobs")
+    for pitch in (4.0, 9.0, 20.0):
+        s0, s1 = crop("none", pitch), crop("telea", pitch)
+        roll, p_, f, _ = s1.current_angles()
+        H = s1._build_H(s1.w, s1.h, f, roll, p_, 0.0, max_area=s1.settings.max_area_ratio)
+        H_total, ow, oh = W.plan(s1.w, s1.h, H, s1.settings)[:3]
+        quad = W.warped_quad(H_total, s1.w, s1.h)
+        a = np.array(s0.crop_rect) * [ow, oh, ow, oh]
+        b = np.array(s1.crop_rect) * [ow, oh, ow, oh]
+        gx = 0.05 * (a[2] - a[0]); gy = 0.10 * (a[3] - a[1])
+        want = [max(0, quad[:, 0].min(), a[0] - gx), max(0, quad[:, 1].min(), a[1] - gy),
+                min(ow, quad[:, 0].max(), a[2] + gx), min(oh, quad[:, 1].max(), a[3] + gy)]
+        assert np.allclose(b, want, atol=1.5), f"pitch {pitch}: crop {b.round(1)} != {np.round(want, 1)}"
+        assert (b[2] - b[0]) * (b[3] - b[1]) > 1.05 * (a[2] - a[0]) * (a[3] - a[1]), (
+            f"pitch {pitch}: the crop did not grow")
+
 def test_a_control_line_of_either_kind_leaves_the_other_arrays_pool_untouched():
     """The two kinds are stored in two separate arrays (`control_lines` for
     vertical, `control_hlines` for horizontal) precisely so that stating one
@@ -1190,6 +1228,7 @@ def test_a_hand_placed_facade_strip_stands_the_review_gate_down_but_not_the_batc
     # ...and the unattended path is untouched by any of it.
     w = s.w
     batch = Settings(correct_horizontal=True)
+    batch.min_confidence = 0.95       # engaged by construction, not by a 0.39-vs-0.40 margin
     assert P.process(src, "", batch, dry_run=True).status == P.SKIPPED
     assert P.process(src, "", batch, dry_run=True,
                      strip=(int(w * 0.20), int(w * 0.80))).status == P.SKIPPED, (

@@ -132,6 +132,8 @@ OVERLAY = {
     # "Check lines" re-runs the detector on the RESULT: green where a line
     # came out truly straight, red/amber where it still leans.
     "check_ok":    "#39ff7a",
+    # "Outline": where the photograph's own border landed after the warp
+    "outline":     "#ffe14d",
     "check_v_off": "#ff5a5a",
     "check_h_off": "#ffb03a",
     # the second M-LSD pass, drawn beside the primary detector's colours and
@@ -210,14 +212,24 @@ THEMES = {
         "text": "#e6e8ec", "dim": "#6f7680",
         "accent": "#4da3ff", "ok": "#5ac37f", "warn": "#e0b24c", "err": "#ef6b6b",
     },
-    # --- C64: VIC-II PAL palette.  Blue (#0000AA) bg, Light Blue (#0088FF)
-    #     border/panels -- the classic blue-screen look. ---
+    # --- C64: three colours and nothing else (user, 2026-10-21) -- the start
+    #     screen's blue, the light blue of its border and text, and white.
+    #     Pepto's VIC-II values. ok/warn/err are white too: the C64 screen had
+    #     no traffic lights, and a fourth colour is what the user asked away.
+    #     The Commodore 64 Pixelized face is loaded privately from the repo
+    #     root when it is there (not committed: its ReadMe grants no
+    #     redistribution); without it the theme falls back to Courier New. ---
+    #     The keys sharing a colour differ in the last bit on purpose:
+    #     `_retint_bg` maps old to new BY VALUE, so two keys with one value
+    #     would recolour a picture canvas as "bg" on the way out of C64. One
+    #     step in 255 is invisible; the screen still shows three colours.
     "C64": {
-        "bg": "#0000AA", "panel": "#0088FF", "field": "#000055",
-        "cross": "#000033", "line": "#0088FF",
-        "text": "#FFFFFF", "dim": "#8888FF",
-        "accent": "#00E5D0", "ok": "#66CC66", "warn": "#FFE554", "err": "#E3241B",
-        "ui_font": "Courier New", "mono_font": "Courier New",
+        "bg": "#352879", "panel": "#35287A", "field": "#35287B",
+        "cross": "#6C5EB5", "line": "#6C5EB6",
+        "text": "#FFFFFF", "dim": "#6C5EB7",
+        "accent": "#6C5EB4", "ok": "#FFFFFE", "warn": "#FFFFFD", "err": "#FFFFFC",
+        "ui_font": "Commodore 64 Pixelized", "mono_font": "Commodore 64 Pixelized",
+        "font_file": "Commodore Pixelized v1.2.ttf", "font_px": 12, "pad_x": 1,
     },
     # --- Amiga 500: Workbench 2.0-3.1 (3D Grey & Blue).  Bevel gray bg,
     #     dark-blue title bar accent, black text, white light edges. ---
@@ -228,13 +240,14 @@ THEMES = {
         "accent": "#0055BB", "ok": "#008800", "warn": "#886600", "err": "#CC0000",
         "ui_font": "Verdana", "mono_font": "Consolas",
     },
-    # --- Light: all-light, no dark contrast.  Soft off-white bg so the white
-    #     panels read as raised; cross/border in light gray (not black). ---
-    "Light": {
-        "bg": "#eef0f2", "panel": "#ffffff", "field": "#f6f7f8",
-        "cross": "#dfe2e5", "line": "#cdd1d6",
-        "text": "#6b7a86", "dim": "#9aa5ae",
-        "accent": "#6fa8d6", "ok": "#7dc49a", "warn": "#d4ad5e", "err": "#cf8a82",
+    # --- Dark Grey: replaces "Light" (user, 2026-10-21: "light looks
+    #     shitty"). A neutral mid-dark grey, a step up from Minimal Black so
+    #     the two are told apart, with a muted steel-blue accent. ---
+    "Dark Grey": {
+        "bg": "#2b2d31", "panel": "#33363b", "field": "#26282c",
+        "cross": "#1e2023", "line": "#45494f",
+        "text": "#e3e5e8", "dim": "#8a9099",
+        "accent": "#8fb4d9", "ok": "#7fc79a", "warn": "#dcb866", "err": "#e08a84",
     },
     # --- Phosphor: the CRT after the tube has warmed up.  It began as pure
     #     black with a #55ff55 hover, which is accurate and shouts; this is the
@@ -327,9 +340,76 @@ def on_accent(accent, dark=INK_ON_ACCENT_DARK, light=INK_ON_ACCENT_LIGHT):
     return dark if contrast_ratio(dark, accent) >= contrast_ratio(light, accent) else light
 
 
+_PRIVATE_FONTS = set()
+_UI_FACE = "Segoe UI"     # the active theme's face; `apply_theme` sets it
+_UI_PX = None             # ...and its pinned pixel size, if it has one
+
+
+def _clip_segment(a, b, box):
+    """Liang-Barsky: the part of segment a-b inside ``box`` (x0, y0, x1, y1)
+    as (x0, y0, x1, y1), or None when none of it is."""
+    (ax, ay), (bx, by) = a, b
+    dx, dy = bx - ax, by - ay
+    t0, t1 = 0.0, 1.0
+    for p, q in ((-dx, ax - box[0]), (dx, box[2] - ax),
+                 (-dy, ay - box[1]), (dy, box[3] - ay)):
+        if p == 0:
+            if q < 0:
+                return None
+            continue
+        t = q / p
+        if p < 0:
+            t0 = max(t0, t)
+        else:
+            t1 = min(t1, t)
+        if t0 > t1:
+            return None
+    return (ax + t0 * dx, ay + t0 * dy, ax + t1 * dx, ay + t1 * dy)
+
+
+def ui_font(size):
+    """(family, size) in the active theme's face, for text drawn on a canvas.
+
+    A literal ("Segoe UI", 9) ignored the theme, and ("TkDefaultFont", 9) is
+    read by Tk as a FAMILY called TkDefaultFont, not the named font -- so it
+    ignored it too. Resolved at draw time, so a theme switch reaches the next
+    redraw."""
+    return (_UI_FACE, -_UI_PX if _UI_PX else size)
+
+
+def _load_private_font(name):
+    """Make a TTF in the repo root visible to this process only (Windows).
+
+    AddFontResourceEx with FR_PRIVATE installs nothing system-wide and is gone
+    when the process ends. A missing file or another OS is a quiet no-op: the
+    theme's family is then simply absent and `_pick_family` falls back."""
+    if not name or name in _PRIVATE_FONTS:
+        return
+    _PRIVATE_FONTS.add(name)
+    import os
+    path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
+        os.path.abspath(__file__)))), name)
+    if os.name != "nt" or not os.path.exists(path):
+        return
+    try:
+        import ctypes
+        FR_PRIVATE = 0x10
+        ctypes.windll.gdi32.AddFontResourceExW(path, FR_PRIVATE, 0)
+    except Exception:
+        pass
+
+
 def apply_theme(root, palette=None):
     """Apply a colour palette to all ttk styles.  Returns ``(ui_family, mono_family)``."""
     p = palette or INK
+    _load_private_font(p.get("font_file"))
+    # A pixel face is sharp only at its own pixel grid, so a theme may pin ONE
+    # pixel size for every text (Tk reads a negative size as pixels).
+    px = p.get("font_px")
+    sz = (lambda n: -int(px)) if px else (lambda n: n)
+    # A wide face needs the strip's padding back: the C64 face at 12 px asked
+    # 1027 px of a 948 px row with the default 6 px each side.
+    padx = p.get("pad_x", 6)
     ui_override = p.get("ui_font")
     mono_override = p.get("mono_font")
     if ui_override:
@@ -342,9 +422,9 @@ def apply_theme(root, palette=None):
         mono = ui   # one face (RefGrade): numbers share the UI face, not a mono
     try:
         from tkinter import font as tkfont
-        for name, fam, size in (("TkDefaultFont", ui, 8), ("TkTextFont", ui, 8),
-                                ("TkMenuFont", ui, 8), ("TkHeadingFont", ui, 8),
-                                ("TkFixedFont", mono, 8)):
+        for name, fam, size in (("TkDefaultFont", ui, sz(8)), ("TkTextFont", ui, sz(8)),
+                                ("TkMenuFont", ui, sz(8)), ("TkHeadingFont", ui, sz(8)),
+                                ("TkFixedFont", mono, sz(8))):
             f = tkfont.nametofont(name)
             f.configure(family=fam, size=size)
     except Exception:
@@ -360,15 +440,15 @@ def apply_theme(root, palette=None):
                  fieldbackground=p["field"], bordercolor=p["line"],
                  lightcolor=p["panel"], darkcolor=p["panel"],
                  focuscolor=p["accent"], troughcolor=p["field"],
-                  insertcolor=p["text"], font=(ui, 8))
+                  insertcolor=p["text"], font=(ui, sz(8)))
     st.configure("TFrame", background=p["bg"])
     st.configure("Panel.TFrame", background=p["panel"])
     # Field labels are dim (RefGrade); values and the title stay bright.
     st.configure("TLabel", background=p["bg"], foreground=p["dim"])
     st.configure("Dim.TLabel", foreground=p["dim"])
-    st.configure("Head.TLabel", foreground=p["dim"], font=(ui, 8))
-    st.configure("Value.TLabel", foreground=p["text"], font=(mono, 8))
-    st.configure("Title.TLabel", foreground=p["text"], font=(ui, 11))
+    st.configure("Head.TLabel", foreground=p["dim"], font=(ui, sz(8)))
+    st.configure("Value.TLabel", foreground=p["text"], font=(mono, sz(8)))
+    st.configure("Title.TLabel", foreground=p["text"], font=(ui, sz(11)))
 
     st.configure("TButton", background=p["panel"], foreground=p["text"],
                   borderwidth=0, focusthickness=0, padding=(12, 6))
@@ -382,7 +462,7 @@ def apply_theme(root, palette=None):
                                          ("disabled", p["line"])])
 
     # The control strip's compact set (2026-10-20): same colours, minimum height.
-    st.configure("Compact.TButton", padding=(6, 0))
+    st.configure("Compact.TButton", padding=(padx, 0))
     st.configure("Accent.Compact.TButton", background=p["accent"],
                  foreground=on_accent(p["accent"]), padding=(10, 0))
     st.map("Accent.Compact.TButton", background=[("active", p["accent"]),
@@ -390,13 +470,13 @@ def apply_theme(root, palette=None):
     st.configure("Compact.TCheckbutton", background=p["bg"], foreground=p["text"],
                  padding=0, indicatorwidth=13, indicatorheight=13)
     st.map("Compact.TCheckbutton", background=[("active", p["bg"])])
-    st.configure("Compact.Toolbutton", padding=(6, 0), anchor="center",
+    st.configure("Compact.Toolbutton", padding=(padx, 0), anchor="center",
                  background=p["panel"], foreground=p["text"], borderwidth=0)
     st.map("Compact.Toolbutton",
            background=[("selected", p["accent"]), ("active", p["line"])],
            foreground=[("selected", on_accent(p["accent"]))])
     # The mode switch: the active mode light, the others dark.
-    st.configure("Mode.Toolbutton", padding=(6, 0), anchor="center",
+    st.configure("Mode.Toolbutton", padding=(padx, 0), anchor="center",
                  background=p["bg"], foreground=p["dim"], borderwidth=0)
     st.map("Mode.Toolbutton",
            background=[("selected", p["text"]), ("active", p["line"])],
@@ -419,7 +499,7 @@ def apply_theme(root, palette=None):
     st.configure("Treeview", background=p["field"], fieldbackground=p["field"],
                   foreground=p["text"], borderwidth=0, rowheight=20)
     st.configure("Treeview.Heading", background=p["bg"], foreground=p["dim"],
-                 borderwidth=0, font=(ui, 9))
+                 borderwidth=0, font=(ui, sz(9)))
     st.map("Treeview", background=[("selected", p["line"])],
            foreground=[("selected", p["text"])])
     st.configure("TSpinbox", arrowcolor=p["dim"], borderwidth=0, padding=6)
@@ -429,6 +509,8 @@ def apply_theme(root, palette=None):
     # Menus (right-click, dropdown) use the theme palette, not the OS default.
     st.configure("TMenu", background=p["panel"], foreground=p["text"])
     st.map("TMenu", background=[("active", p["line"])])
+    global _UI_FACE, _UI_PX
+    _UI_FACE, _UI_PX = ui, (int(px) if px else None)
     return ui, mono
 
 
@@ -913,7 +995,7 @@ def _attach_tooltip(widget, text):
         y = widget.winfo_rooty() + widget.winfo_height() + 4
         t.wm_geometry(f"+{x}+{y}")
         lbl = tk.Label(t, text=text, background=INK["cross"], foreground=INK["text"],
-                       font=("TkDefaultFont", 9), padx=8, pady=4, relief="solid",
+                       font=ui_font(9), padx=8, pady=4, relief="solid",
                        borderwidth=1, wraplength=320, justify="left")
         lbl.pack()
         tip["t"] = t
@@ -977,11 +1059,11 @@ class ReviewPanel(tk.Frame):
         # Each cell carries half the cross on its inner sides and the full
         # border on its outer ones, so the dark shows through at exactly
         # CROSS_GAP between fields and CROSS_BORDER around the panel.
-        # The pictures run to the top edge (user, 2026-10-20); left and right
-        # keep CROSS_SIDE (8 px), the strip a ruler is pulled from.
+        # One width all round, the top included (user, 2026-10-21): see
+        # layout.CROSS_PX.
         sd = layout.CROSS_SIDE
-        self.cell_before.grid(row=0, column=0, sticky="nsew", padx=(sd, g), pady=(0, g))
-        self.cell_after.grid(row=0, column=1, sticky="nsew", padx=(g, sd), pady=(0, g))
+        self.cell_before.grid(row=0, column=0, sticky="nsew", padx=(sd, g), pady=(b, g))
+        self.cell_after.grid(row=0, column=1, sticky="nsew", padx=(g, sd), pady=(b, g))
         self.loader.grid(row=1, column=0, sticky="nsew", padx=(sd, g), pady=(g, b))
         self.cell_ui.grid(row=1, column=1, sticky="nsew", padx=(g, sd), pady=(g, b))
         self.session = None
@@ -1067,10 +1149,7 @@ class ReviewPanel(tk.Frame):
         self._build()
         # The mode switch mirrors the horizontal-auto state the photograph
         # opened with, so the strip shows the right controls from the start.
-        # A manual session is a choice, not an HA state, so it survives the
-        # next photograph; only auto/horizontal follow the corrected flag.
-        if self.v_corr_mode.get() != "manual":
-            self.v_corr_mode.set("horizontal" if self.settings.correct_horizontal else "auto")
+        self.v_corr_mode.set("horizontal" if self.settings.correct_horizontal else "auto")
         self._mode_frames[self.v_corr_mode.get()].tkraise()
         self.v_overwrite.set(bool(overwrite))
         self._refresh_file_names()
@@ -1263,8 +1342,14 @@ class ReviewPanel(tk.Frame):
         # flip itself off each time a photograph opens.
         if getattr(self, "v_after_lines", None) is None:
             self.v_after_lines = tk.BooleanVar(value=False)
+        if getattr(self, "v_after_outline", None) is None:
+            self.v_after_outline = tk.BooleanVar(value=False)
         gridbar = tk.Frame(self.c_after, bg=INK["field"])
         self._gridbar = gridbar
+        _ol = ttk.Checkbutton(gridbar, text="Outline", command=self._toggle_outline,
+                              variable=self.v_after_outline)
+        _ol.pack(side="left", padx=(4, 0))
+        _attach_tooltip(_ol, "Draw the photograph's own border where the warp put it")
         ttk.Checkbutton(gridbar, text="Check lines", command=self._schedule_redraw,
                         variable=self.v_after_lines).pack(side="left", padx=(4, 0))
         gridbar.place(relx=1.0, x=-8, y=8, anchor="ne")
@@ -1411,10 +1496,10 @@ class ReviewPanel(tk.Frame):
         self._strip_crop(self._btns)
         self._strip_actions(self._btns)
         # The palette in the picture's top-left corner can only be finished
-        # here: it toggles the variables above.  Manual mode then presses its
-        # keys, so there is one mechanism for the tools.
+        # here: it toggles the variables above.  It is the one way to the
+        # tools: the Manual mode that repeated its keys is gone (user,
+        # 2026-10-21) -- a drawn line overrules the detector in any mode.
         self._build_tool_palette()
-        self._strip_manual(self._mode_frames["manual"])
         self._show_mode()
 
         # -- assembly: who gives up height first ---------------------------
@@ -1429,9 +1514,8 @@ class ReviewPanel(tk.Frame):
         self._status_text = ""
 
     def _strip_mode(self, row):
-        """Topic: which correction is being driven (Auto / Horizontal / Manual)."""
-        for _txt, _val in (("Auto", "auto"), ("Horizontal auto", "horizontal"),
-                           ("Manual", "manual")):
+        """Topic: which correction is being driven (Auto / Horizontal auto)."""
+        for _txt, _val in (("Auto", "auto"), ("Horizontal auto", "horizontal")):
             ttk.Radiobutton(row, text=_txt, value=_val,
                             style="Mode.Toolbutton",
                             variable=self.v_corr_mode,
@@ -1506,7 +1590,7 @@ class ReviewPanel(tk.Frame):
         """Topic: the three modes' controls, stacked in ONE grid cell so the
         strip never changes height when the mode does."""
         self._mode_frames = {k: ttk.Frame(cell)
-                             for k in ("auto", "horizontal", "manual")}
+                             for k in ("auto", "horizontal")}
         for f in self._mode_frames.values():
             f.grid(row=0, column=0, sticky="nsew")
         cell.columnconfigure(0, weight=1)
@@ -1580,15 +1664,6 @@ class ReviewPanel(tk.Frame):
         if self.session is not None:
             self._apply_keep_px(redraw=False)
 
-    def _strip_manual(self, cell):
-        """Manual mode: buttons that press the palette's own keys, whose
-        handlers keep the tools mutually exclusive."""
-        for _txt, _k in (("mark", 0), ("rect", 1), ("brush", 2), ("SAM", 4)):
-            if _k < len(self._palette_btns):
-                ttk.Button(cell, text=_txt, style="Compact.TButton",
-                           command=self._palette_btns[_k].invoke).pack(
-                    side="left", fill="x", expand=True)
-
     def _strip_angles(self, row):
         """Topic: the two actions that act on the angles.  Named so they do not
         repeat the mode switch's "Auto"."""
@@ -1635,13 +1710,48 @@ class ReviewPanel(tk.Frame):
         sp.grid(row=0, column=c + 2, sticky="e")
         sp.bind("<Return>", lambda _e: self._on_slider())
 
+    def _toggle_outline(self):
+        on = self.v_after_outline.get()
+        self._notify("outline on -- the photograph's border after the warp"
+                     if on else "outline off")
+        self._schedule_redraw()
+
+    def _draw_after_outline(self, arr, iw, aox, aoy):
+        """The source frame's border, mapped through the correction onto the
+        after picture: shows how far the warp moved each edge and where the
+        fill begins. Sampled along each edge rather than at the corners only,
+        so a mapping that is not a single homography still draws true."""
+        self.c_after.delete("outline")
+        if not self.v_after_outline.get() or self.session is None or arr is None:
+            return
+        k = iw / float(arr.shape[1])          # preview array -> photo on screen
+        w, h, n = float(self.session.w), float(self.session.h), 24
+        edge = ([(w * t / n, 0.0) for t in range(n)] + [(w, h * t / n) for t in range(n)]
+                + [(w * (1 - t / n), h) for t in range(n)] + [(0.0, h * (1 - t / n)) for t in range(n)])
+        pts = []
+        for x, y in edge:
+            q = self.session.source_to_preview(x, y)
+            if q is None:
+                return
+            pts.append((aox + q[0] * k, aoy + q[1] * k))
+        # Only on the picture, never out into the field (user, 2026-10-21:
+        # "dont expand for outline"): each piece is clipped to the picture's
+        # rectangle, so a border the warp threw off-frame is simply not drawn
+        # -- clipping the closed polygon instead would trace the picture's own
+        # edge and pass it off as the border.
+        box = (aox, aoy, aox + iw, aoy + arr.shape[0] * k)
+        for a, b in zip(pts, pts[1:] + pts[:1]):
+            seg = _clip_segment(a, b, box)
+            if seg is not None:
+                self.c_after.create_line(*seg, fill=OVERLAY["outline"], width=2,
+                                         tags="outline")
+
     def _show_mode(self):
-        """Raise the active mode's controls.  All three share one cell, so
+        """Raise the active mode's controls.  Both share one cell, so
         nothing is packed or forgotten and the strip never changes height.
 
         The mode switch IS the horizontal-auto switch: choosing "horizontal"
-        turns the yaw on, choosing "auto" turns it off, and "manual" is its own
-        territory and changes nothing here. The flag stops the two faces of the
+        turns the yaw on, choosing "auto" turns it off. The flag stops the two faces of the
         same switch from re-triggering each other."""
         self._mode_top = self.v_corr_mode.get()
         self._mode_frames[self._mode_top].tkraise()
@@ -2229,13 +2339,11 @@ class ReviewPanel(tk.Frame):
             self._finish_strip()
             self._schedule_redraw()
         # The checkbox is the second face of the mode switch, so it moves the
-        # mode too -- unless the user is in "manual", which is its own
-        # territory. `_syncing_mode` is set when the mode switch drove this
+        # mode too. `_syncing_mode` is set when the mode switch drove this
         # call, so the two faces do not chase each other around.
         if not getattr(self, "_syncing_mode", False):
-            if self.v_corr_mode.get() != "manual":
-                self.v_corr_mode.set("horizontal" if on else "auto")
-                self._mode_frames[self.v_corr_mode.get()].tkraise()
+            self.v_corr_mode.set("horizontal" if on else "auto")
+            self._mode_frames[self.v_corr_mode.get()].tkraise()
         # The correction changed (a yaw came in or went away), so the automatic
         # crop must follow it even when the session is not in AUTO mode.
         self._autocrop_follow()
@@ -3135,9 +3243,13 @@ class ReviewPanel(tk.Frame):
         # images** (user, 2026-09-14), so no pixels need to be taken from
         # inside the frame to host it.
         ph, _ = _to_photo(arr, box)
-        aox = (box[0] - ph.width()) // 2
-        # Centred on both axes (user, 2026-10-21: "always on middle axis").
-        aoy = (box[1] - ph.height()) // 2
+        # Centred on both axes (user, 2026-10-21: "always on middle axis") --
+        # in the LIVE canvas, like the before pane. It used the locked fit box,
+        # so after fullscreen or a resize the picture kept its old offset and
+        # sat 64 px off the axis while the original beside it was centred.
+        live = getattr(self, "_after_live", None) or box
+        aox = (live[0] - ph.width()) // 2
+        aoy = (live[1] - ph.height()) // 2
         self._after_off = (aox, aoy)
         self.c_after.delete("all")
         self._paint_ground(self.c_after)
@@ -3145,6 +3257,7 @@ class ReviewPanel(tk.Frame):
         self._ph_a = ph
         self._draw_after_guides()
         self._draw_after_lines(arr, ph.width(), ph.height())
+        self._draw_after_outline(arr, ph.width(), aox, aoy)
         # The crop outline used to be suppressed while the planar quad was up,
         # because the two drew over each other.  With planar gone there is
         # nothing to yield to, and the flag it tested went with the tool -- this
@@ -3173,7 +3286,7 @@ class ReviewPanel(tk.Frame):
         label_text = f"{self._after_title}   {ow}×{oh}  {cw}×{ch}"
         tid = self.c_after.create_text(label_x, label_y, anchor="nw",
                                        text=label_text, fill=OVERLAY["label"],
-                                       font=("Segoe UI", 9))
+                                       font=ui_font(9))
         bb = self.c_after.bbox(tid)
         if bb:
             pad = 2
@@ -3632,7 +3745,7 @@ class ReviewPanel(tk.Frame):
                                       tags="strip_ruler")
             self.c_before.create_text(pxf + side * 9, oy + 12,
                                       text=f"{frac * 100:.0f}%",
-                                      fill=OVERLAY["strip"], font=("TkDefaultFont", 8),
+                                      fill=OVERLAY["strip"], font=ui_font(8),
                                       anchor="w" if side > 0 else "e",
                                       tags="strip_ruler")
 
@@ -3944,7 +4057,7 @@ class ReviewPanel(tk.Frame):
             self.c_before.create_text(
                 b[0] // 2, b[1] // 2, anchor="center",
                 text="Drop a photograph here\nor click the + to pick one",
-                fill=INK["dim"], font=("Segoe UI", 13))
+                fill=INK["dim"], font=ui_font(13))
         self._set_status("")
 
     def _redraw(self):
@@ -4002,6 +4115,7 @@ class ReviewPanel(tk.Frame):
             after = self.session.render_after(max_edge=max(lock_a), apply_crop=False)
             self._after_base = after      # un-veiled, preview-sized; _show_after bakes it
             self._after_box = lock_a
+            self._after_live = box_a      # centred in this, fitted to lock_a
             import logging as _log
             _log.getLogger("pc.gui").info(
                 "render_after done: shape=%s mean=%.1f",
@@ -4050,7 +4164,7 @@ class ReviewPanel(tk.Frame):
             label_text = f"{self._before_title}   {self.session.w}×{self.session.h}"
             tid = self.c_before.create_text(label_x, label_y, anchor="nw",
                                             text=label_text, fill=OVERLAY["label"],
-                                            font=("Segoe UI", 9))
+                                            font=ui_font(9))
             bb = self.c_before.bbox(tid)
             if bb:
                 pad = 2
@@ -4559,7 +4673,7 @@ class ReviewPanel(tk.Frame):
                                            fill=INK["field"], outline=col, width=2,
                                            tags="rect_quad")
             self.c_before.create_text(cx + r + 8, cy - r - 4, text=str(i + 1),
-                                      fill=col, font=("TkDefaultFont", 8),
+                                      fill=col, font=ui_font(8),
                                       anchor="w", tags="rect_quad")
 
     def _draw_delete_handle(self, cx, cy, col, tag=""):
@@ -4815,7 +4929,7 @@ class ReviewPanel(tk.Frame):
             c.create_text(
                 w // 2, layout.LABEL_INSET_PX, anchor="n",
                 text=notice, fill=INK["text"],
-                font=("Segoe UI", layout.CTRL_FONT_PT),
+                font=ui_font(layout.CTRL_FONT_PT),
                 width=max(60, w // 2),
                 justify="center", tags="status_ov")
         if not text:
@@ -4823,7 +4937,7 @@ class ReviewPanel(tk.Frame):
         c.create_text(
             layout.LABEL_INSET_PX, h - layout.LABEL_INSET_PX, anchor="sw",
             text=text, fill=OVERLAY["status_faint"],
-            font=("Segoe UI", layout.CTRL_FONT_PT),
+            font=ui_font(layout.CTRL_FONT_PT),
             width=max(60, w - 2 * layout.LABEL_INSET_PX),
             justify="left", tags="status_ov")
 
@@ -5091,7 +5205,7 @@ class App(_ROOT_CLASS):
         self._last_applied_theme = theme_name
         INK.update(new)
         # INK is updated, never rebuilt, so a key only one palette defines would
-        # outlive it: switch Phosphor -> Light and the light panes would keep
+        # outlive it: switch Phosphor -> Dark Grey and its flat panes would keep
         # the dark ramp. A palette without a gradient has to say so.
         if "grad" not in new:
             INK.pop("grad", None)

@@ -177,3 +177,21 @@ def test_the_tilt_prior_trades_an_implausible_tilt_for_a_wider_lens():
             assert f < 0.7 * f28 and abs(math.degrees(pitch)) < 30.0, (f, math.degrees(pitch))
         else:
             assert abs(math.log(f / f28)) < 0.35, f
+
+
+def test_a_shifted_frame_with_plumb_verticals_is_left_level():
+    """Plumb verticals mean pitch 0, wherever the horizon sits in the frame.
+
+    A frame cropped off-centre (or shot on a shift lens) puts the horizon
+    below the centre while the verticals stay plumb. The refinement used to
+    read the horizon's height as pitch -- true only for a centred principal
+    point -- and on wohnheim.jpg turned plumb verticals into a +7.38 deg
+    correction. Here a level camera with the bottom of the frame cut away;
+    measured with that term: up to 0.81 deg, without it: at most 0.06."""
+    worst = 0.0
+    for yaw in (0, 20, 35):
+        for keep in (1.0, 0.75, 0.65):
+            sc = synth.Scene(pitch_deg=0, roll_deg=0, yaw_deg=yaw, seed=3)
+            m, _, _, _, _ = analyse(sc.img[: int(sc.h * keep)], Settings())
+            worst = max(worst, abs(math.degrees(m.pitch)))
+    assert worst < 0.3, f"a level camera came back pitched {worst:.2f} deg"

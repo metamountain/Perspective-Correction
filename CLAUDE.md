@@ -647,7 +647,7 @@ features ahead of everything else.*
 - **[UI, user-directed] Pictures centred on both axes; tool palette centred on the left edge.** The before title dodges the palette only where they share a row.
 - **Environment:** installed `piexif` (a hard dependency in `requirements.txt` that was missing; 3 tests) and `simple-lama-inpainting --no-deps`. The default fill is lama, and without the package every Save silently fell back to TELEA and preflight refused the defaults (3 tests). Pillow 12.3 / numpy 2.5.3 / cv2 5.0 unchanged. `test_layout` now asserts the 2026-10-20 edge directives (bottom 10, sides 8) instead of the retired flat 20.
 - **`--full`: 364 tests, 1 failed, 4 skipped.** The failure is the known untracked `3zb3nbpvnp9njrb76wymv5m8pp.jpg` without a cached mask (see 2026-09-26).
-- **Open, diagnosed, NOT fixed (night of 10-21):** in **Auto** mode wohnheim gets pitch +7.38° (conf 0.34, "would skip") although its verticals are plumb, so the after preview splays them.
+- **[superseded the same day -- FIXED, see the next entry]** in **Auto** mode wohnheim gets pitch +7.38° (conf 0.34, "would skip") although its verticals are plumb, so the after preview splays them.
   - **Cause:** the (roll, pitch, f) Nelder-Mead refinement in `model.estimate`. Before it the vertical VP gives pitch **0.90°**. The horizontal-VP term in `_cost_terms` then pulls it to 7.38°, following clusters off the sloping street (horizon support 0.09). The verticals' own cost goes up **7.8x** (median residual 0.53° → 1.47°).
   - **Three guards tried and measured over the whole pool round trip (`PC_TEST_ASSETS=0`); none separates the cases:**
     - drop the horizontals when horizon support < 0.3: hospital goes 0.61° → 1.01°;
@@ -655,6 +655,32 @@ features ahead of everything else.*
     - growth > 5 *and* start pitch < 2°: Mariánské Hory goes 0.54° → 1.39°.
   - Reverted; `model.py` is unchanged. Wohnheim's growth (7.8) sits inside the range of legitimate pulls, so the signal that tells a street from a facade is not in these two numbers. Probably it is in *which* segments formed the horizontal cluster (ground vs. facade, i.e. the mask or a below-horizon test). Measure that before building anything.
   - Mitigated already: **HA** uses the lines' own VP (`_data_vertical_vp`) and is right on wohnheim, and Auto flags it "would skip".
+- **[fix, user-caught] Auto no longer reads pitch off the horizon's height.** The (roll, pitch, f) refinement in `model._cost_terms` had a horizontal-VP term (b · u = 0, weight 0.5). It pins pitch to where the horizon sits, which holds only while the principal point is the frame centre. Shifted and cropped architectural photos break that assumption.
+  - wohnheim: the dominant horizontal cluster is the **facade's own windows** (not the street, as guessed overnight). Its VP sits at y=490 of 643 while the verticals are plumb: a shifted frame. The term invented pitch +7.38°.
+  - The night's guards failed for a reason: the round trip measures **consistency** between a base and a warped copy, and a switch that fires on one and not the other is punished whatever it does. Measured instead as a smooth change, removing the term outright:
+    - Whole-pool round trip (`PC_TEST_ASSETS=0`): mean 0.679° → **0.513°**, worst 4.43° → **2.94°**.
+    - Big gains: 39079116 2.25° → 0.40°, hospital 0.79° → 0.29°, antibes 4.43° → 2.94°.
+    - Slightly worse, all still small: ziegrlburtz 0.28° → 0.57°, grimm 0.20° → 0.41°, csm 0.23° → 0.38°.
+    - Softening it (Cauchy scale 6°) scored mean 0.455° but left wohnheim at 2.25°.
+  - Auto pitch: wohnheim 7.38° → 0.24°, bitterfeld 4.93° → 0.83° (both plumb).
+  - The horizontal VPs still drive yaw, focal and confidence; only the refinement ignores them.
+  - Pinned by `test_estimation.test_a_shifted_frame_with_plumb_verticals_is_left_level` (level synthetic scene with the bottom cut away, yaw 0/20/35): old code 0.81°, new ≤ 0.06°, bound 0.3°. Verified red on the old code.
+  - `test_a_hand_placed_facade_strip_stands_the_review_gate_down_but_not_the_batch` had its batch half held by luck (Alte_Scheune 0.39 vs gate 0.40). With the strip it now scores ≥ 0.40, so the batch half also sets `min_confidence = 0.95`.
+- **[fix, user-caught] The after picture is centred in the LIVE canvas** ("ha image target not on axis"). `_show_after` centred in the locked fit box (`_img_box`), so after fullscreen or a resize it kept its old offset: wohnheim HA L0 R64 T23 B96, while the before pane was L32 R32. Now `_after_live` holds the live size, used for the offset only (the fit still uses the lock). Pinned by `test_both_pictures_stay_centred_when_the_canvas_grows_after_the_lock`, verified red on the old code.
+- **[UI, user-directed] One frame width everywhere** (`layout.CROSS_PX = 8`): the cross between the fields, top, sides and bottom. The cross was 20 (2 × 10) and the top 0. `CROSS_GAP`/`CROSS_BORDER`/`CROSS_SIDE` are all `CROSS_PX`. Pinned in `test_layout` and `test_the_cross_breaks_vertically_with_the_pictures_on_top` (top border and cross width measured).
+- **[UI, user-directed] C64 theme: three colours and the C64 face.**
+  - Colours: Pepto blue `#352879`, light blue `#6C5EB5`, white. ok/warn/err are white too. Keys that share a colour differ in the last bit, because `_retint_bg` maps by value and would otherwise recolour a picture canvas as "bg" on the way out (measured: back to Minimal Black gives `c_before` `#101216`).
+  - Font: `Commodore Pixelized v1.2.ttf` in the repo root, loaded per process (`_load_private_font`, `AddFontResourceEx` FR_PRIVATE). **Not committed**: its ReadMe grants no redistribution. Without it the theme falls back.
+  - Theme keys `font_px` (12, one pixel size for every text; 1.5× by the user's wish) and `pad_x` (1). At 12 px the control row asked 1027 of 948 px with the default 6 px padding; with 1 it is 947 of 948. 16 px clipped labels whatever the padding.
+  - Canvas texts no longer hard-code `Segoe UI`: `ui_font(size)` follows the theme. `("TkDefaultFont", n)` was a family name Tk does not have, not the named font.
+  - One unexplained Tcl error in `root.configure(background=...)` on the first C64 switch of one run; not reproduced in 5 runs since.
+- **[UI, user-directed] "Light" is gone; "Dark Grey" replaces it** ("light looks shitty"). The theme is not persisted, so no saved preference needed migrating.
+- **[UI, user-directed] Manual mode removed.** It only showed four buttons that pressed the tool palette's own keys; a drawn line overrules the detector in every mode. The switch is Auto | Horizontal auto.
+- **[UI, user-directed] Live lama preview is the default** (`live_fill_preview = True`). Cost: about 1.2 s per redraw at preview size (measured 09-26 on Platte_1); untick "live" for the 38 ms telea stand-in while dragging.
+- **[UI, user-directed] Auto crop grows with a fill on: +10% wide, +20% tall, centred, never past the image outline or the canvas** (`warp.AUTO_CROP_GROW_X/Y`; "motifs need more flesh"). The fill covers the growth; with fill "none" nothing grows, and the no-invented-pixel test runs with fill "none".
+  - Pinned by `test_with_a_fill_on_the_auto_crop_grows_10_wide_20_tall_inside_the_outline`, checked against a computed expectation at pitch 4/9/20. It goes red without the growth.
+  - The outline clamp did NOT go red on sabotage: in every tested case the canvas ends where the outline does, so the two limits coincide. It stays as the stated rule.
+- **[UI, user-directed] "Outline" switch beside "Check lines"**: the photograph's own border mapped through the correction onto the after picture (`OVERLAY["outline"]`, yellow). Each edge piece is clipped to the picture; nothing is drawn outside it or along the picture's own edge. Toggling posts a notice. Pinned by `test_the_outline_switch_draws_the_source_border_where_the_warp_put_it`.
 - **[UI, user-directed] Guides are pulled from a band around the picture**, `GUIDE_BAND_PX = 8` outside and 8 inside every edge, so 16 px all round (user: finding them was "a fuck up").
   - A press in the band creates the guide and is already dragging it. A press that travels less than `GUIDE_CLICK_PX` is a click and leaves nothing.
   - Hover shows the direction cursor. Crop handles still win. A notice says how to remove a guide.
