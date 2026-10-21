@@ -15,7 +15,7 @@ pc-run-*/
 # the README that explains what the folder is for (a fresh clone gets an empty
 # directory otherwise, and no way to know why it exists)
 analysis/*
-!analysis/README.md
+# (analysis/README.md is local only since 2026-10-21)
 
 # scratch: one-off probes, smoke scripts and captured run output. These belong
 # in analysis/scratch/, not at the root -- but they land at the root first, so
@@ -63,7 +63,7 @@ models/*.tar
 # `git add -A` would have taken it. settings.json is where the API key lives.
 **/.qwen/settings.json
 **/.qwen/tmp/
-!.qwen/skills/
+# (.qwen/skills/ is local only since 2026-10-21)
 
 # local backups taken before a large doc edit; the content is in git history
 *.bak
@@ -131,3 +131,33 @@ tests/assets/**
 
 # tools/drive_review.py output
 debug_out/
+
+# --- local only (2026-10-21): agent/worker notes and internal plans --------
+# They stay on disk and out of the public repo. CLAUDE.md is the exception
+# and stays tracked.
+QWEN.md
+knowledge.md
+powerdebug-report.md
+.claude/
+skills/
+docs/claude-md-overhaul-plan.md
+docs/ha-layout-fix-plan.md
+docs/layout-impl-plan.md
+docs/layout-spec.md
+docs/qwen-knowledge.md
+docs/worker-anleitung.txt
+docs/worker-environment.md
+tools/worker_agent.py
+tools/worker_bench.py
+tools/powerdebug.py
+tools/verify_findings.py
+tools/probe_gestures.py
+tools/cap_sweep.py
+tools/measure_cost.py
+tools/shoot.py
+# scratch at the root: layout mockups, screenshots, browser logs, a font
+# without a redistribution licence
+/layout-*.html
+/v*-*.png
+/.playwright-mcp/
+/*.ttf
