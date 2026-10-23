@@ -50,7 +50,14 @@ itself on hover (after a second).
 
 ## Install
 
-**Double-click** `Install (Windows).bat` or `Install (macOS).command`
+**macOS, one line in Terminal** (fetches the code into `~/Perspective-Correction`,
+offers to install Python if it is missing, then installs everything):
+
+```
+curl -fsSL https://raw.githubusercontent.com/metamountain/Perspective-Correction/main/tools/install_mac.sh | bash
+```
+
+Or **double-click** `Install (Windows).bat` or `Install (macOS).command`
 (`--lama` adds the lama fill, which needs torch). Windows installs into the
 Python on PATH; macOS into `.venv` here, and `Perspective Correction.command`
 starts from it. On Linux, or by hand:
