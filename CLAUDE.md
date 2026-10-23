@@ -635,6 +635,10 @@ features ahead of everything else.*
 
 ### Done — rely on these
 
+**2026-10-23**
+
+- **[docs, user-directed] README carries one picture, at the top: `docs/screenshot.jpg`** (the review window in Horizontal auto, 1920x1080 JPEG q88, from the user's 2559x1439 `Screenshot_PC.png`). `docs/hero-before-after.jpg`, `docs/horizontal-auto.jpg`, `docs/ui.png` and their attribution lines are removed from git; copies in `Trashcan/readme_images_2026-10-23/`. `docs/outpaint-band-example.jpg` stays (`workflows/README.md` names it).
+
 **2026-10-21**
 
 - **[repo, user-directed] Git carries only the test photos the suite names**: `79cb33878…jpg`, `1070912stkzg.jpg`, `Alte_Scheune.jpg` (with masks), `Horizontal/Platte_1.jpg`, plus `roi.json` and the READMEs. Untracked, kept on disk, re-ignored in `.gitignore`: 39079116, Mariánské Hory, Antibes, the avif, cedric-vilim, hospital, lochfassade, their masks, `sam2_masks/`, and the unlinked `docs/before-after.jpg`/`detection.jpg`. Two `test_gui` tests used lochfassade and now use 1070912stkzg. Checked on a `git archive HEAD` export (what CI sees): `--full` 377 tests, 0 failed, 4 skipped. **CI's `test_assets` now samples 3 photos, not 5, and the `_ALWAYS` hard cases are local-only**; the full pool runs here.

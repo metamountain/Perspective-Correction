@@ -1,8 +1,6 @@
 # Perspective Correction
 
-![A Newark mansion photographed looking up, before and after. The verticals converge sharply in the left frame and stand plumb in the right one; the soft band down the left edge of the result is the area the rotation opened up, filled rather than cropped away.](docs/hero-before-after.jpg)
-
-<sup>Kastner Mansion, Newark — [Wikimedia Commons](https://commons.wikimedia.org/wiki/File:Kastner_Mansion_Newark.jpg), Djflem, CC0. Pitch +12.7°, roll +2.4°.</sup>
+![The review window in Horizontal auto: the obliquely shot facade on the left with its detected lines and the tool palette, the corrected frontal view on the right with the source outline and the crop, controls below.](docs/screenshot.jpg)
 
 Straightens architectural photographs. Two modes:
 
@@ -14,10 +12,6 @@ Straightens architectural photographs. Two modes:
 You review one photograph at a time and nothing is written until **Save**.
 
 ## Horizontal auto: frontal facades from oblique shots
-
-![Panel houses in Mariánské Hory shot at a steep angle, before and after Horizontal auto. On the left the pink facade recedes to the left; on the right it faces the camera, windows in level rows and plumb columns.](docs/horizontal-auto.jpg)
-
-<sup>Mariánské Hory, panelové domy — [Wikimedia Commons](https://commons.wikimedia.org/wiki/File:Mari%C3%A1nsk%C3%A9_Hory,_panelov%C3%A9_domy_4.jpg), Lukáš Mižoch, CC BY-SA 2.5. Yaw 59.4°, facade strip on the pink wall, lama fill.</sup>
 
 This mode is for **facade textures for 3D**, **Google Street View grabs**,
 elevation tracing, or any wall you could only photograph from the side. The
@@ -37,8 +31,6 @@ on the picture fix it:
 - **strike slanted** lines in one click;
 - **draw the truth** (`m`): a drawn line comes out *exactly* vertical or
   horizontal, and 2 + 2 drawn lines make a rectangle with 90° corners.
-
-![The review window: original with detected lines and the tool palette top left, corrected frame with crop top right, detector, mask and correction controls below.](docs/ui.png)
 
 Every control explains itself on hover (after a second).
 
