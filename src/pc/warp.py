@@ -969,6 +969,53 @@ def _keep_near_edge(H_total, out_w, out_h, img_w, img_h, settings, yaw):
     return S @ H_total, max(1, int(round(out_w * s))), max(1, int(round(out_h * s)))
 
 
+def interest_point(img_w, img_h, segs=None):
+    """``(x, y)`` source px where the motif is: the length-weighted median of the
+    segment midpoints (the building's lines), else the frame centre."""
+    if segs is not None:
+        segs = np.asarray(segs, float)
+        if segs.ndim == 2 and len(segs) >= 3:
+            mid = 0.5 * (segs[:, :2] + segs[:, 2:4])
+            wts = np.hypot(segs[:, 2] - segs[:, 0], segs[:, 3] - segs[:, 1])
+            if wts.sum() > 0:
+                def wmed(v):
+                    o = np.argsort(v)
+                    c = np.cumsum(wts[o]) / wts.sum()
+                    return float(v[o][np.searchsorted(c, 0.5)])
+                return wmed(mid[:, 0]), wmed(mid[:, 1])
+    return 0.5 * img_w, 0.5 * img_h
+
+
+def magnification_at(H_total, x, y):
+    """``(sx, sy)``: output px per source px along x and y at source ``(x, y)``."""
+    d = 2.0
+    p = np.array([[[x, y]], [[x + d, y]], [[x, y + d]]], dtype=float)
+    q = cv2.perspectiveTransform(p, np.asarray(H_total, float)).reshape(-1, 2)
+    return (float(np.linalg.norm(q[1] - q[0]) / d),
+            float(np.linalg.norm(q[2] - q[0]) / d))
+
+
+def keep_centre(H_total, out_w, out_h, img_w, img_h, segs=None):
+    """Scale a plan up until the motif's centre is sampled at least 1:1.
+
+    User, 2026-10-23, on an Auto save that shrank the house: "sollte eigentlich
+    zentral erhalten werden". A pitch correction stretches the top edge, the
+    canvas grows tall, and ``_fit_inside`` then scales everything back to the
+    source's long edge -- so the sky got the room and the building paid:
+    measured 0.84 x 0.87 linear (0.73 of its pixels) at the house centre,
+    2.15 at the treetops. ``_keep_near_edge`` guards the same loss, but only
+    under a yaw. This one holds in every mode, at the point that matters, and
+    stops at ``NEAR_EDGE_MAX_SCALE`` like its sibling.
+    """
+    x, y = interest_point(img_w, img_h, segs)
+    worst = min(magnification_at(H_total, x, y))
+    if worst <= 0 or worst >= 0.999:
+        return H_total, out_w, out_h
+    s = min(1.0 / worst, NEAR_EDGE_MAX_SCALE)
+    S = np.array([[s, 0, 0], [0, s, 0], [0, 0, 1]], dtype=float)
+    return S @ H_total, max(1, int(round(out_w * s))), max(1, int(round(out_h * s)))
+
+
 def _cap_canvas(result, img_w: int, img_h: int, settings):
     """Scale a finished plan down when the canvas runs past ``max_area_ratio``.
 

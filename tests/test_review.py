@@ -731,25 +731,11 @@ def test_single_image_save_runs_the_fill_when_a_mode_is_set():
         FILL.fill = orig
 
     assert "hole" in calls, "save() must call inpaint.fill when a fill mode is set"
-    # The hole it passes matches the planned output size.  save() uses
-    # keep_size=True (2026-09-26, user-directed: "lange Kante gleich viel
-    # Pixel, nicht doppelt so viele"), scoped to the review save path only,
-    # so the output stays at source dimensions rather than growing to fit
-    # the warped quad. Note: _whole_frame now crops to the facade bounding
-    # box + margin, so the planned size may differ from a naive full-quad
-    # calculation.
-    roll, pitch, f, yaw = s.current_angles()
-    save_settings = s.settings.replace(keep_size=True)
-    H = W.build(s.w, s.h, f, roll, pitch)
-    # Rebuild line segments the same way save() does
-    _segs = None
-    if len(s.vert) or len(s.horiz):
-        _parts = [x.seg for x in (s.vert, s.horiz) if len(x)]
-        if _parts:
-            _segs = np.concatenate(_parts, axis=0)
-    planned = W.plan(s.w, s.h, H, save_settings, line_segs=_segs, yaw=yaw)
-    assert planned is not None
-    H_total, ow, oh, _, _ = planned
+    # The hole it passes matches what save() writes. `output_size()` is the
+    # contract for that (it mirrors save's plan, keep_size and keep_centre
+    # included); this test re-derived the plan by hand and went stale the
+    # first time save grew a step (keep_centre, 2026-10-23).
+    ow, oh = s.output_size()
     assert calls["hole"].shape == (oh, ow), "hole must match the planned output size"
     assert bool(np.any(calls["hole"])), "a real correction must open a band to fill"
 
@@ -804,23 +790,9 @@ def test_save_with_real_lama_produces_a_filled_frame():
         assert out is not None, "save() must write a file"
         assert out.shape[2] == 3
 
-    # The output must match the planned size.  save() uses keep_size=True
-    # (2026-09-26, user-directed), scoped to the review save path, so the
-    # output stays at source dimensions rather than growing to fit the
-    # warped quad. _whole_frame crops to the facade bounding box + margin,
-    # so we rebuild the plan with the same line segments save() uses.
-    from pc import warp as W
-    roll, pitch, f, yaw = s.current_angles()
-    save_settings = s.settings.replace(keep_size=True)
-    H = W.build(s.w, s.h, f, roll, pitch)
-    _segs = None
-    if len(s.vert) or len(s.horiz):
-        _parts = [x.seg for x in (s.vert, s.horiz) if len(x)]
-        if _parts:
-            _segs = np.concatenate(_parts, axis=0)
-    planned = W.plan(s.w, s.h, H, save_settings, line_segs=_segs, yaw=yaw)
-    assert planned is not None
-    _, ow, oh, _, _ = planned
+    # The output must be what `output_size()` promised -- the contract, not a
+    # hand-rebuilt copy of save's plan (that copy went stale with keep_centre).
+    ow, oh = s.output_size()
     assert out.shape[:2] == (oh, ow), "output must be the planned size"
     assert ow >= s.w and oh >= s.h, "output must never be smaller than input"
 

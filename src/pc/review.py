@@ -2250,7 +2250,9 @@ class ReviewSession:
                          strip=self.strip)
         if planned is None:
             return self.w, self.h
-        return int(planned[1]), int(planned[2])
+        _H, ow, oh = W.keep_centre(planned[0], int(planned[1]), int(planned[2]),
+                                   self.w, self.h, _segs)
+        return ow, oh
 
     def save(self, dst_path: str, on_stage=None):
         """Write the corrected image using whatever is currently in force.
@@ -2308,6 +2310,9 @@ class ReviewSession:
                 f"the photograph folds past its vanishing line. Lower the yaw, "
                 f"or place the facade strip on one wall.")
         H_total, ow, oh, _, _ = planned
+        # The motif keeps its pixels (user, 2026-10-23); a pure scale, so the
+        # crop fractions taken on the preview still hold.
+        H_total, ow, oh = W.keep_centre(H_total, ow, oh, self.w, self.h, _segs)
         mpx = ow * oh / 1e6
         _stage("warping", mpx)
         out = W.apply(self.bgr, H_total, ow, oh, save_settings)

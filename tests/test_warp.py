@@ -450,3 +450,28 @@ def test_the_interest_box_ignores_slanted_foreground_but_keeps_a_gable():
     assert with_rail[3] < 560 and abs(with_rail[2] - plain[2]) < 1, (plain, with_rail)
     with_gable = W.interest_box(H, np.array(facade + railing + gable, float), 1000, 800)
     assert with_gable[1] < 125, ("the gable was cut off", with_gable)
+
+
+def test_a_pitch_correction_keeps_the_motif_at_full_resolution():
+    """User, 2026-10-23: after Auto the house had visibly fewer pixels. A pitch
+    of 16 deg at a 15 mm-ish focal (the measured case, 768x1024, f=444 px)
+    stretches the top, and fitting the long edge back to the source sampled the
+    middle at 0.84. `keep_centre` must bring the motif's centre to >= 1:1, and
+    the old plan must really have been below it (or this test proves nothing)."""
+    w, h, f = 768, 1024, 444.0
+    H = W.build(w, h, f, math.radians(-1.0), math.radians(16.2), 0.0, max_area=9.0)
+    s = Settings().replace(keep_size=True, max_area_ratio=9.0)
+    Ht, ow, oh, _c, _a = W.plan(w, h, H, s)
+    centre = (0.55 * w, 0.55 * h)
+    before = min(W.magnification_at(Ht, *centre))
+    assert before < 0.95, f"the case no longer shrinks the middle ({before:.2f})"
+    segs = np.array([[0.40 * w, 0.40 * h, 0.40 * w, 0.70 * h],
+                     [0.70 * w, 0.40 * h, 0.70 * w, 0.70 * h],
+                     [0.40 * w, 0.55 * h, 0.70 * w, 0.55 * h]])
+    Ht2, ow2, oh2 = W.keep_centre(Ht, ow, oh, w, h, segs)
+    after = min(W.magnification_at(Ht2, *W.interest_point(w, h, segs)))
+    assert after >= 0.999, after
+    assert ow2 / ow == oh2 / oh or abs(ow2 / ow - oh2 / oh) < 0.01, "not a pure scale"
+    assert ow2 <= ow * W.NEAR_EDGE_MAX_SCALE + 1
+    # Already at full resolution: left alone.
+    assert W.keep_centre(Ht2, ow2, oh2, w, h, segs)[1:] == (ow2, oh2)
