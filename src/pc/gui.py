@@ -1024,6 +1024,9 @@ def _dark_titlebar(win):
         return
 
 
+_CPU_LIVE_TOLD = False      # once per run: see ReviewPanel._live_cpu_check
+
+
 def _lama_installed():
     """Without importing it: simple_lama imports torch, which takes seconds."""
     from . import depinstall
@@ -4265,11 +4268,34 @@ class ReviewPanel(tk.Frame):
             self._set_status_extra(f"the slow fill failed ({err}); "
                                    "the quick fill stays on screen")
             return
+        self._live_cpu_check()
         if gen != self._fill_gen or self.session is None or img is None:
             return                                # the picture moved on meanwhile
         self._after_base = img
         self._show_after(self.session.crop_rect)
         self._set_status(self.session.status_text())
+
+    def _live_cpu_check(self):
+        """lama on the CPU takes seconds per preview (7 s at 1000 px measured on
+        32 cores, 2026-10-23): switch the live preview off once and say so
+        (user: "1" -- off where there is no GPU). Decided after the first lama
+        fill, because asking for the device means importing torch, which would
+        cost every start seconds. Saves keep using lama."""
+        global _CPU_LIVE_TOLD
+        if _CPU_LIVE_TOLD:
+            return
+        from . import inpaint as FILL
+        if FILL.lama_device() != "cpu":
+            return
+        _CPU_LIVE_TOLD = True
+        v = getattr(self, "v_livefill", None)
+        if v is None or not v.get():
+            return
+        v.set(False)
+        self._apply_fill()
+        self._notify("lama runs on the CPU here (several seconds per preview) -- "
+                     "live preview switched off, saves still use lama. "
+                     "Tick 'live' to see lama in the preview again.")
 
     def _fill_wait(self, timeout=60.0):
         """Before a save: no second model call while the preview's is running."""

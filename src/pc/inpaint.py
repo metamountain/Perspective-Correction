@@ -99,6 +99,8 @@ PREVIEW_MAX_EDGE = 480
 
 _LOCK = threading.Lock()
 _LAMA = None
+_LAMA_DEVICE = None        # "cuda" / "mps" / "cpu" once the model is loaded
+LAMA_NOTE = ""             # why a faster device was not used, if one was tried
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.normpath(os.path.join(HERE, "..", ".."))
@@ -220,12 +222,44 @@ def _fill_telea(bgr: np.ndarray, hole: np.ndarray, settings) -> np.ndarray:
 # --------------------------------------------------------------------------
 # LaMa
 # --------------------------------------------------------------------------
+def _pick_device(requested: str = "") -> str:
+    """CUDA, else Apple's GPU (MPS), else the CPU -- unless one was asked for.
+
+    simple-lama's own default knows only CUDA and the CPU, so a Mac ran lama on
+    the CPU: ~7 s per 1000 px fill against 2.5 s on a GPU (measured 2026-10-23).
+    """
+    if requested:
+        return requested
+    import torch
+    if torch.cuda.is_available():
+        return "cuda"
+    mps = getattr(torch.backends, "mps", None)
+    if mps is not None and mps.is_available():
+        return "mps"
+    return "cpu"
+
+
+def _load_lama(device: str):
+    import torch
+    from simple_lama_inpainting import SimpleLama
+    model = SimpleLama(device=torch.device(device))
+    if device == "mps":
+        # LaMa's Fourier convolutions need FFT ops MPS may lack; find out on a
+        # 64 px probe now rather than on the user's photograph.
+        from PIL import Image
+        probe = np.zeros((64, 64, 3), np.uint8)
+        mask = np.zeros((64, 64), np.uint8)
+        mask[16:48, 16:48] = 255
+        model(Image.fromarray(probe), Image.fromarray(mask))
+    return model
+
+
 def _lama_model(device: str = ""):
-    global _LAMA
+    global _LAMA, _LAMA_DEVICE, LAMA_NOTE
     with _LOCK:
         if _LAMA is None:
             try:
-                from simple_lama_inpainting import SimpleLama
+                import simple_lama_inpainting  # noqa: F401
             except ImportError as exc:
                 raise FillUnavailable(
                     "LaMa needs simple-lama-inpainting: "
@@ -233,9 +267,33 @@ def _lama_model(device: str = ""):
                     "(--no-deps matters: its pins downgrade Pillow and numpy "
                     "and break OpenCV)") from exc
             try:
-                _LAMA = SimpleLama(device=device) if device else SimpleLama()
+                dev = _pick_device(device)
+                try:
+                    _LAMA = _load_lama(dev)
+                except Exception as exc:
+                    if dev != "mps" or device:
+                        raise
+                    LAMA_NOTE = f"Apple GPU (mps) failed, lama runs on the CPU: {exc}"
+                    dev = "cpu"
+                    _LAMA = _load_lama(dev)
+                _LAMA_DEVICE = dev
             except Exception as exc:
                 raise FillUnavailable(f"LaMa failed to load: {exc}") from exc
+        return _LAMA
+
+
+def lama_device():
+    """The device the loaded lama runs on, or None before the first fill."""
+    return _LAMA_DEVICE
+
+
+def _lama_to_cpu(exc):
+    """An MPS model that loaded but failed on a real photograph: go to the CPU."""
+    global _LAMA, _LAMA_DEVICE, LAMA_NOTE
+    with _LOCK:
+        LAMA_NOTE = f"Apple GPU (mps) failed on a photograph, lama runs on the CPU: {exc}"
+        _LAMA = _load_lama("cpu")
+        _LAMA_DEVICE = "cpu"
         return _LAMA
 
 
@@ -261,7 +319,12 @@ def _fill_lama(bgr: np.ndarray, hole: np.ndarray, settings, step=None) -> np.nda
     small, m = _prepare(bgr, hole, int(getattr(settings, "fill_max_edge", 2048)))
     img = Image.fromarray(cv2.cvtColor(small, cv2.COLOR_BGR2RGB))
     mark("generating", 0.65)
-    out = model(img, Image.fromarray(m))
+    try:
+        out = model(img, Image.fromarray(m))
+    except Exception as exc:
+        if _LAMA_DEVICE != "mps":
+            raise
+        out = _lama_to_cpu(exc)(img, Image.fromarray(m))
     mark("pasting it back", 0.90)
     gen = cv2.cvtColor(np.array(out.convert("RGB")), cv2.COLOR_RGB2BGR)
     if gen.shape[:2] != small.shape[:2]:      # LaMa pads to a multiple of 8

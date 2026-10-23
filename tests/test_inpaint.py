@@ -680,3 +680,69 @@ def test_a_missing_backend_falls_back_to_telea_instead_of_failing():
         F._fill_lama = orig
     assert note.startswith("telea filled") and "lama unavailable" in note
     assert not np.array_equal(out[hole], img[hole]) or not hole.any()
+
+
+def test_lama_prefers_cuda_then_the_apple_gpu_then_the_cpu():
+    """simple-lama alone knows CUDA and the CPU, so a Mac always got the CPU."""
+    try:
+        import torch
+    except ImportError:
+        raise SkipTest("no torch")  # noqa: F821
+    from pc import inpaint as FILL
+    cuda, mps = torch.cuda.is_available, torch.backends.mps.is_available
+    try:
+        for c, m, want in ((True, True, "cuda"), (False, True, "mps"), (False, False, "cpu")):
+            torch.cuda.is_available = lambda c=c: c
+            torch.backends.mps.is_available = lambda m=m: m
+            assert FILL._pick_device() == want, (c, m)
+        assert FILL._pick_device("cpu") == "cpu", "an asked-for device must win"
+    finally:
+        torch.cuda.is_available, torch.backends.mps.is_available = cuda, mps
+
+
+def test_an_apple_gpu_that_fails_falls_back_to_the_cpu_at_load_and_mid_fill():
+    """LaMa's Fourier convolutions may not run on MPS. Neither a failed load nor
+    a failure on the first real photograph may cost the fill."""
+    try:
+        import simple_lama_inpainting  # noqa: F401
+    except ImportError:
+        raise SkipTest("no simple-lama-inpainting")  # noqa: F821
+    from PIL import Image
+    from pc import inpaint as FILL
+
+    class Fake:
+        def __init__(self, dev, breaks=False):
+            self.dev, self.breaks = dev, breaks
+
+        def __call__(self, img, mask):
+            if self.breaks:
+                raise RuntimeError("fft not supported on mps")
+            return Image.new("RGB", img.size, (10, 200, 30))
+
+    saved = (FILL._LAMA, FILL._LAMA_DEVICE, FILL.LAMA_NOTE, FILL._pick_device, FILL._load_lama)
+    try:
+        FILL._pick_device = lambda requested="": requested or "mps"
+
+        def load_fails_on_mps(dev):
+            if dev == "mps":
+                raise RuntimeError("mps probe failed")
+            return Fake(dev)
+        FILL._LAMA, FILL._LAMA_DEVICE = None, None
+        FILL._load_lama = load_fails_on_mps
+        FILL._lama_model()
+        assert FILL.lama_device() == "cpu" and "mps" in FILL.LAMA_NOTE
+
+        # loads on mps, then fails on the photograph
+        FILL._LAMA, FILL._LAMA_DEVICE, FILL.LAMA_NOTE = None, None, ""
+        FILL._load_lama = lambda dev: Fake(dev, breaks=(dev == "mps"))
+        FILL._lama_model()
+        assert FILL.lama_device() == "mps"
+        bgr = np.zeros((40, 60, 3), np.uint8)
+        hole = np.zeros((40, 60), bool)
+        hole[:, :10] = True
+        out = FILL._fill_lama(bgr, hole, Settings().replace(fill="lama"))
+        assert FILL.lama_device() == "cpu" and "photograph" in FILL.LAMA_NOTE
+        assert out[20, 5, 1] > 150, "the CPU model's fill did not land"
+    finally:
+        (FILL._LAMA, FILL._LAMA_DEVICE, FILL.LAMA_NOTE, FILL._pick_device,
+         FILL._load_lama) = saved

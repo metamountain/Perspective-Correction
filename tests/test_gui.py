@@ -2328,3 +2328,35 @@ def test_the_footer_buttons_show_their_help_on_screen():
             app.update()
     finally:
         app.destroy()
+
+
+def test_lama_on_the_cpu_switches_the_live_preview_off_once_and_says_so():
+    """User, 2026-10-23: with no GPU, lama takes seconds per preview; the live
+    preview goes off after the first lama fill shows it runs on the CPU, with
+    a notice saying how to bring it back -- once, and never on a GPU."""
+    from pc import gui as G
+    from pc import inpaint as FILL
+    saved = (FILL.lama_device, G._CPU_LIVE_TOLD)
+    app = _app()
+    try:
+        _loaded(app, 1400, 800)
+        r = app.review
+        for dev in ("cuda", "mps"):
+            G._CPU_LIVE_TOLD = False
+            FILL.lama_device = lambda dev=dev: dev
+            r.v_livefill.set(True)
+            r._live_cpu_check()
+            assert r.v_livefill.get(), f"live switched off on {dev}"
+        G._CPU_LIVE_TOLD = False
+        FILL.lama_device = lambda: "cpu"
+        r._notice = ""
+        r._live_cpu_check()
+        assert not r.v_livefill.get()
+        assert not r.session.settings.live_fill_preview, "the session still renders live"
+        assert "CPU" in r._notice and "live" in r._notice, r._notice
+        r.v_livefill.set(True)          # the user ticks it back: it stays
+        r._live_cpu_check()
+        assert r.v_livefill.get(), "switched off a second time"
+    finally:
+        FILL.lama_device, G._CPU_LIVE_TOLD = saved
+        app.destroy()
