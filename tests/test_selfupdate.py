@@ -351,3 +351,24 @@ def test_an_archive_that_reaches_outside_the_folder_is_refused_whole():
             assert SU.read_mark(root) is None
         finally:
             gh.close()
+
+
+def test_an_update_that_stops_half_way_can_be_finished_by_pressing_again():
+    """Its own message says "press update again to finish it", so that must
+    work: the files written before the failure are the update's, not edits."""
+    with tempfile.TemporaryDirectory() as d:
+        gh, root = _FakeGitHub(d), os.path.join(d, "install")
+        try:
+            gh.publish(A, "first", {"a.txt": "a1\n", "b.txt": "b1\n"})
+            assert SU.archive_apply(root, api=gh.api, tarball=gh.tarball)[0]
+            os.makedirs(os.path.join(root, "c.txt"))       # blocks the third file
+            gh.publish(B, "second", {"a.txt": "a2\n", "b.txt": "b2\n", "c.txt": "c\n"})
+            ok, text = SU.archive_apply(root, api=gh.api, tarball=gh.tarball)
+            assert ok is False and "again" in text
+            os.rmdir(os.path.join(root, "c.txt"))
+            ok, text = SU.archive_apply(root, api=gh.api, tarball=gh.tarball)
+            assert ok, text
+            assert _read(root, "a.txt") == "a2\n" and _read(root, "c.txt") == "c\n"
+            assert SU.read_mark(root)["sha"] == B
+        finally:
+            gh.close()

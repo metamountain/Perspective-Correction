@@ -303,6 +303,14 @@ def edited_files(root=None, mark=None):
     return out
 
 
+def _write_mark(root, sha, files):
+    """Through a temporary name, so a crash never leaves half a record."""
+    path = os.path.join(root, INSTALL_MARK)
+    with open(path + ".tmp", "w", encoding="utf-8") as fh:
+        json.dump({"sha": sha, "files": files}, fh, indent=0)
+    os.replace(path + ".tmp", path)
+
+
 def _kept(rel):
     return rel.split("/", 1)[0] in KEEP
 
@@ -413,8 +421,8 @@ def archive_apply(root=None, api=API, tarball=TARBALL) -> tuple:
                 src = os.path.join(staged, rel)
                 dst = os.path.join(root, rel)
                 digest = _sha256(src)
-                written[rel] = digest
                 if os.path.isfile(dst) and _sha256(dst) == digest:
+                    written[rel] = digest
                     continue
                 os.makedirs(os.path.dirname(dst), exist_ok=True)
                 part = dst + ".pc_update"
@@ -424,8 +432,19 @@ def archive_apply(root=None, api=API, tarball=TARBALL) -> tuple:
                     # executable
                     os.chmod(part, (m.mode & 0o777) | 0o600)
                 os.replace(part, dst)
+                # only now: a file that failed keeps its old hash, so it is
+                # not mistaken for a local edit on the next press
+                written[rel] = digest
                 changed += 1
         except OSError as exc:
+            # Record what was written under the OLD commit, so the next press
+            # sees an update still waiting and these files as the update's.
+            files = dict((old or {}).get("files", {}))
+            files.update(written)
+            try:
+                _write_mark(root, (old or {}).get("sha"), files)
+            except OSError:
+                pass
             return False, (f"The update stopped half way: {exc}\n\nPress "
                            f"update again to finish it.")
 
@@ -437,8 +456,11 @@ def archive_apply(root=None, api=API, tarball=TARBALL) -> tuple:
                 removed += 1
             except OSError:
                 pass
-    with open(os.path.join(root, INSTALL_MARK), "w", encoding="utf-8") as fh:
-        json.dump({"sha": sha, "files": written}, fh, indent=0)
+    try:
+        _write_mark(root, sha, written)
+    except OSError as exc:
+        return False, (f"The files are updated, but the record of them could "
+                       f"not be written: {exc}\n\nPress update again.")
 
     lines = [f"Updated: {((old or {}).get('sha') or 'unknown')[:7]} -> {sha[:7]}",
              f"{changed} file(s) changed, {removed} removed."]
