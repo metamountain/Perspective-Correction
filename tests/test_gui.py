@@ -2282,3 +2282,31 @@ def test_the_strip_handle_is_never_under_the_tool_palette():
                 (str(k), (x0, y0, x1, y1), (hx, hy))
     finally:
         app.destroy()
+
+
+def test_the_footer_buttons_show_their_help_on_screen():
+    """batch, deps and update sit on the bottom edge; their help used to open
+    below it, off the screen (user, 2026-10-23)."""
+    import tkinter as tk
+    app = _app()
+    try:
+        sw, sh = app.winfo_screenwidth(), app.winfo_screenheight()
+        app.geometry(f"1400x800+{sw - 1400}+{sh - 800}")      # flush bottom right
+        _settle(app, 10)
+        for btn in (app.btn_batch, app.btn_deps, app.btn_update):
+            btn.event_generate("<Enter>")
+            tips = []
+            end = time.time() + layout.TOOLTIP_DELAY_MS / 1000 + 1.0
+            while time.time() < end and not tips:
+                app.update(); time.sleep(0.02)
+                tips = [w for w in btn.winfo_children() if isinstance(w, tk.Toplevel)]
+            assert tips, f"{btn.cget('text')}: no help"
+            t = tips[0]
+            t.update_idletasks()
+            x, y, w, h = t.winfo_rootx(), t.winfo_rooty(), t.winfo_width(), t.winfo_height()
+            assert 0 <= x and x + w <= sw and 0 <= y and y + h <= sh, \
+                (btn.cget("text"), x, y, w, h, sw, sh)
+            btn.event_generate("<Leave>")
+            app.update()
+    finally:
+        app.destroy()

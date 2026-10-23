@@ -1041,13 +1041,18 @@ def _attach_tooltip(widget, text):
         t = tk.Toplevel(widget)
         t.configure(bg=INK["cross"])
         t.wm_overrideredirect(True)
-        x = widget.winfo_rootx() + 12
-        y = widget.winfo_rooty() + widget.winfo_height() + 4
-        t.wm_geometry(f"+{x}+{y}")
+        t.withdraw()                    # measured first, shown where it fits
         lbl = tk.Label(t, text=text, background=INK["cross"], foreground=INK["text"],
                        font=ui_font(9), padx=8, pady=4, relief="solid",
                        borderwidth=1, wraplength=320, justify="left")
         lbl.pack()
+        t.update_idletasks()
+        x, y = layout.tooltip_xy(widget.winfo_rootx(), widget.winfo_rooty(),
+                                 widget.winfo_width(), widget.winfo_height(),
+                                 t.winfo_reqwidth(), t.winfo_reqheight(),
+                                 widget.winfo_screenwidth(), widget.winfo_screenheight())
+        t.wm_geometry(f"+{x}+{y}")
+        t.deiconify()
         tip["t"] = t
 
     def hide(_e=None):
@@ -5529,20 +5534,32 @@ class App(_ROOT_CLASS):
         self.btn_update = ttk.Button(bar, text="update", width=8)
         self.btn_update.pack(side="right", padx=(0, 4))
         self.btn_update.configure(command=self._check_for_update)
+        _attach_tooltip(self.btn_update,
+                        "Look for a newer version on GitHub.\n"
+                        "Shows what changed and asks before taking it.\n"
+                        "Refuses if you edited files here or the history\n"
+                        "split -- nothing of yours is overwritten.\n"
+                        "Restart the program afterwards.")
         self.btn_deps = ttk.Button(bar, text="deps", width=8, command=self._install_deps)
         self.btn_deps.pack(side="right", padx=(0, 4))
         _attach_tooltip(self.btn_deps,
                         "Install the optional packages that are missing:\n"
-                        "lama fill (with torch, a large download), the mlsd\n"
-                        "detector, drag and drop. Asks first and lists them.")
+                        "  lama -- the good fill for the empty corners\n"
+                        "      (needs torch: a large download, minutes)\n"
+                        "  mlsd -- a second line detector\n"
+                        "  tkinterdnd2 -- drag photos onto the window\n"
+                        "Lists what is missing and asks first. Without them\n"
+                        "the program still works (telea fills instead).")
         # The whole batch, rudimentary: one button, which turns into its own
         # stop button and counter while it runs.
         self.btn_batch = ttk.Button(bar, text="batch", width=12, command=self._batch_click)
         self.btn_batch.pack(side="right", padx=(0, 8))
         _attach_tooltip(self.btn_batch,
-                        "Correct every added photograph unattended and write\n"
-                        "<name>_corr next to each one. Click again to stop.\n"
-                        "Photographs it skips open for review afterwards.")
+                        "Correct every added photograph without looking:\n"
+                        "Auto mode, written as <name>_corr next to each one.\n"
+                        "Asks once before it starts; click again to stop.\n"
+                        "Photographs it is unsure about are skipped and\n"
+                        "open for review afterwards.")
         self._theme_var = tk.StringVar(value="Minimal Black")
         self._theme_var.trace_add(
             "write", lambda *_a: self._switch_theme(self._theme_var.get()))
@@ -6681,5 +6698,7 @@ class App(_ROOT_CLASS):
 
 
 def run(initial=None) -> int:
-    App(initial, start_fullscreen=True).mainloop()
+    # Maximized with its title bar, not borderless fullscreen (user, 2026-10-23:
+    # "viele lieben das nicht"). F11 still toggles fullscreen.
+    App(initial, start_maximized=True).mainloop()
     return 0

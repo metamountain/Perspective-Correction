@@ -304,3 +304,16 @@ def test_the_window_floor_never_exceeds_the_screen():
         w, h = L.min_window(sw, sh)
         assert w <= sw and h <= sh
         assert (w, h) == (min(1366, sw), min(768, sh))
+
+
+def test_help_stays_on_screen_for_a_button_in_the_bottom_right_corner():
+    """Always-below hid the footer buttons' help under the screen edge."""
+    from pc import layout as L
+    sw, sh = 1920, 1080
+    # a button in the middle: help below it, just right of its left edge
+    x, y = L.tooltip_xy(800, 500, 80, 24, 300, 90, sw, sh)
+    assert (x, y) == (800 + L.TOOLTIP_INSET, 500 + 24 + L.TOOLTIP_GAP)
+    # the footer, bottom right: above it, pulled left, wholly on screen
+    x, y = L.tooltip_xy(1850, 1050, 70, 24, 300, 90, sw, sh)
+    assert y + 90 <= 1050, "help covers or sits below the button"
+    assert 0 <= x and x + 300 <= sw and 0 <= y

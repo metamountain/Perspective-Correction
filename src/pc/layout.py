@@ -300,6 +300,24 @@ CROSS_BOT_WEIGHT = 0
 LABEL_INSET_PX = 6
 NOTICE_MS = 4000   # ms a state-change prompt stays on screen
 TOOLTIP_DELAY_MS = 1000   # hover this long before help appears (user)
+TOOLTIP_GAP = 4           # px between a widget and its help
+TOOLTIP_INSET = 12        # px the help starts right of the widget's left edge
+
+
+def tooltip_xy(wx, wy, ww, wh, tw, th, sw, sh):
+    """Where a ``tw`` x ``th`` help box goes for a widget at ``wx, wy`` (``ww`` x
+    ``wh``) on an ``sw`` x ``sh`` screen: below it, unless that runs off the
+    bottom, then above; and pulled left so it never runs off the right.
+
+    Always-below hid the help of every footer button (batch, deps, update)
+    under the screen edge (user, 2026-10-23)."""
+    x = wx + TOOLTIP_INSET
+    y = wy + wh + TOOLTIP_GAP
+    if y + th > sh:
+        y = wy - th - TOOLTIP_GAP
+    x = max(0, min(x, sw - tw))
+    y = max(0, min(y, sh - th))
+    return x, y
 
 
 def perfect_cross_field(pane_w, pane_h, gap=CROSS_GAP, border=CROSS_BORDER):
