@@ -5601,8 +5601,9 @@ class App(_ROOT_CLASS):
         _attach_tooltip(self.btn_update,
                         "Look for a newer version on GitHub.\n"
                         "Shows what changed and asks before taking it.\n"
-                        "Refuses if you edited files here or the history\n"
-                        "split -- nothing of yours is overwritten.\n"
+                        "Works with git or with a downloaded copy.\n"
+                        "Refuses if you edited the program's files here --\n"
+                        "nothing of yours is overwritten.\n"
                         "Restart the program afterwards.")
         self.btn_deps = ttk.Button(bar, text="deps", width=8, command=self._install_deps)
         self.btn_deps.pack(side="right", padx=(0, 4))

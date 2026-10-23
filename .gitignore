@@ -156,3 +156,6 @@ docs/detection.jpg
 # Launcher build output (python tools/make_launcher.py)
 /Perspective Correction.exe
 /tools/launcher.ico
+
+# written by the update button in a copy without git (selfupdate.INSTALL_MARK)
+.pc_install.json

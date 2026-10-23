@@ -44,13 +44,20 @@ def _pair(d):
     return clone, work
 
 
-def test_a_folder_that_is_not_a_checkout_says_so_instead_of_failing():
-    """A downloaded zip is a perfectly good way to run this program."""
+def test_a_folder_that_is_not_a_checkout_never_runs_git_and_unreachable_is_a_sentence():
+    """A downloaded archive is a perfectly good way to run this program. No
+    `.git` means no git call: on a Mac without the developer tools git is a
+    stub that opens an install dialog."""
     with tempfile.TemporaryDirectory() as d:
-        assert SU.is_checkout(d) is False
-        info = SU.check(d)
+        real = SU._git
+        SU._git = lambda *a, **k: (_ for _ in ()).throw(AssertionError("git ran"))
+        try:
+            assert SU.is_checkout(d) is False
+        finally:
+            SU._git = real
+        info = SU.archive_check(d, api="http://127.0.0.1:9/nothing")
         assert info["can_update"] is False
-        assert "did not come from git" in info["message"]
+        assert "Could not reach GitHub" in info["message"]
 
 
 def test_up_to_date_is_reported_as_an_answer_not_an_error():
@@ -190,3 +197,157 @@ def test_the_paths_it_reports_are_whole():
                   encoding="utf-8") as fh:
             fh.write("y = 2\n")
         assert SU.dirty_files(clone) == ["src/pc/gui.py"]
+
+
+# --- a copy without git: the archive path, against a local stand-in for GitHub
+
+import io
+import json
+import tarfile
+import threading
+from functools import partial
+from http.server import SimpleHTTPRequestHandler, ThreadingHTTPServer
+
+
+class _Quiet(SimpleHTTPRequestHandler):
+    def log_message(self, *a):
+        pass
+
+
+class _FakeGitHub:
+    """Serves `commits/main`, `compare/A...B` and `tar/<sha>` from a folder,
+    over real HTTP, so `urllib` and the tarball code run as they do live."""
+
+    def __init__(self, d):
+        self.dir = os.path.join(d, "gh")
+        for sub in ("commits", "compare", "tar"):
+            os.makedirs(os.path.join(self.dir, sub))
+        self.srv = ThreadingHTTPServer(("127.0.0.1", 0),
+                                       partial(_Quiet, directory=self.dir))
+        threading.Thread(target=self.srv.serve_forever, daemon=True).start()
+        base = f"http://127.0.0.1:{self.srv.server_address[1]}"
+        self.api, self.tarball = base, base + "/tar/{sha}"
+        self.head = None
+
+    def publish(self, sha, subject, files, modes=None, extra=None):
+        """Make `files` ({path: text}) the newest commit on main."""
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+            for name, text in list(files.items()) + list((extra or {}).items()):
+                data = text.encode("utf-8")
+                info = tarfile.TarInfo(f"Perspective-Correction-{sha}/{name}")
+                info.size, info.mode = len(data), (modes or {}).get(name, 0o644)
+                tar.addfile(info, io.BytesIO(data))
+        with open(os.path.join(self.dir, "tar", sha), "wb") as fh:
+            fh.write(buf.getvalue())
+        if self.head:
+            cmp = {"ahead_by": 1, "commits": [
+                {"sha": sha, "commit": {"message": subject + "\n\nbody"}}]}
+            with open(os.path.join(self.dir, "compare", f"{self.head}...{sha}"),
+                      "w", encoding="utf-8") as fh:
+                json.dump(cmp, fh)
+        with open(os.path.join(self.dir, "commits", "main"), "w",
+                  encoding="utf-8") as fh:
+            json.dump({"sha": sha, "commit": {"message": subject}}, fh)
+        self.head = sha
+
+    def close(self):
+        self.srv.shutdown()
+        self.srv.server_close()
+
+
+def _read(root, rel):
+    with open(os.path.join(root, rel), encoding="utf-8") as fh:
+        return fh.read()
+
+
+def _write(root, rel, text):
+    path = os.path.join(root, rel)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write(text)
+
+
+A = "a" * 40
+B = "b" * 40
+
+
+def test_an_archive_install_is_updated_and_what_the_user_owns_is_left_alone():
+    """The first update of an unpacked copy (no mark yet), then a second one
+    that changes, adds and removes files. Photographs, the venv and anything
+    else the updates did not write survive both."""
+    with tempfile.TemporaryDirectory() as d:
+        gh, root = _FakeGitHub(d), os.path.join(d, "install")
+        try:
+            _write(root, "src/pc/gui.py", "old\n")
+            _write(root, "photo.jpg", "mine\n")
+            _write(root, ".venv/bin/python", "venv\n")
+            gh.publish(A, "first", {"src/pc/gui.py": "v1\n", "gone.txt": "x\n",
+                                    "start.command": "#!/bin/sh\n"},
+                       modes={"start.command": 0o755},
+                       extra={".venv/bin/python": "from the archive\n"})
+
+            info = SU.archive_check(root, api=gh.api)
+            assert info["can_update"] is True
+            assert "unknown -> aaaaaaa" in info["message"]
+            ok, text = SU.archive_apply(root, api=gh.api, tarball=gh.tarball)
+            assert ok, text
+            assert "Restart" in text
+            assert _read(root, "src/pc/gui.py") == "v1\n"
+            assert _read(root, "photo.jpg") == "mine\n"
+            assert _read(root, ".venv/bin/python") == "venv\n"
+            if os.name != "nt":
+                assert os.stat(os.path.join(root, "start.command")).st_mode & 0o111
+            assert SU.read_mark(root)["sha"] == A
+            assert "Already up to date" in SU.archive_check(root, api=gh.api)["message"]
+
+            gh.publish(B, "second", {"src/pc/gui.py": "v2\n", "new.txt": "n\n",
+                                     "start.command": "#!/bin/sh\n"})
+            info = SU.archive_check(root, api=gh.api)
+            assert info["can_update"] and "bbbbbbb second" in info["log"]
+            ok, text = SU.archive_apply(root, api=gh.api, tarball=gh.tarball)
+            assert ok, text
+            assert _read(root, "src/pc/gui.py") == "v2\n"
+            assert _read(root, "new.txt") == "n\n"
+            assert not os.path.exists(os.path.join(root, "gone.txt"))
+            assert _read(root, "photo.jpg") == "mine\n"
+            assert "1 removed" in text
+        finally:
+            gh.close()
+
+
+def test_a_file_edited_since_the_last_update_stops_the_next_one():
+    """The archive twin of a dirty tree: named, and nothing is written."""
+    with tempfile.TemporaryDirectory() as d:
+        gh, root = _FakeGitHub(d), os.path.join(d, "install")
+        try:
+            gh.publish(A, "first", {"src/pc/gui.py": "v1\n", "b.txt": "b\n"})
+            assert SU.archive_apply(root, api=gh.api, tarball=gh.tarball)[0]
+            _write(root, "src/pc/gui.py", "my fix\n")
+            gh.publish(B, "second", {"src/pc/gui.py": "v2\n", "b.txt": "b2\n"})
+
+            info = SU.archive_check(root, api=gh.api)
+            assert info["can_update"] is False
+            assert "src/pc/gui.py" in info["message"]
+            ok, _ = SU.archive_apply(root, api=gh.api, tarball=gh.tarball)
+            assert ok is False
+            assert _read(root, "src/pc/gui.py") == "my fix\n"
+            assert _read(root, "b.txt") == "b\n"
+            assert SU.read_mark(root)["sha"] == A
+        finally:
+            gh.close()
+
+
+def test_an_archive_that_reaches_outside_the_folder_is_refused_whole():
+    with tempfile.TemporaryDirectory() as d:
+        gh, root = _FakeGitHub(d), os.path.join(d, "install")
+        try:
+            os.makedirs(root)
+            gh.publish(A, "evil", {"ok.txt": "fine\n", "../escaped.txt": "no\n"})
+            ok, text = SU.archive_apply(root, api=gh.api, tarball=gh.tarball)
+            assert ok is False and "unsafe path" in text
+            assert not os.path.exists(os.path.join(d, "escaped.txt"))
+            assert not os.path.exists(os.path.join(root, "ok.txt"))
+            assert SU.read_mark(root) is None
+        finally:
+            gh.close()
