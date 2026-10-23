@@ -50,6 +50,11 @@ itself on hover (after a second).
 
 ## Install
 
+**Double-click** `Install (Windows).bat` or `Install (macOS).command`
+(`--lama` adds the lama fill, which needs torch). Windows installs into the
+Python on PATH; macOS into `.venv` here, and `Perspective Correction.command`
+starts from it. On Linux, or by hand:
+
 ```
 pip install -r requirements.txt        run it from this folder
 pip install -e .                       or install it, and get the `pc` command
