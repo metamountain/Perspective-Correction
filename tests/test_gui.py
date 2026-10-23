@@ -1635,6 +1635,88 @@ def test_no_tools_field_row_asks_for_more_width_than_it_gets():
         app.destroy()
 
 
+def test_a_missing_lama_is_said_and_never_switched_to_telea_silently():
+    """User, 2026-10-23: lama was not installed on the first Mac and the window
+    filled with telea without a word. The notice must say so -- on opening,
+    on choosing lama, after a save whose note names the fallback -- and stay
+    quiet when lama is there."""
+    from pc import gui as GUI
+    real = GUI._lama_installed
+    try:
+        for installed in (False, True):
+            GUI._lama_installed = lambda: installed
+            app = _app()
+            try:
+                app.v_fill.set("lama")
+                _loaded(app, 1400, 800)
+                r = app.review
+                r.v_fill.set("lama")
+                note = lambda: getattr(r, "_notice", "") or ""
+                _settle_until(app, lambda: "lama is not installed" in note(), n=40)
+                said = "lama is not installed" in note()
+                assert said == (not installed), (installed, note())
+                r._notice = ""
+                assert r._fill_fallback_notice() == (not installed)
+            finally:
+                app.destroy()
+        GUI._lama_installed = lambda: True
+        app = _app()
+        try:
+            _loaded(app, 1400, 800)
+            r = app.review
+            assert r._fill_fallback_notice("telea filled 12% in 0.1s (lama unavailable: x)")
+            assert "telea fills the band instead" in r._notice
+            assert not r._fill_fallback_notice("lama filled 12% in 3.0s")
+        finally:
+            app.destroy()
+    finally:
+        GUI._lama_installed = real
+
+
+def test_the_deps_button_asks_installs_on_a_thread_and_reports():
+    """The button lists what is missing, installs only after a yes, keeps the
+    window answering while pip runs, and comes back with a summary."""
+    from pc import depinstall as DI
+    from pc import gui as GUI
+    item = {"key": "dnd", "label": "drag and drop (tkinterdnd2)", "module": "x",
+            "pip": [], "size": "~1 MB"}
+    shown, asked, ran = [], [], []
+    saved = (DI.missing, DI.install, GUI.messagebox.askyesno, GUI.messagebox.showinfo,
+             GUI.messagebox.showwarning)
+    DI.missing = lambda: [item]
+    GUI.messagebox.askyesno = lambda title, text, **k: asked.append(text) or True
+    GUI.messagebox.showinfo = lambda title, text, **k: shown.append(text)
+    GUI.messagebox.showwarning = lambda title, text, **k: shown.append("WARN " + text)
+
+    def fake_install(items, on_step=None, py=None):
+        time.sleep(0.3)                        # the window must answer meanwhile
+        ran.append(items)
+        if on_step:
+            on_step(0, 1, items[0]["label"])
+        return [(items[0], True, "")]
+    DI.install = fake_install
+    app = _app()
+    try:
+        _settle(app, 5)
+        assert app.btn_deps.cget("text") == "deps"
+        app._install_deps()
+        assert asked and "drag and drop" in asked[0], asked
+        assert app.btn_deps.cget("text") in ("installing", "1/1")
+        _settle_until(app, lambda: shown, n=150)
+        assert ran == [[item]], ran
+        assert shown and shown[0].startswith("ok: drag and drop"), shown
+        assert app.btn_deps.cget("text") == "deps" and not app._deps_busy
+        # Nothing missing: says so, installs nothing.
+        DI.missing = lambda: []
+        shown.clear(); ran.clear()
+        app._install_deps()
+        assert shown == ["Everything optional is installed already."] and ran == []
+    finally:
+        (DI.missing, DI.install, GUI.messagebox.askyesno, GUI.messagebox.showinfo,
+         GUI.messagebox.showwarning) = saved
+        app.destroy()
+
+
 def test_the_window_opens_without_the_windows_icon_fonts():
     """A Mac has no Segoe icon fonts. The first Mac run (2026-10-23) died in
     `_build` with "Image is required": the three load keys handed

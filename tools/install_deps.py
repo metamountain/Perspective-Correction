@@ -46,14 +46,20 @@ WIN = os.name == "nt"
 
 # (label, pip arguments). Each is tried on its own so one missing wheel
 # (ai-edge-litert has none for some OS + Python pairs) costs only it.
-OPTIONAL = [
-    ("drag and drop (tkinterdnd2)", ["tkinterdnd2>=0.4"]),
-    ("mlsd detector (ai-edge-litert)", ["--no-deps", "ai-edge-litert"]),
-]
-# lama runs on torch alone once installed with --no-deps (its fire, torchvision
-# and opencv-python pins are not imported at run time).
-LAMA = ("lama fill (simple-lama-inpainting)", ["--no-deps", "simple-lama-inpainting"])
-TORCH = ("torch (for lama)", ["torch"])
+def _load_depinstall():
+    """The one package list, shared with the in-app 'deps' button. Loaded by
+    path: importing the `pc` package pulls in numpy, which may not be here yet."""
+    path = os.path.join(ROOT, "src", "pc", "depinstall.py")
+    spec = importlib.util.spec_from_file_location("pc_depinstall", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+_DI = _load_depinstall()
+OPTIONAL = [(p["label"], p["pip"]) for p in _DI.PACKAGES if p["key"] != "lama"]
+LAMA = next((p["label"], p["pip"]) for p in _DI.PACKAGES if p["key"] == "lama")
+TORCH = (_DI.TORCH["label"], _DI.TORCH["pip"])
 
 
 def say(msg=""):

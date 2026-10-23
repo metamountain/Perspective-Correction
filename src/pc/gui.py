@@ -986,6 +986,12 @@ def _dark_titlebar(win):
         return
 
 
+def _lama_installed():
+    """Without importing it: simple_lama imports torch, which takes seconds."""
+    from . import depinstall
+    return depinstall.present("simple_lama_inpainting") and depinstall.present("torch")
+
+
 class _NoticeLabel:
     """Stands in for the fill/ComfyUI label of the retired defaults panel.
 
@@ -1222,6 +1228,23 @@ class ReviewPanel(tk.Frame):
         # crop and the widget sync above are the program's, not the user's.
         self._mark_clean()
         self.after(120, self._mark_clean)
+        # Once per run, not per photograph: the first one is where it matters.
+        if not getattr(self, "_lama_told", False):
+            self._lama_told = True
+            self.after(400, self._fill_fallback_notice)
+
+    def _fill_fallback_notice(self, note=""):
+        """lama chosen and not installed: say telea fills instead, and how to
+        get lama (user, 2026-10-23: on the first Mac it fell back silently).
+        ``note`` is a save's fill note, which names the fallback when it ran."""
+        if note:
+            if "unavailable" not in note:
+                return False
+        elif self.v_fill.get() != "lama" or _lama_installed():
+            return False
+        self._notify("lama is not installed -- telea fills the band instead. "
+                     "Install it with 'deps' at the bottom right.")
+        return True
 
     def _fire_closed(self):
         if self.on_closed and not self._closed_sent:
@@ -2271,6 +2294,7 @@ class ReviewPanel(tk.Frame):
             self._open_comfy()
         else:
             self.lbl_comfy.configure(text="")
+        self._fill_fallback_notice()
         self._schedule_redraw()
 
     def _update_keep_px_read(self):
@@ -5191,6 +5215,7 @@ class ReviewPanel(tk.Frame):
             messagebox.showerror("Save", str(exc), parent=self)
             return False
         self._wait_hide()
+        self._fill_fallback_notice(getattr(self.session, "last_fill_note", "") or "")
         self._clean_key = self.session.state_key()
         # A hand-placed strip is the one thing in this window that cannot be
         # recovered by looking at the result: it says where THIS building's
@@ -5253,6 +5278,7 @@ class ReviewPanel(tk.Frame):
             messagebox.showerror("Save As", str(exc), parent=self)
             return
         self._wait_hide()
+        self._fill_fallback_notice(getattr(self.session, "last_fill_note", "") or "")
         self._remember_strip()
         if self.on_saved:
             self.on_saved(self.session.path, dst)
@@ -5503,6 +5529,12 @@ class App(_ROOT_CLASS):
         self.btn_update = ttk.Button(bar, text="update", width=8)
         self.btn_update.pack(side="right", padx=(0, 4))
         self.btn_update.configure(command=self._check_for_update)
+        self.btn_deps = ttk.Button(bar, text="deps", width=8, command=self._install_deps)
+        self.btn_deps.pack(side="right", padx=(0, 4))
+        _attach_tooltip(self.btn_deps,
+                        "Install the optional packages that are missing:\n"
+                        "lama fill (with torch, a large download), the mlsd\n"
+                        "detector, drag and drop. Asks first and lists them.")
         # The whole batch, rudimentary: one button, which turns into its own
         # stop button and counter while it runs.
         self.btn_batch = ttk.Button(bar, text="batch", width=12, command=self._batch_click)
@@ -5712,7 +5744,9 @@ class App(_ROOT_CLASS):
         s = self._settings()
         text = FILL.describe(mode, s)
         if not FILL.available(mode, s):
-            text = "fill will FAIL on every image -- " + text
+            # It does not fail: `inpaint.fill` falls back to telea (2026-10-10).
+            text = (f"{mode} unavailable, telea fills instead -- " + text
+                    + ("  ('deps' installs it)" if mode == "lama" else ""))
         self.lbl_fill.configure(text=text)
 
     def _check_for_update(self):
@@ -5783,6 +5817,59 @@ class App(_ROOT_CLASS):
             self.after(0, lambda: found(info))
 
         threading.Thread(target=look, daemon=True).start()
+
+    def _install_deps(self):
+        """The `deps` button: pip-install the missing optional packages.
+
+        Same shape as `_check_for_update`: look, ask with the list, then work
+        on a daemon thread with the label as the indicator. Back to Tk through
+        `self.queue` like the batch, not `after` from the thread: Tk refuses
+        that whenever no mainloop runs (found by the test, which pumps).
+        Installs into the Python running the window.
+        """
+        if getattr(self, "_deps_busy", False):
+            return
+        from . import depinstall as DI
+        items = DI.missing()
+        if not items:
+            messagebox.showinfo("Optional packages",
+                                "Everything optional is installed already.", parent=self)
+            return
+        ask = ("These optional packages are missing:\n\n"
+               + "\n".join(f"   {i['label']}  ({i['size']})" for i in items)
+               + f"\n\nThey go into the Python running this window:\n   {DI.pip_python()}"
+               + "\n\nInstall them now? This can take several minutes.")
+        if not messagebox.askyesno("Optional packages", ask, parent=self):
+            return
+        self._deps_busy = True
+        btn = self.btn_deps
+        btn.configure(text="installing")
+        self._notify("installing optional packages -- the window stays usable")
+
+        def step(i, n, label):
+            self.queue.put(("call", lambda: btn.configure(text=f"{i + 1}/{n}")))
+
+        def finished(results):
+            btn.configure(text="deps")
+            self._deps_busy = False
+            ok, text = DI.summary(results)
+            if any(item["key"] == "lama" and good for item, good, _r in results):
+                text += "\n\nlama fills from the next preview or save on."
+            (messagebox.showinfo if ok else messagebox.showwarning)(
+                "Optional packages", text, parent=self)
+            self._notify("optional packages installed" if ok
+                         else "some optional packages could not be installed")
+            if any(good for _i, good, _r in results):
+                self._check_fill()
+
+        def work():
+            try:
+                results = DI.install(items, on_step=step)
+            except Exception as exc:                   # never lose the button
+                results = [(items[0], False, str(exc))]
+            self.queue.put(("call", lambda: finished(results)))
+
+        threading.Thread(target=work, daemon=True).start()
 
     def _download_models(self):
         """Fetch the DeepLSD weights (98 MB) into models/.
@@ -6560,6 +6647,8 @@ class App(_ROOT_CLASS):
                     self._comfy_result(*payload)
                 elif kind == "done":
                     self._batch_done(payload)
+                elif kind == "call":           # any worker's way back to Tk
+                    payload()
         except queue.Empty:
             pass
         self.after(120, self._pump)

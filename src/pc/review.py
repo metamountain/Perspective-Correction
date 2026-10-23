@@ -2197,6 +2197,7 @@ class ReviewSession:
         the crop (by default the quad + ``planar.CROP_MARGIN``) is cut FIRST,
         so the fill only ever works on what is written. Whatever of that lies
         outside the photograph is filled like the rotation path's band."""
+        self.last_fill_note = ""
         r = self._planar_warp(None)
         if r is None:
             raise ValueError("planar correction needs four corners")
@@ -2213,8 +2214,8 @@ class ReviewSession:
                 from . import inpaint as FILL
                 if on_stage is not None:
                     on_stage("fill:" + str(fill), mpx)
-                out, _note = FILL.fill(out, hole, self.settings,
-                                       on_step=getattr(self, "on_fill_step", None))
+                out, self.last_fill_note = FILL.fill(
+                    out, hole, self.settings, on_step=getattr(self, "on_fill_step", None))
         if on_stage is not None:
             on_stage("writing", mpx)
         os.makedirs(os.path.dirname(os.path.abspath(dst_path)) or ".", exist_ok=True)
@@ -2261,6 +2262,7 @@ class ReviewSession:
         the warp is 30 ms and the fill 3 to 13 seconds, so "which stage" is the
         whole of the information.
         """
+        self.last_fill_note = ""
         def _stage(name, mpx=0.0):
             if on_stage is not None:
                 on_stage(name, mpx)
@@ -2317,8 +2319,9 @@ class ReviewSession:
             # 30 ms for the warp -- so it is the one stage worth a bar rather
             # than a sentence. `on_fill_step` is the same listener the live
             # preview uses, so both paths show one indicator, not two.
-            out, _note = FILL.fill(out, hole, save_settings,
-                                   on_step=getattr(self, "on_fill_step", None))
+            # Kept so the window can say when lama fell back to telea.
+            out, self.last_fill_note = FILL.fill(
+                out, hole, save_settings, on_step=getattr(self, "on_fill_step", None))
         out = self._apply_crop(out)
         _stage("writing", mpx)
         os.makedirs(os.path.dirname(dst_path) or ".", exist_ok=True)
