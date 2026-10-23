@@ -773,6 +773,12 @@ def _fit_ink(scratch, size):
     return out
 
 
+def _load_key_icon(codepoint, name):
+    """A load key's icon: Segoe's where Windows has it, else the drawn twin."""
+    return (_icon_pil(codepoint, layout.tool_glyph(), INK["dim"])
+            or _glyph_pil(name, layout.tool_glyph(), INK["dim"]))
+
+
 _DRAWN_GLYPHS = ("mark", "rect", "brush", "sam", "strip")
 
 
@@ -875,6 +881,27 @@ def _glyph_pil(name, size, colour):
     elif name == "brush":
         # A swatch, not a diagram -- see the docstring.
         dot(0.5, 0.5, 0.47)
+    # The three load keys quote Segoe's icon fonts, which only Windows has;
+    # these stand in for them elsewhere (found on the first Mac run, 2026-10-23:
+    # `_icon_pil` returned None and ImageTk raised "Image is required").
+    elif name == "add":
+        line((0.50, 0.08), (0.50, 0.92))
+        line((0.08, 0.50), (0.92, 0.50))
+    elif name == "folder":
+        body = [(0.06, 0.30), (0.06, 0.86), (0.94, 0.86), (0.94, 0.30)]
+        for i in range(3):
+            line(body[i], body[i + 1])
+        line((0.06, 0.30), (0.06, 0.18))
+        line((0.06, 0.18), (0.40, 0.18))
+        line((0.40, 0.18), (0.48, 0.30))
+        line((0.48, 0.30), (0.94, 0.30))
+    elif name == "paste":
+        board = [(0.16, 0.14), (0.84, 0.14), (0.84, 0.94), (0.16, 0.94)]
+        for i in range(4):
+            line(board[i], board[(i + 1) % 4])
+        dr.rectangle([*P(0.34, 0.04), *P(0.66, 0.22)], fill=ink)
+        line((0.30, 0.46), (0.70, 0.46))
+        line((0.30, 0.66), (0.70, 0.66))
     else:
         return None
     img = img.resize((size, size), Image.LANCZOS)
@@ -1285,7 +1312,7 @@ class ReviewPanel(tk.Frame):
         if getattr(self, "_palette_blank", None) is None:
             self._palette_blank = tk.PhotoImage(width=1, height=1)
         _side, _gap = layout.tool_key()
-        self._add_img = ImageTk.PhotoImage(_icon_pil("E710", layout.tool_glyph(), INK["dim"]))
+        self._add_img = ImageTk.PhotoImage(_load_key_icon("E710", "add"))
         self.add_btn = tk.Button(addbar,
                                  image=self._add_img, compound="center",
                                  width=_side, height=_side,
@@ -1296,14 +1323,14 @@ class ReviewPanel(tk.Frame):
                                  padx=0, pady=0, highlightthickness=0, command=self._on_add_files)
         self.add_btn.pack(side="top")
         _attach_tooltip(self.add_btn, "Add image files")
-        self._folder_img = ImageTk.PhotoImage(_icon_pil("E8B7", layout.tool_glyph(), INK["dim"]))
+        self._folder_img = ImageTk.PhotoImage(_load_key_icon("E8B7", "folder"))
         self.add_folder_btn = tk.Button(addbar, image=self._folder_img, relief="flat",
                                         bd=0, cursor="hand2", background=INK["field"],
                                         width=_side, height=_side, compound="center",
                                         padx=0, pady=0, highlightthickness=0, command=self._on_add_folder)
         self.add_folder_btn.pack(side="top", pady=(_gap, 0))
         _attach_tooltip(self.add_folder_btn, "Add a folder of images")
-        self._paste_img = ImageTk.PhotoImage(_icon_pil("E77F", layout.tool_glyph(), INK["dim"]))
+        self._paste_img = ImageTk.PhotoImage(_load_key_icon("E77F", "paste"))
         self.add_paste_btn = tk.Button(addbar, image=self._paste_img, relief="flat",
                                        bd=0, cursor="hand2", background=INK["field"],
                                        width=_side, height=_side, compound="center",

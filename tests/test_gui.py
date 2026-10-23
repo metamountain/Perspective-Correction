@@ -1635,6 +1635,37 @@ def test_no_tools_field_row_asks_for_more_width_than_it_gets():
         app.destroy()
 
 
+def test_the_window_opens_without_the_windows_icon_fonts():
+    """A Mac has no Segoe icon fonts. The first Mac run (2026-10-23) died in
+    `_build` with "Image is required": the three load keys handed
+    `_icon_pil`'s None straight to ImageTk. WINDIR pointed at an empty folder
+    is that machine, here; every key must still carry a drawn glyph."""
+    import tempfile
+    from pc.gui import _glyph_pil, INK
+    from pc import layout
+    for name in ("add", "folder", "paste"):
+        img = _glyph_pil(name, layout.tool_glyph(), INK["dim"])
+        assert img is not None and img.getbbox() is not None, f"{name} rendered nothing"
+    old = os.environ.get("WINDIR")
+    with tempfile.TemporaryDirectory() as empty:
+        os.environ["WINDIR"] = empty
+        try:
+            app = _app()
+            try:
+                app.geometry("1400x800-4000+0")
+                app.update(); time.sleep(0.02)
+                r = app.review
+                for b in (r.add_btn, r.add_folder_btn, r.add_paste_btn):
+                    assert str(b.cget("image")), f"{b} has no icon"
+            finally:
+                app.destroy()
+        finally:
+            if old is None:
+                os.environ.pop("WINDIR", None)
+            else:
+                os.environ["WINDIR"] = old
+
+
 def test_every_tool_key_is_the_same_size_and_every_glyph_renders():
     """A column of keys is judged on its alignment before anything else.
 
