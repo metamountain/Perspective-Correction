@@ -33,6 +33,7 @@ from __future__ import annotations
 import argparse
 import importlib.util
 import os
+import shutil
 import subprocess
 import sys
 import venv
@@ -84,6 +85,19 @@ def venv_python(path):
     return os.path.join(path, "bin", "python")
 
 
+def venv_version(path):
+    """major.minor of the Python a venv was made with, from its pyvenv.cfg."""
+    try:
+        with open(os.path.join(path, "pyvenv.cfg"), encoding="utf-8") as f:
+            for line in f:
+                key, _, value = line.partition("=")
+                if key.strip() in ("version", "version_info"):
+                    return ".".join(value.strip().split(".")[:2])
+    except OSError:
+        pass
+    return None
+
+
 def has_module(py, name):
     """Ask the target interpreter, not this one -- they differ on a Mac."""
     probe = f"import importlib.util,sys; sys.exit(importlib.util.find_spec({name!r}) is None)"
@@ -122,6 +136,14 @@ def main(argv=None):
 
     if a.venv:
         py = venv_python(a.venv)
+        built_with = venv_version(a.venv)
+        mine = f"{sys.version_info[0]}.{sys.version_info[1]}"
+        if os.path.exists(py) and built_with not in (None, mine):
+            # A venv is tied to the Python that made it; one left over from
+            # another version (3.15 before 3.12 was installed, on the first
+            # Mac) would keep everything on that version for good.
+            say(f"rebuilding {a.venv}: it was made with Python {built_with}, this is {mine}")
+            shutil.rmtree(a.venv)
         if os.path.exists(py):
             say(f"using the existing environment {a.venv}")
         else:
@@ -148,7 +170,13 @@ def main(argv=None):
     done, missed = [], []
     for label, args in steps:
         say(f"\n== optional: {label}")
-        (done if pip(py, args) else missed).append(label)
+        if pip(py, args):
+            done.append(label)
+        else:
+            missed.append(label)
+            if args == TORCH[1]:
+                say(f"!! torch has no package for Python {sys.version_info[0]}."
+                    f"{sys.version_info[1]} here; lama needs it. Python 3.12 works.")
 
     say("\n== doctor")
     subprocess.call([py, os.path.join(ROOT, "perspective_correction.py"), "--doctor"], cwd=ROOT)

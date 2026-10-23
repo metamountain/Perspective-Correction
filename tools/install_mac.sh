@@ -30,9 +30,16 @@ PY_VERSION="3.12.10"         # last 3.12 with a python.org macOS installer; univ
 PY_PKG="https://www.python.org/ftp/python/$PY_VERSION/python-$PY_VERSION-macos11.pkg"
 
 find_python() {
+    # 3.12 first: it is what the project is developed and tested on, and the
+    # newest Python often has no torch yet (3.15 had none in 2026-10, so lama
+    # could not install on the first Mac). Then newer, then older, then PATH.
     local p
-    for p in /Library/Frameworks/Python.framework/Versions/3.1[0-9]/bin/python3 \
-             /opt/homebrew/bin/python3 /usr/local/bin/python3 python3; do
+    for p in /Library/Frameworks/Python.framework/Versions/3.12/bin/python3 \
+             /Library/Frameworks/Python.framework/Versions/3.13/bin/python3 \
+             /Library/Frameworks/Python.framework/Versions/3.14/bin/python3 \
+             /Library/Frameworks/Python.framework/Versions/3.1[0-9]/bin/python3 \
+             /opt/homebrew/bin/python3.12 /opt/homebrew/bin/python3 \
+             /usr/local/bin/python3 python3; do
         if command -v "$p" >/dev/null 2>&1 &&
            "$p" -c 'import sys, tkinter; sys.exit(sys.version_info < (3, 9) or tkinter.TkVersion < 8.6)' 2>/dev/null; then
             echo "$p"
@@ -125,6 +132,19 @@ main() {
             py="$(find_python)" || py=""
         fi
     fi
+    # lama needs torch, and torch lags behind new Pythons. Ask pip rather than
+    # keep a version table here that goes stale with the next torch release.
+    case " $* " in *" --lama "*)
+        if [ -n "$py" ] && [ -z "$PC_PYTHON" ] &&
+           ! "$py" -m pip index versions torch >/dev/null 2>&1; then
+            echo
+            echo "torch (needed for lama) has no package for $("$py" -V 2>&1) yet."
+            if ask "Install Python $PY_VERSION alongside it and use that instead?"; then
+                install_python
+                py="$(find_python)" || py=""
+            fi
+        fi
+    ;; esac
     if [ -z "$py" ]; then
         echo
         echo "!! No Python yet. Install it from https://www.python.org/downloads/macos/"
