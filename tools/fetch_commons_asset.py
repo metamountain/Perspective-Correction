@@ -21,7 +21,7 @@ What it does, in order:
 4. re-reads the tag *from the written file* and fails if it did not survive,
 5. prints the attribution row for ``tests/assets/README.md``.
 
-It does not write the mask; run ``rectify.py <asset> --mask-export
+It does not write the mask; run ``perspective_correction.py <asset> --mask-export
 tests/assets/masks`` afterwards, from the interpreter that has torch.
 """
 from __future__ import annotations

@@ -2,7 +2,7 @@
 
 One PNG per photograph in `tests/assets/`, matched by file stem.
 
-    python rectify.py tests/assets --mask-export tests/assets/masks
+    python perspective_correction.py tests/assets --mask-export tests/assets/masks
 
 ## Convention
 

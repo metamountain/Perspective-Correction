@@ -318,7 +318,9 @@ def process(src_path, dst_path, settings, debug_dir=None, dry_run=False,
     if len(vert) or len(horiz):
         parts = [s.seg for s in (vert, horiz) if len(s)]
         if parts:
-            all_segs = np.concatenate(parts, axis=0)
+            # analysis pixels -> full resolution, the space `plan` frames in
+            all_segs = np.concatenate(parts, axis=0).astype(float)
+            all_segs[:, :4] /= scale
     planned = W.plan(w, h, H, settings, line_segs=all_segs, yaw=yaw,
                      strip=base["strip"])
     if planned is None:

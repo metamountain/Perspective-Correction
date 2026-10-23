@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run without installing:  python rectify.py "D:\\Fotos" --overwrite"""
+"""Run without installing:  python perspective_correction.py "D:\\Fotos" --overwrite"""
 import os
 import sys
 

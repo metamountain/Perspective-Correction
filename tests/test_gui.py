@@ -1998,3 +1998,174 @@ def test_hover_help_waits_a_second_before_it_appears():
         assert tips(), "help never appeared"
     finally:
         root.destroy()
+
+
+def test_the_loupe_follows_the_pointer_and_comes_back_for_a_corner():
+    """User, 2026-10-23: "loupe soll mauszeiger folgen". The glass sits
+    LOUPE_OFFSET below-right of the pointer wherever it moves, and grabbing a
+    placed rectangle corner brings it back (it went with the fourth click)."""
+    from pc import layout
+    app = _app()
+    try:
+        _loaded(app, 1920, 1080)
+        r = app.review
+        r.v_rect.set(True); r._on_rect_toggle(); _settle(app, 5)
+        cb = r.c_before
+        ox, oy = r._before_off
+        for x, y in ((ox + 60, oy + 60), (ox + 160, oy + 110)):
+            cb.event_generate("<Motion>", x=x, y=y); app.update()
+            g = r._loupe
+            assert g is not None, "no glass in rectangle mode"
+            dx = g.winfo_rootx() - (cb.winfo_rootx() + x)
+            dy = g.winfo_rooty() - (cb.winfo_rooty() + y)
+            assert (dx, dy) == (layout.LOUPE_OFFSET, layout.LOUPE_OFFSET), (dx, dy)
+        sc = r._before_scale
+        pts = [(ox + 40, oy + 40), (ox + 300, oy + 50), (ox + 310, oy + 250), (ox + 30, oy + 240)]
+        for x, y in pts:
+            cb.event_generate("<ButtonPress-1>", x=x, y=y); app.update()
+            cb.event_generate("<ButtonRelease-1>", x=x, y=y); app.update()
+        assert len(r.session.planar_quad) == 4 and r._loupe is None
+        cb.event_generate("<ButtonPress-1>", x=pts[0][0], y=pts[0][1]); app.update()
+        assert r._rect_drag is not None and r._loupe is not None, "no glass on a corner grab"
+        cb.event_generate("<ButtonRelease-1>", x=pts[0][0], y=pts[0][1]); app.update()
+        assert sc > 0
+    finally:
+        app.destroy()
+
+
+def test_dragging_a_mark_end_refits_and_redraws_at_a_throttled_rate():
+    """User, 2026-10-23: "aktualisierung target reduziert, sonst lag". A drag
+    moves the line on the canvas at once but refits and re-renders at most
+    every DRAG_PREVIEW_MS, and once more on release."""
+    from pc import layout
+    app = _app()
+    try:
+        _loaded(app, 1920, 1080)
+        r = app.review
+        s = r.session
+        sc = r._before_scale
+        s.add_control_line(100 * sc, 50 * sc, 104 * sc, 400 * sc, display_scale=sc, kind="v")
+        r._redraw(); _settle(app, 5)
+        r.v_mark.set(True); r._on_mark_toggle(); _settle(app, 5)
+        counts = {"refit": 0, "redraw": 0}
+        orig_refit, orig_redraw = s.refit, r._redraw
+        s.refit = lambda *a, **k: (counts.__setitem__("refit", counts["refit"] + 1), orig_refit(*a, **k))[1]
+        r._redraw = lambda *a, **k: (counts.__setitem__("redraw", counts["redraw"] + 1), orig_redraw(*a, **k))[1]
+        ox, oy = r._before_off
+        x, y = int(ox + 104 * sc), int(oy + 400 * sc)
+        r.c_before.event_generate("<ButtonPress-1>", x=x, y=y); app.update()
+        assert r._mark_drag is not None, "endpoint not grabbed"
+        n = 40
+        t0 = time.perf_counter()
+        for k in range(n):
+            r.c_before.event_generate("<B1-Motion>", x=x + k, y=y, state=0x100)
+            app.update(); time.sleep(0.01)
+        elapsed_ms = (time.perf_counter() - t0) * 1000.0
+        allowed = int(elapsed_ms / layout.DRAG_PREVIEW_MS) + 2
+        assert counts["redraw"] <= allowed, (counts, allowed)
+        assert counts["refit"] <= allowed, (counts, allowed)
+        r.c_before.event_generate("<ButtonRelease-1>", x=x + n - 1, y=y); app.update()
+        assert counts["refit"] >= 1 and counts["redraw"] >= 1, counts
+        x1 = s.control_lines[0][2] / s.scale
+        assert abs(x1 - (104 + (n - 1) / sc)) < 2.0, x1
+    finally:
+        app.destroy()
+
+
+def test_a_slow_fill_follows_the_quick_one_and_a_stale_one_is_dropped():
+    """User, 2026-10-23: "erst telea, dann relaxed lama hinterher". The redraw
+    shows the stand-in and leaves the slow backend's job; it runs off the Tk
+    thread and lands on the after picture, unless the picture moved on."""
+    import numpy as np
+    from pc import inpaint as FILL
+    app = _app()
+    real_fill = FILL.fill
+    try:
+        _loaded(app, 1920, 1080)
+        r = app.review
+        s = r.session
+        s.settings = s.settings.replace(fill="lama", live_fill_preview=True)
+        s.set_manual(roll_deg=0.0, pitch_deg=6.0, focal_35mm=28.0)
+
+        def fake(img, hole, settings, on_step=None):
+            if settings.fill == "lama":
+                out = img.copy(); out[hole] = (0, 0, 255)
+                return out, "fake lama"
+            return real_fill(img, hole, settings, on_step=on_step)
+        FILL.fill = fake
+        r._redraw()
+        assert s.deferred_fill is not None or r._fill_after is not None, "no slow fill queued"
+        quick = r._after_base.copy()
+        assert _settle_until(app, lambda: r._after_base is not None
+                             and not np.array_equal(r._after_base, quick), n=150), \
+            "the slow fill never reached the after picture"
+        # a result for an older render is thrown away
+        r._fill_q.put((r._fill_gen - 1, np.zeros_like(quick), None))
+        before = r._after_base.copy()
+        r._fill_poll(); app.update()
+        assert np.array_equal(r._after_base, before), "a stale fill replaced the picture"
+    finally:
+        FILL.fill = real_fill
+        app.destroy()
+
+
+def test_lines_and_rectangle_never_share_the_picture():
+    """User, 2026-10-23: line tool or rectangle tool, never both on screen;
+    each comes back when its tool is picked again."""
+    app = _app()
+    try:
+        _loaded(app, 1920, 1080)
+        r = app.review
+        s = r.session
+        sc = r._before_scale
+        s.add_control_line(60 * sc, 40 * sc, 62 * sc, 300 * sc, display_scale=sc, kind="v")
+        r.v_mark.set(True); r._on_mark_toggle(); _settle(app, 5)
+        assert r.c_before.find_withtag("marks"), "the drawn line is not shown"
+        r.v_rect.set(True); r._on_rect_toggle(); _settle(app, 5)
+        assert not r.c_before.find_withtag("marks"), "a line is shown in rectangle mode"
+        ox, oy = r._before_off
+        for x, y in ((ox + 40, oy + 40), (ox + 300, oy + 50), (ox + 310, oy + 250), (ox + 30, oy + 240)):
+            r.c_before.event_generate("<ButtonPress-1>", x=x, y=y); app.update()
+            r.c_before.event_generate("<ButtonRelease-1>", x=x, y=y); app.update()
+        _settle(app, 5)
+        assert len(s.planar_quad) == 4 and r.c_before.find_withtag("rect_quad")
+        r.v_mark.set(True); r._on_mark_toggle(); _settle(app, 5)
+        assert not r.c_before.find_withtag("rect_quad"), "the rectangle is shown with the line tool"
+        assert r.c_before.find_withtag("marks") and len(s.control_lines) == 1
+        r.v_rect.set(True); r._on_rect_toggle(); _settle(app, 5)
+        assert len(s.planar_quad) == 4 and r.c_before.find_withtag("rect_quad")
+        assert not r.c_before.find_withtag("marks")
+    finally:
+        app.destroy()
+
+
+def test_the_strip_handle_is_never_under_the_tool_palette():
+    """User, 2026-10-23: the facade strip's ruler near the left edge put its
+    grab handle (mid-height) under the centred tool palette, out of reach --
+    "auf Handle-Hoehe kleine Aussparung". The palette is split there; the
+    handle of a ruler at 2.5 % must fall in the gap, not on a key."""
+    app = _app()
+    try:
+        _loaded(app, 1920, 1200)
+        r = app.review
+        r.v_strip.set(True)
+        r.v_strip_x0.set(2.5)
+        r.v_strip_x1.set(60.0)
+        r._apply_strip()
+        _settle(app)
+        ox, oy = r._before_off
+        iw, ih = r._ph_b.width(), r._ph_b.height()
+        hx, hy = ox + 0.025 * iw, oy + ih // 2
+        assert r._strip_ruler_at(hx, hy) == 0
+        keys = [w for w in r._palette_btns + [r.add_btn, r.add_folder_btn, r.add_paste_btn]
+                if w.winfo_ismapped()]
+        assert len(keys) >= 6
+        for k in keys:
+            par = k.nametowidget(k.winfo_parent())
+            x0, y0 = par.winfo_x() + k.winfo_x(), par.winfo_y() + k.winfo_y()
+            x1, y1 = x0 + k.winfo_width(), y0 + k.winfo_height()
+            near_x = x0 - 7 <= hx <= x1 + 7
+            assert not (near_x and y0 - 7 <= hy <= y1 + 7), \
+                (str(k), (x0, y0, x1, y1), (hx, hy))
+    finally:
+        app.destroy()

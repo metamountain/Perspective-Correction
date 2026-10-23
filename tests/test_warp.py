@@ -429,3 +429,24 @@ def test_one_drawn_line_is_exact_and_leaves_the_rest_to_the_detector():
     H = W.rectify(vv, np.array([1.0, 0.0, 0.0]), w, h)
     p = W.G.apply_h(H, np.array([[x1, y1], [x2, y2]]))
     assert abs(p[0, 0] - p[1, 0]) < 1e-6 * w
+
+
+def test_the_interest_box_ignores_slanted_foreground_but_keeps_a_gable():
+    """00010519 (user, 2026-10-23: "Bild sitzt gut, Auto-Crop noch nicht"): a
+    railing running down a stair pulled the box into the foreground. Only
+    straight segments frame it; a long slanted one above may raise the top."""
+    import numpy as np
+    from pc import warp as W
+    rng = np.random.default_rng(0)
+    facade = []
+    for _ in range(80):                       # windows: straight, x 200-600, y 200-500
+        x, y = rng.uniform(200, 600), rng.uniform(200, 500)
+        facade += [[x, y, x + 30, y], [x, y, x, y + 30]]
+    railing = [[300 + 40 * i, 560 + 12 * i, 340 + 40 * i, 572 + 12 * i] for i in range(12)]
+    gable = [[300, 200, 400, 120], [400, 120, 500, 200]]
+    H = np.eye(3)
+    plain = W.interest_box(H, np.array(facade, float), 1000, 800)
+    with_rail = W.interest_box(H, np.array(facade + railing, float), 1000, 800)
+    assert with_rail[3] < 560 and abs(with_rail[2] - plain[2]) < 1, (plain, with_rail)
+    with_gable = W.interest_box(H, np.array(facade + railing + gable, float), 1000, 800)
+    assert with_gable[1] < 125, ("the gable was cut off", with_gable)

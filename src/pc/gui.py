@@ -16,6 +16,7 @@ from __future__ import annotations
 import logging
 import math
 import os
+import sys
 import queue
 import threading
 import traceback
@@ -36,6 +37,12 @@ except Exception:                                    # pragma: no cover
     DND_FILES = None
     _ROOT_CLASS = tk.Tk
     HAVE_DND = False
+
+# macOS Tk numbers the right mouse button 2 and reports Option as state bit
+# 0x0010; Windows and Linux say 3 and 0x0008 (2026-10-23, untested on a Mac).
+_MAC = sys.platform == "darwin"
+RB = "2" if _MAC else "3"
+ALT_MASK = 0x0010 if _MAC else 0x0008
 
 import cv2
 import numpy as np
@@ -766,7 +773,7 @@ def _fit_ink(scratch, size):
     return out
 
 
-_DRAWN_GLYPHS = ("mark", "rect", "brush", "sam", "strike", "strip")
+_DRAWN_GLYPHS = ("mark", "rect", "brush", "sam", "strip")
 
 
 def _glyph_pil(name, size, colour):
@@ -830,12 +837,6 @@ def _glyph_pil(name, size, colour):
             line(quad[i], quad[(i + 1) % 4])
         for fx, fy in quad:
             dot(fx, fy, 0.085)
-    elif name == "strike":
-        # Two leaning lines, struck through. The old beetle was Segoe's debug
-        # icon and said nothing about slanted evidence.
-        line((0.16, 0.88), (0.44, 0.12))
-        line((0.56, 0.88), (0.84, 0.12))
-        line((0.04, 0.50), (0.96, 0.50))
     elif name == "strip":
         # Two rulers and the span between them: the facade strip restricts
         # which horizontals count, and the old three solid bars read as a
@@ -1315,7 +1316,13 @@ class ReviewPanel(tk.Frame):
         # that corner -- it does not scroll or rescale with the image.
         # Vertically centred on the field's left edge (user, 2026-10-21:
         # "tools too high up, middle them out").
-        addbar.place(x=8, rely=0.5, anchor="w")
+        # Split at mid-height with a gap, where the facade strip's handles sit
+        # (`layout.palette_split`): the load keys and the first tool above, the
+        # rest below.
+        _y_up, _y_lo = layout.palette_split()
+        addbar.place(x=8, rely=0.5, y=_y_up, anchor="sw")
+        self._addbar_lo = tk.Frame(self.c_before, bg=INK["field"])
+        self._addbar_lo.place(x=8, rely=0.5, y=_y_lo, anchor="nw")
         # Lines and Mask draw on *this* image, so their switches sit on it --
         # top-right, opposite the add icons, and mirroring the Grid switch on the
         # after pane (2026-09-13, user-directed).  Made once and reused because
@@ -1382,6 +1389,11 @@ class ReviewPanel(tk.Frame):
             self._loupe.destroy()
         self._loupe = None            # magnifying-glass canvas over the cross, or None
         self._loupe_center = None     # damped crop centre (image px) for Alt tracking
+        self._drag_job = None         # throttled after-preview while dragging
+        self._fill_gen = 0            # bumps on every render; a stale fill is dropped
+        self._fill_after = None       # timer that starts the deferred fill
+        self._fill_thread = None
+        self._fill_q = queue.Queue()
         # A rebuild (new image loaded) kills the glass; it is raised again on
         # the next mark press rather than kept up while the mode is on.
         if getattr(self, "v_mark", None) is not None and self.v_mark.get():
@@ -1395,15 +1407,15 @@ class ReviewPanel(tk.Frame):
         # sideways sizes the pen.  The Alt bindings are declared first only for
         # readability -- Tk picks the more specific pattern regardless of order.
         self.c_before.bind("<Alt-ButtonPress-1>", self._on_alt_erase_press)
-        self.c_before.bind("<Alt-ButtonPress-3>", self._on_pen_size_start)
-        self.c_before.bind("<Alt-B3-Motion>", self._on_pen_size_drag)
+        self.c_before.bind(f"<Alt-ButtonPress-{RB}>", self._on_pen_size_start)
+        self.c_before.bind(f"<Alt-B{RB}-Motion>", self._on_pen_size_drag)
         # The sizing drag had a press and a motion and no END. Alt+right
         # release arrives as <Alt-ButtonRelease-3>, which nothing was bound
         # to, so `_pen_anchor` stayed set forever -- and `_on_erase_motion`
         # bails out while it is set. After sizing the pen once, right-drag
         # erase silently degraded to erasing the press and release points
         # only, with the whole dragged stroke dropped. Measured, not read.
-        self.c_before.bind("<Alt-ButtonRelease-3>", self._on_pen_size_end)
+        self.c_before.bind(f"<Alt-ButtonRelease-{RB}>", self._on_pen_size_end)
         # Krita's gesture as well (user, 2026-10-20: "wie krita left shift
         # click drag"): Shift+left dragged sideways sizes the pen.  Both stay
         # bound.  With the brush down these handlers fall through to the plain
@@ -1422,9 +1434,9 @@ class ReviewPanel(tk.Frame):
         # prompt points) did nothing at all. Dispatch instead; both handlers
         # already guard themselves (`v_sam` / `_brush_live`), so they cannot
         # both act.
-        self.c_before.bind("<ButtonPress-3>", self._on_right_press)
-        self.c_before.bind("<B3-Motion>", self._on_erase_motion)
-        self.c_before.bind("<ButtonRelease-3>", self._on_erase_release)
+        self.c_before.bind(f"<ButtonPress-{RB}>", self._on_right_press)
+        self.c_before.bind(f"<B{RB}-Motion>", self._on_erase_motion)
+        self.c_before.bind(f"<ButtonRelease-{RB}>", self._on_erase_release)
         self.c_after.bind("<ButtonPress-1>", self._on_crop_press)
         self.c_after.bind("<B1-Motion>", self._on_crop_drag)
         self.c_after.bind("<ButtonRelease-1>", self._on_crop_release)
@@ -2384,14 +2396,6 @@ class ReviewPanel(tk.Frame):
                                 focal_35mm=self.v_focal.get(), yaw_deg=self.v_yaw.get())
         self._schedule_redraw()
 
-    def _strike_slanted(self):
-        n = self.session.disable_lines_by_angle(18.0)
-        if self.session.mode == AUTO:
-            self._sync_from_session()
-        else:
-            self._redraw()
-        self._set_status_extra(f"struck out {n} slanted candidate(s)")
-
     def _use_auto(self):
         """Back to the angles the estimator found, keeping the rest of the work.
 
@@ -2478,6 +2482,14 @@ class ReviewPanel(tk.Frame):
             self._exclusive("v_mark")
             self._pending_mark = None
             self._loupe_hide()
+            s = self.session
+            if s is not None:
+                had_quad = bool(s.planar_quad)
+                if s.set_facade_mode("lines"):
+                    if had_quad:
+                        self._notify("line tool -- the rectangle is put away; "
+                                     "the rectangle tool brings it back")
+                    self._sync_from_session()
         else:
             self._pending_mark = None
             self._mark_drag = None
@@ -2490,6 +2502,14 @@ class ReviewPanel(tk.Frame):
         on = self.v_rect.get()
         if on:
             self._exclusive("v_rect")
+            s = self.session
+            if s is not None:
+                had_lines = len(s.control_lines) + len(s.control_hlines) > 0
+                if s.set_facade_mode("rect"):
+                    if had_lines:
+                        self._notify("PC Rectangle -- your drawn lines are put away; "
+                                     "the line tool brings them back")
+                    self._sync_from_session()
             self._rect_pending = []
             # The glass comes up WITH the tool, before the first point. Placing
             # a facade corner is the finest aim this window asks for, and the
@@ -2518,6 +2538,11 @@ class ReviewPanel(tk.Frame):
         hit = self.session.pick_planar_corner(fx, fy, display_scale=fs)
         if hit is not None:
             self._rect_drag = hit
+            # Nudging a corner is the finest aim this tool asks for, and the
+            # glass had gone with the fourth click.
+            self._loupe_show()
+            if event is not None:
+                self._loupe_move(event)
             return
         # Place the next corner. CAD order: four points, closed on the fourth.
         i = len(self.session.planar_quad)
@@ -2600,6 +2625,13 @@ class ReviewPanel(tk.Frame):
             self.v_strip.set(False)
             s.strip = None
             gone.append("facade strip")
+        # The crop belongs to its mode (`ReviewSession.set_facade_mode` swaps
+        # it), so this one is the rectangle's own; a fresh quad starts clean
+        # and gets quad + 20 % once its fourth corner is down.
+        if s.crop_rect is not None:
+            s.clear_crop_rect()
+            s.crop_is_auto = False
+            gone.append("the crop")
         if gone:
             self._set_status("PC Rectangle takes over: " + " and ".join(gone)
                              + " switched off")
@@ -2611,12 +2643,15 @@ class ReviewPanel(tk.Frame):
         x = (event.x - self._before_off[0]) / self._before_scale
         y = (event.y - self._before_off[1]) / self._before_scale
         self.session.set_planar_point(self._rect_drag, x, y)
-        self._redraw()
+        self.c_before.delete("rect_quad")
+        self._draw_rect_quad()
+        self._drag_preview()
 
     def _rect_drag_release(self):
         if self._rect_drag is None:
             return
         self._rect_drag = None
+        self._drag_preview_end()
         self._loupe_hide()
         self._sync_from_session()
 
@@ -2820,30 +2855,31 @@ class ReviewPanel(tk.Frame):
         cy = by + bh // 2 - py
         return max(0, cx - size // 2), max(0, cy - size // 2)
 
-    def _loupe_place(self, size, px=None, py=None):
-        """Centre the glass on where source pixel (px, py) lands in the
-        after picture; park it in the gutter when that cannot be mapped."""
-        p = None
-        if px is not None and self.session is not None:
-            try:
-                p = self.session.source_to_preview(px, py)
-            except Exception:
-                p = None
-        if p is None:
-            return self._loupe_park(size)
+    def _loupe_follow(self, size, event=None):
+        """Where the glass goes: beside the cursor, by ``LOUPE_OFFSET``.
+
+        User, 2026-10-23: "loupe soll mauszeiger folgen". It was parked in the
+        gutter -- 8 px wide, so a 362 px glass sat half over the before picture
+        and hid the very corners being aimed at -- and then jumped onto the
+        after picture. Below-right of the pointer, flipped to the other side
+        where the panel ends, so it never covers the point it magnifies.
+        ``event`` is a c_before event; without one the pointer is asked.
+        """
         try:
-            ox = self.c_after.winfo_rootx() - self.winfo_rootx()
-            oy = self.c_after.winfo_rooty() - self.winfo_rooty()
-            cw, ch = self.c_after.winfo_width(), self.c_after.winfo_height()
+            px, py = self.winfo_rootx(), self.winfo_rooty()
+            pw, ph = self.winfo_width(), self.winfo_height()
+            if event is not None:
+                mx = self.c_before.winfo_rootx() + event.x - px
+                my = self.c_before.winfo_rooty() + event.y - py
+            else:
+                mx = self.winfo_pointerx() - px
+                my = self.winfo_pointery() - py
         except tk.TclError:
             return self._loupe_park(size)
-        ax = p[0] + self._after_off[0]
-        ay = p[1] + self._after_off[1]
-        x = int(round(ox + ax - size // 2))
-        y = int(round(oy + ay - size // 2))
-        x = max(ox, min(x, ox + cw - size))
-        y = max(oy, min(y, oy + ch - size))
-        return x, y
+        off = layout.LOUPE_OFFSET
+        x = mx + off if mx + off + size <= pw else mx - off - size
+        y = my + off if my + off + size <= ph else my - off - size
+        return max(0, int(x)), max(0, int(y))
 
     def _loupe_show(self):
         """Create the glass.  A canvas placed over the panel, not a Toplevel:
@@ -2860,7 +2896,7 @@ class ReviewPanel(tk.Frame):
         # view and only slid into place on the first MOTION, so pressing to
         # start a mark showed nothing at all until you moved -- and seeing
         # the point before you move it is the entire purpose of the glass.
-        w.place(**dict(zip(("x", "y"), self._loupe_park(size))))
+        w.place(**dict(zip(("x", "y"), self._loupe_follow(size))))
         # Raise via the raw window command: on a Canvas both `lift()` and
         # `tkraise()` are the item-stacking commands (they need an item id), so
         # neither raises the widget itself.  `raise <window>` does.
@@ -2880,6 +2916,16 @@ class ReviewPanel(tk.Frame):
         w.bind("<Button-1>", _forward)
         w.bind("<ButtonRelease-1>", _forward)
         w.bind("<B1-Motion>", _forward)
+
+        # A fast move can land the pointer on the glass before it moves away;
+        # without this the before field stops hearing motion and the glass
+        # stays where it is, under the pointer, for good.
+        def _forward_motion(event):
+            self.c_before.event_generate(
+                "<Motion>", x=int(event.x_root - self.c_before.winfo_rootx()),
+                y=int(event.y_root - self.c_before.winfo_rooty()),
+                state=getattr(event, "state", 0))
+        w.bind("<Motion>", _forward_motion)
         self._loupe = w
         self._loupe_ph = None
         self._loupe_center = None
@@ -2911,7 +2957,7 @@ class ReviewPanel(tk.Frame):
         py = int(round((event.y - self._before_off[1]) / self._before_scale))
         # Alt: damp the crop centre so the glass lags the cursor by LOUPE_MAG,
         # making fine aiming possible.  Without Alt the centre tracks 1:1.
-        alt = bool(getattr(event, "state", 0) & 0x0008)
+        alt = bool(getattr(event, "state", 0) & ALT_MASK)
         if alt and self._loupe_center is not None:
             f = 1.0 / layout.LOUPE_MAG
             cx = self._loupe_center[0] + (px - self._loupe_center[0]) * f
@@ -2948,11 +2994,7 @@ class ReviewPanel(tk.Frame):
         # every pixel of it picture, and one hairline to say where it ends.
         c.create_rectangle(1, 1, size - 1, size - 1,
                            outline=INK["line"], width=2)
-        # Parked in the middle of the cross, where the gutter is, instead of
-        # trailing the cursor across whatever switch happens to be underneath.
-        # A fixed place is one you learn once; a wandering one has to be dodged
-        # every time.
-        c.place(**dict(zip(("x", "y"), self._loupe_place(size, cx, cy))))
+        c.place(**dict(zip(("x", "y"), self._loupe_follow(size, event))))
 
     def _on_strip_icon_click(self, event=None):
         """Toggle ROI on/off; apply the strip from the rulers."""
@@ -3530,15 +3572,15 @@ class ReviewPanel(tk.Frame):
 
     def _on_mark_drag(self, event):
         """Drag an endpoint of a placed control line to refine its position."""
-        if getattr(self, "_loupe", None) is not None:
-            self._loupe_move(event)
         (line_idx, ep_idx), kind = self._mark_drag
         x = event.x - self._before_off[0]
         y = event.y - self._before_off[1]
         self.session.move_control_line_endpoint(line_idx, ep_idx, x, y,
                                                 display_scale=self._before_scale,
-                                                kind=kind)
-        self._schedule_redraw()
+                                                kind=kind, refit=False)
+        self.c_before.delete("marks")
+        self._draw_marks()
+        self._drag_preview()
 
     # -- line brush ------------------------------------------------------
     def _build_tools(self, parent):
@@ -3694,7 +3736,9 @@ class ReviewPanel(tk.Frame):
             return
         if getattr(self, "_mark_drag", None) is not None:
             self._mark_drag = None
+            self._drag_preview_end()
             self._loupe_hide()
+            self.session.refit()
             self._sync_from_session()
             return
         if getattr(self, "v_stroke", None) is not None and self.v_stroke.get():
@@ -4042,6 +4086,109 @@ class ReviewPanel(tk.Frame):
                                   tags="stroke_preview")
 
     # -- drawing ---------------------------------------------------------
+    def _drag_preview(self):
+        """Re-render the after picture at most every ``DRAG_PREVIEW_MS``.
+
+        The before field follows the pointer on the canvas alone; the after
+        picture is re-rendered at a throttled rate without fill (`_redraw`
+        sees the drag), and in full when the drag ends.
+        """
+        if self._drag_job is not None:
+            return
+        if not getattr(self, "_drag_said", False):
+            self._drag_said = True
+            self._set_status_extra("dragging -- the corrected picture updates "
+                                   "without fill; the full preview follows on release")
+
+        def tick():
+            self._drag_job = None
+            if self.session is None:
+                return
+            if getattr(self, "_mark_drag", None) is not None:
+                self.session.refit()
+            self._redraw()
+        self._drag_job = self.after(layout.DRAG_PREVIEW_MS, tick)
+
+    def _drag_preview_end(self):
+        self._drag_said = False
+        if self._drag_job is not None:
+            try:
+                self.after_cancel(self._drag_job)
+            except tk.TclError:
+                pass
+            self._drag_job = None
+
+    # -- deferred fill: the stand-in now, the slow backend once things settle --
+    def _fill_schedule(self):
+        """Run the session's `deferred_fill` after a quiet ``DEFERRED_FILL_MS``.
+
+        Every render cancels the timer and bumps `_fill_gen`, so the slow
+        fill runs once, for the picture that stayed on screen.
+        """
+        if self._fill_after is not None:
+            try:
+                self.after_cancel(self._fill_after)
+            except tk.TclError:
+                pass
+        self._fill_after = self.after(layout.DEFERRED_FILL_MS, self._fill_start)
+
+    def _fill_start(self):
+        self._fill_after = None
+        s = self.session
+        job = getattr(s, "deferred_fill", None) if s is not None else None
+        if job is None:
+            return
+        if self._fill_thread is not None and self._fill_thread.is_alive():
+            # One model, one job: wait for the running one, then do the latest.
+            self._fill_after = self.after(150, self._fill_start)
+            return
+        s.deferred_fill = None
+        raw, hole, settings, finish = job
+        gen, q = self._fill_gen, self._fill_q
+
+        def work():
+            # Off the Tk thread: numpy, the model and the queue only.
+            try:
+                from . import inpaint as FILL
+                img, _note = FILL.fill(raw, hole, settings)
+                q.put((gen, finish(img), None))
+            except Exception as exc:              # reported on the Tk thread
+                q.put((gen, None, exc))
+        self._fill_thread = threading.Thread(target=work, daemon=True)
+        self._fill_thread.start()
+        self._set_status_extra(f"preview: quick fill now -- {settings.fill} follows")
+        self.after(60, self._fill_poll)
+
+    def _fill_poll(self):
+        try:
+            gen, img, err = self._fill_q.get_nowait()
+        except queue.Empty:
+            if self._fill_thread is not None and self._fill_thread.is_alive():
+                self.after(60, self._fill_poll)
+            return
+        if err is not None:
+            logging.getLogger("pc.gui").warning("deferred fill failed: %s", err)
+            self._set_status_extra(f"the slow fill failed ({err}); "
+                                   "the quick fill stays on screen")
+            return
+        if gen != self._fill_gen or self.session is None or img is None:
+            return                                # the picture moved on meanwhile
+        self._after_base = img
+        self._show_after(self.session.crop_rect)
+        self._set_status(self.session.status_text())
+
+    def _fill_wait(self, timeout=60.0):
+        """Before a save: no second model call while the preview's is running."""
+        if self._fill_after is not None:
+            try:
+                self.after_cancel(self._fill_after)
+            except tk.TclError:
+                pass
+            self._fill_after = None
+        t = self._fill_thread
+        if t is not None and t.is_alive():
+            t.join(timeout)
+
     def _schedule_redraw(self):
         if self._busy:
             return
@@ -4144,7 +4291,14 @@ class ReviewPanel(tk.Frame):
             # Un-cropped on purpose: `_show_after` bakes a veil over what the crop
             # discards, so the picture keeps one size and one scale for the whole
             # session instead of leaping every time a corner moves.
-            after = self.session.render_after(max_edge=max(lock_a), apply_crop=False)
+            self._fill_gen += 1
+            dragging = (getattr(self, "_rect_drag", None) is not None
+                        or getattr(self, "_mark_drag", None) is not None)
+            # While dragging: no fill and half the pixels -- the picture is
+            # being steered, not judged, and `_to_photo` scales it back up.
+            after = self.session.render_after(
+                max_edge=max(lock_a) // 2 if dragging else max(lock_a),
+                apply_crop=False, fill="none" if dragging else "defer")
             # A live fill reports its steps through `_fill_step`, which raises
             # the "filled -- 100%" notice; the render is synchronous, so once it
             # returns the fill is done and the notice must go (it stayed up for
@@ -4213,7 +4367,12 @@ class ReviewPanel(tk.Frame):
             # Rectangle quad LAST: drawn over everything (loupe, marks, guides)
             self._draw_rect_quad()
             self._show_after(self.session.crop_rect)
-            self._set_status(self.session.status_text())
+            if not dragging:
+                # The drag says what is happening; the size note costs a
+                # full-size plan per throttled frame (2026-10-23).
+                self._set_status(self.session.status_text())
+            if getattr(self.session, "deferred_fill", None) is not None:
+                self._fill_schedule()
         except Exception:
             tb = traceback.format_exc()
             try:
@@ -4269,6 +4428,11 @@ class ReviewPanel(tk.Frame):
         #     this outcome: a size tuned in the window is a size no test sees.
         # The accent won, because that is what an accent is for and two keys
         # already used it.
+        # The keys go into the upper block until the first tool is placed,
+        # then into the lower one, so the gap falls at mid-height.
+        lower = getattr(self, "_addbar_lo", None)
+        dest = [bar]
+
         def tool(glyph, var, command, tip, invert=False, lead=False,
                  emoji=False):
             # Inverted is for the mask brush ALONE (2026-09-15, user): it is the
@@ -4290,7 +4454,7 @@ class ReviewPanel(tk.Frame):
                                 emoji=emoji, mono=emoji)
             if img is not None:
                 self._palette_imgs.append(ImageTk.PhotoImage(img))
-            b = tk.Checkbutton(bar, variable=var, command=command,
+            b = tk.Checkbutton(dest[0], variable=var, command=command,
                                image=(self._palette_imgs[-1] if img is not None else self._palette_blank),
                                text="" if img is not None else chr(0x25CF), compound="center",
                                indicatoron=False, width=side, height=side,
@@ -4308,6 +4472,8 @@ class ReviewPanel(tk.Frame):
             b.pack(side="top", pady=(gap * 2 if lead else gap, 0))
             _attach_tooltip(b, tip)
             self._palette_btns.append(b)
+            if lead and lower is not None:
+                dest[0] = lower
             return b
 
         _mk_btn = tool("mark", self.v_mark, self._on_mark_toggle,
@@ -4318,10 +4484,10 @@ class ReviewPanel(tk.Frame):
                        "detector. Hold Alt for a slow, fine loupe.",
                        lead=True)
         _pr_btn = tool("rect", self.v_rect, self._on_rect_toggle,
-                       "PC Rectangle: click 4 corners of a facade\n"
-                       "(TL, TR, BR, BL) to rectify it.\n"
-                       "Drag corners to adjust. 5th click clears.\n"
-                       "Hold Alt for a slow, fine loupe.")
+                        "PC Rectangle: click the 4 corners of one wall,\n"
+                        "in any order -- it comes out front-on in its real\n"
+                        "proportions, with 20 % kept around it to crop by hand.\n"
+                        "Drag a corner to adjust; right-click clears.")
         # Brush and box-select joined Mark here (2026-09-15, user: "either the
         # toolbar or the marker, I would prefer only the tool").  They were
         # text controls in the lower-left field while Mark was in both places,
@@ -4361,23 +4527,14 @@ class ReviewPanel(tk.Frame):
             "Grounding DINO: find the building by name and mask everything "
             "else.\nRight-click to say what to look for.",
             emoji=True)
-        self._gdino_btn.bind("<Button-3>", lambda _e: self._ask_gdino_prompt())
+        self._gdino_btn.bind(f"<Button-{RB}>", lambda _e: self._ask_gdino_prompt())
         self._sam_btn = tool("sam", self.v_sam, self._on_sam_toggle,
                              "SAM (S): drag a box around the building;\n"
                              "everything outside is masked out.\n"
                              "Right-click clears the prompt.")
-        # Strike slanted moved here from Q3 (2026-09-15, user): a one-shot
-        # action on the before image's line evidence, so it belongs with the
-        # other tools that act on the original.
-        # The tooltip said "remove all lines that are neither vertical nor
-        # horizontal". `disable_lines_by_angle` works on the VERTICAL pool
-        # alone and strikes what leans more than 18 degrees out of plumb -- it
-        # never looks at a horizontal, so it can neither keep nor remove one.
-        self._strike_btn = tool("strike", None, self._strike_slanted,
-                                "Strike vertical candidates leaning more than\n"
-                                "18 deg out of plumb -- rafters and gable edges,\n"
-                                "which drag a facade fit off. Horizontals are\n"
-                                "left alone.")
+        # Strike slanted (vertical candidates > 18 deg off plumb) was removed
+        # from the palette 2026-10-23 (user: "geht ja sowieso"): the fit already
+        # copes with them. `ReviewSession.disable_lines_by_angle` stays.
         # ROI / Facade strip: dark-light-dark vertical stripes.  Click opens a
         # popup with the two % spinboxes; the rulers on the before pane are the
         # primary interaction.
@@ -4659,14 +4816,14 @@ class ReviewPanel(tk.Frame):
                 self.session.control_lines_for_display(self._before_scale)):
             col = OVERLAY["mark_v"] if active_v else OVERLAY["mark_v_off"]
             self.c_before.create_line(ox + x0, oy + y0, ox + x1, oy + y1,
-                                      fill=col, width=lw)
+                                      fill=col, width=lw, tags="marks")
             for ex, ey in ((x0, y0), (x1, y1)):
                 hx, hy = inside(ox + ex, oy + ey, 4)
                 self.c_before.create_oval(hx - 4, hy - 4, hx + 4, hy + 4,
-                                          fill=col, outline="")
+                                          fill=col, outline="", tags="marks")
             mx, my = (x0 + x1) / 2.0, (y0 + y1) / 2.0
             self._draw_delete_handle(*inside(ox + mx, oy + my, 8), col,
-                                     tag=f"mark_del_v_{i}")
+                                     tag=(f"mark_del_v_{i}", "marks"))
         active_h = len(self.session.control_hlines) >= 2
         for i, (x0, y0, x1, y1) in enumerate(
                 self.session.control_lines_for_display(
@@ -4674,20 +4831,20 @@ class ReviewPanel(tk.Frame):
             col = OVERLAY["mark_h"] if active_h else OVERLAY["mark_h_off"]
             self.c_before.create_line(ox + x0, oy + y0, ox + x1, oy + y1,
                                       fill=col, width=lw, arrow="both",
-                                      arrowshape=(9, 11, 4))
+                                      arrowshape=(9, 11, 4), tags="marks")
             for ex, ey in ((x0, y0), (x1, y1)):
                 hx, hy = inside(ox + ex, oy + ey, 4)
                 self.c_before.create_oval(hx - 4, hy - 4, hx + 4, hy + 4,
-                                          fill=col, outline="")
+                                          fill=col, outline="", tags="marks")
             mx, my = (x0 + x1) / 2.0, (y0 + y1) / 2.0
             self._draw_delete_handle(*inside(ox + mx, oy + my, 8), col,
-                                     tag=f"mark_del_h_{i}")
+                                     tag=(f"mark_del_h_{i}", "marks"))
         pend = getattr(self, "_pending_mark", None)
         if pend is not None:
             px, py = ox + pend[0], oy + pend[1]
             # One point leans no way yet, so it wears neither plane colour.
             self.c_before.create_oval(px - 6, py - 6, px + 6, py + 6,
-                                       outline=OVERLAY["mark_handle"], width=2)
+                                       outline=OVERLAY["mark_handle"], width=2, tags="marks")
 
     def _draw_rect_quad(self):
         """Draw the four PC Rectangle corners and connecting edges on the before pane."""
@@ -4997,8 +5154,10 @@ class ReviewPanel(tk.Frame):
             # if four corners are set, save the rectified facade.
             if len(self.session.planar_quad) >= 4:
                 self._wait_show("rectifying the facade")
-                self.session.save_planar(dst)
+                self._fill_wait()
+                self.session.save_planar(dst, on_stage=self._wait_stage)
             else:
+                self._fill_wait()
                 self.session.save(dst, on_stage=self._wait_stage)
         except Exception as exc:
             self._wait_hide()
@@ -5057,8 +5216,10 @@ class ReviewPanel(tk.Frame):
         try:
             if len(self.session.planar_quad) >= 4:
                 self._wait_show("rectifying the facade")
-                self.session.save_planar(dst)
+                self._fill_wait()
+                self.session.save_planar(dst, on_stage=self._wait_stage)
             else:
+                self._fill_wait()
                 self.session.save(dst, on_stage=self._wait_stage)
         except Exception as exc:
             self._wait_hide()
@@ -5146,6 +5307,9 @@ class App(_ROOT_CLASS):
         # Ctrl+V pastes a picture (or copied files) without the paste icon.
         self.bind("<Control-v>", self._paste_key)
         self.bind("<Control-V>", self._paste_key)
+        if _MAC:
+            self.bind("<Command-v>", self._paste_key)
+            self.bind("<Command-V>", self._paste_key)
         self.bind("<Escape>", self._esc)
         self.bind("<m>", lambda _e: self._tool_key("v_mark", "_on_mark_toggle"))
         self.bind("<b>", lambda _e: self._tool_key("v_stroke", "_on_stroke_toggle"))

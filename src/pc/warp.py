@@ -152,6 +152,83 @@ def eave_y(H_total, horiz_segs, ow, x0, x1):
     return best
 
 
+INTEREST_QUANTILES = (0.05, 0.95)
+INTEREST_MARGIN = 0.10
+INTEREST_STRAIGHT_DEG = 3.0
+INTEREST_ROOF_LEN = 0.06
+"""The centre of interest is where the detected lines are (user, 2026-10-23:
+"center of interest? Dichte LSD?" -- "Vorteil: Himmel fliegt raus"). Sky and
+plain ground carry no lines, so the length-weighted 5-95 % extent of the
+segments, mapped into the output, frames the building; the margin is that share
+of the box added on each side.
+
+Only segments that come out STRAIGHT (within INTEREST_STRAIGHT_DEG of vertical
+or horizontal) frame it: railings, stairs, ramps and branches run slanted after
+the correction and had pulled the box into the foreground (00010519, user:
+"Bild sitzt gut, Auto-Crop noch nicht"). Slanted segments at least
+INTEREST_ROOF_LEN of the segments' extent long may only RAISE the top edge,
+above the straight box and over its width -- a gable or a pediment is slanted
+and belongs to the building; a short slanted segment up there is a tree."""
+
+
+def interest_box(H_total, segs, ow, oh, q=INTEREST_QUANTILES, margin=INTEREST_MARGIN):
+    """``(x0, y0, x1, y1)`` output px around where the line segments lie, or None.
+
+    ``segs`` are ``(N, 4)`` segments in *source* pixels. Each is mapped through
+    ``H_total`` and sampled at its two ends and midpoint, weighted by its length in
+    the photograph; the box spans the weighted quantiles ``q`` on each axis, grown by
+    ``margin`` of its size on every side and clipped to the ``ow`` x ``oh``
+    canvas. Segments that map behind the camera are left out.
+    """
+    segs = np.asarray(segs, float)
+    if segs.size == 0:
+        return None
+    segs = segs[:, :4]
+    h1 = np.c_[segs[:, :2], np.ones(len(segs))] @ np.asarray(H_total, float).T
+    h2 = np.c_[segs[:, 2:4], np.ones(len(segs))] @ np.asarray(H_total, float).T
+    ok = (h1[:, 2] * h2[:, 2] > 0) & (np.abs(h1[:, 2]) > 1e-12) & (np.abs(h2[:, 2]) > 1e-12)
+    if ok.sum() < 3:
+        return None
+    a = h1[ok, :2] / h1[ok, 2:3]
+    b = h2[ok, :2] / h2[ok, 2:3]
+    # Weighted by the length IN THE PHOTOGRAPH -- the amount of evidence. The
+    # mapped length explodes near a vanishing point and let a few stretched
+    # segments there outvote the facade.
+    length = np.hypot(segs[ok, 2] - segs[ok, 0], segs[ok, 3] - segs[ok, 1])
+    ang = np.degrees(np.arctan2(np.abs(b[:, 1] - a[:, 1]), np.abs(b[:, 0] - a[:, 0])))
+    straight = (ang <= INTEREST_STRAIGHT_DEG) | (ang >= 90.0 - INTEREST_STRAIGHT_DEG)
+    if straight.sum() < 3:
+        straight = np.ones(len(a), bool)
+    sa, sb, sl = a[straight], b[straight], length[straight]
+    pts = np.concatenate([sa, sb, 0.5 * (sa + sb)])
+    wts = np.concatenate([sl, sl, 2 * sl])
+    inside = (pts[:, 0] > -ow) & (pts[:, 0] < 2 * ow) & (pts[:, 1] > -oh) & (pts[:, 1] < 2 * oh)
+    pts, wts = pts[inside], wts[inside]
+    if wts.sum() <= 0:
+        return None
+
+    def wq(v):
+        o = np.argsort(v)
+        c = np.cumsum(wts[o]) / wts.sum()
+        return float(v[o][np.searchsorted(c, q[0])]), float(v[o][min(len(v) - 1, np.searchsorted(c, q[1]))])
+    x0, x1 = wq(pts[:, 0])
+    y0, y1 = wq(pts[:, 1])
+    span = max(np.ptp(segs[ok][:, [0, 2]]), np.ptp(segs[ok][:, [1, 3]]))
+    roof = ~straight & (length >= INTEREST_ROOF_LEN * span)
+    if roof.any():
+        ry = np.r_[a[roof, 1], b[roof, 1]]
+        rx = np.r_[a[roof, 0], b[roof, 0]]
+        on = (rx >= x0) & (rx <= x1) & (ry < y0) & (ry >= 0)
+        if on.any():
+            y0 = float(ry[on].min())
+    mx, my = margin * (x1 - x0), margin * (y1 - y0)
+    x0, x1 = max(0.0, x0 - mx), min(float(ow), x1 + mx)
+    y0, y1 = max(0.0, y0 - my), min(float(oh), y1 + my)
+    if x1 - x0 < 8 or y1 - y0 < 8:
+        return None
+    return x0, y0, x1, y1
+
+
 def build(w: int, h: int, f: float, roll: float, pitch: float,
           yaw: float = 0.0, max_area: float = 4.0) -> np.ndarray:
     """Build the correction homography: K·R·K⁻¹, then the yaw x-compression.
@@ -267,6 +344,57 @@ def rectify(vp_v, vp_h, w: int, h: int, x_scale: float = 1.0,
     if not np.all(np.isfinite(q)) or quad_area(q) > max_area * w * h or quad_area(q) < 1e-3 * w * h:
         return None
     return H
+
+
+def metric_x_scale(H, vp_v, vp_h, w: int, h: int, f: float) -> float | None:
+    """The x factor after :func:`rectify` that makes a square on the facade square.
+
+    :func:`rectify` is exact about straightness but not about width: once the
+    vanishing line is at infinity the map is only affine on the facade, and
+    turning the two directions into unit axes leaves the width at whatever the
+    picture's scale along each happened to be. The metric width needs the
+    camera: the facade's axes are ``K^-1 vp_h`` and ``K^-1 vp_v``, so a short
+    step along each from any point of the plane, sent through ``K`` and ``H``,
+    says how many output pixels a metre gets across and down. User,
+    2026-10-23: "ich will natuerlich Quadrate", also on strongly foreshortened
+    facades. Only one number changes, so every line stays as straight as
+    ``H`` made it. None when the geometry gives no answer (``f`` missing, a
+    direction behind the camera, a step that does not move)."""
+    if not f or not np.isfinite(f) or f <= 0:
+        return None
+    K = np.array([[f, 0.0, w / 2.0], [0.0, f, h / 2.0], [0.0, 0.0, 1.0]])
+    Ki = np.linalg.inv(K)
+    dh = Ki @ np.asarray(vp_h, float)
+    dv = Ki @ np.asarray(vp_v, float)
+    if np.linalg.norm(dh) < 1e-12 or np.linalg.norm(dv) < 1e-12:
+        return None
+    dh, dv = dh / np.linalg.norm(dh), dv / np.linalg.norm(dv)
+    X0 = Ki @ np.array([w / 2.0, h / 2.0, 1.0])
+    eps = 1e-3
+
+    def out(X):
+        p = H @ (K @ X)
+        return p[:2] / p[2]
+
+    if min((X0 + eps * dh)[2], (X0 + eps * dv)[2]) <= 0:
+        return None
+    o = out(X0)
+    sx = abs(out(X0 + eps * dh)[0] - o[0])
+    sy = abs(out(X0 + eps * dv)[1] - o[1])
+    if not (np.isfinite(sx) and np.isfinite(sy)) or sx < 1e-12 or sy < 1e-12:
+        return None
+    return float(sy / sx)
+
+
+def rectify_metric(vp_v, vp_h, w: int, h: int, f: float,
+                   max_area: float = 60.0) -> np.ndarray | None:
+    """:func:`rectify`, then the width that keeps squares square
+    (:func:`metric_x_scale`); plain :func:`rectify` when no focal answers."""
+    H = rectify(vp_v, vp_h, w, h, max_area=max_area * 4)
+    if H is None:
+        return None
+    k = metric_x_scale(H, vp_v, vp_h, w, h, f)
+    return rectify(vp_v, vp_h, w, h, x_scale=k if k else 1.0, max_area=max_area)
 
 
 def _facade_perspective(w: int, h: int, vert_segs: np.ndarray,

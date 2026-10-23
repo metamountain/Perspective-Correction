@@ -329,6 +329,18 @@ LOUPE_CROP = 81      # full-resolution image px across the window (odd: centred)
 LOUPE_MAG = 2        # screen px per image px
 LOUPE_OFFSET = 24    # cursor-to-window distance, so the glass never covers the point
 
+# While a mark end or a rectangle corner is dragged the after picture is
+# re-rendered at most this often, without fill; the full preview comes on
+# release (user, 2026-10-23: "aktualisierung target reduziert, sonst lag").
+# Measured on Platte_1 with horizontal auto: a refit is 30 ms, the after
+# render 100 ms unfilled against 900 ms with live lama. Once a second, not
+# four times: every re-render stalls the loupe for ~200 ms, and the glass is
+# what the hand is aiming with ("lupe muss smooth laufen! max 1/s").
+DRAG_PREVIEW_MS = 1000
+# A slow fill (lama) follows the stand-in once nothing has changed for this
+# long, off the Tk thread ("erst telea, dann relaxed lama hinterher").
+DEFERRED_FILL_MS = 400
+
 
 def loupe(field_short=0):
     """``(window_px, crop_px, offset_px)`` for the magnifier.
@@ -389,6 +401,21 @@ MARK_LINE_MIN, MARK_LINE_MAX = 1, 3
 # regularised: a sweep that forced 54 values onto a 4 px grid would move the
 # whole window to fix nothing. The rhythm was already there.
 GRID = 4
+
+
+# The facade strip's rulers carry their grab handle at the picture's
+# mid-height, which is exactly where the centred tool palette sits: a ruler near
+# the left edge put its handle under the palette, out of reach (user,
+# 2026-10-23: "auf Handle-Hoehe kleine Aussparung"). The palette is split there
+# and leaves this much free: the 14 px handle plus its 14 px grab zone each way
+# fits inside.
+PALETTE_HANDLE_GAP = 8 * GRID
+
+
+def palette_split():
+    """``(y_upper, y_lower)``: offsets from the field's mid-height at which the
+    upper palette block ends and the lower one starts."""
+    return -PALETTE_HANDLE_GAP // 2, PALETTE_HANDLE_GAP // 2
 
 
 def tool_key(unit=GRID):

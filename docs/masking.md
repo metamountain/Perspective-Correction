@@ -53,7 +53,7 @@ slightly lower confidence -- and obvious the instant the mask was drawn.
 
 ## BiRefNet, built in
 
-    python rectify.py "D:\Fotos" --mask birefnet --birefnet-model auto --focal-35mm 24
+    python perspective_correction.py "D:\Fotos" --mask birefnet --birefnet-model auto --focal-35mm 24
 
 BiRefNet is a *dichotomous* segmenter: one high-resolution matte separating the
 salient object from everything else. On an architectural photograph the salient
@@ -152,8 +152,8 @@ that a mask happens to cover.
 
 ### Export the masks once instead of computing them every run
 
-    python rectify.py "D:\Fotos" --mask-export "D:\Masken"
-    python rectify.py "D:\Fotos" --mask file --mask-file "D:\Masken" --focal-35mm 24
+    python perspective_correction.py "D:\Fotos" --mask-export "D:\Masken"
+    python perspective_correction.py "D:\Fotos" --mask file --mask-file "D:\Masken" --focal-35mm 24
 
 Two problems, one seam. It bridges the interpreter split — the Python with torch
 has no tkinter and the one with tkinter has no torch — and it turns a repeated
@@ -172,7 +172,7 @@ kind. See `tests/assets/masks/README.md`.
 
 ### Check the setup before running a batch
 
-    python rectify.py --mask-info --birefnet-model auto
+    python perspective_correction.py --mask-info --birefnet-model auto
 
 It names the interpreter, which of `torch`, `timm`, `transformers`,
 `safetensors` and `torchvision` it can import, whether `tkinter` is present, and
@@ -267,7 +267,7 @@ An optional dependency can change the behaviour of a required one, at import.
 
 ## A hand-painted mask, or another tool's output
 
-    python rectify.py "D:\Fotos" --mask file --mask-file "D:\Masken" --focal-35mm 24
+    python perspective_correction.py "D:\Fotos" --mask file --mask-file "D:\Masken" --focal-35mm 24
 
 `--mask-file` accepts a folder as well as a single PNG. For each photograph it
 looks for `<stem>.png`, `<stem>_mask.png` or `<stem>-mask.png` beside it, so a

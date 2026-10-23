@@ -152,3 +152,7 @@ tools/shoot.py
 # Not linked from any page any more; kept on disk only.
 docs/before-after.jpg
 docs/detection.jpg
+
+# Launcher build output (python tools/make_launcher.py)
+/Perspective Correction.exe
+/tools/launcher.ico

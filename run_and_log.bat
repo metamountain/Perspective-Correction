@@ -55,11 +55,11 @@ echo === pc run %DATE% %TIME% > "%LOG%"
 echo === interpreter: %PY% >> "%LOG%"
 echo === photos: %PHOTOS% >> "%LOG%"
 echo. >> "%LOG%"
-"%PY%" rectify.py --mask-info --birefnet-model auto >> "%LOG%" 2>&1
+"%PY%" perspective_correction.py --mask-info --birefnet-model auto >> "%LOG%" 2>&1
 echo. >> "%LOG%"
 
 rem --- the run ----------------------------------------------------------------
-"%PY%" rectify.py "%PHOTOS%" -o "%OUT%\corrected" --debug-dir "%OUT%\debug" --json-report "%OUT%\report.json" --log-file "%LOG%" --diagnostics -v %FOCALARG% %MASKARGS%
+"%PY%" perspective_correction.py "%PHOTOS%" -o "%OUT%\corrected" --debug-dir "%OUT%\debug" --json-report "%OUT%\report.json" --log-file "%LOG%" --diagnostics -v %FOCALARG% %MASKARGS%
 
 echo.
 echo ---------------------------------------------------------------------------

@@ -1,9 +1,9 @@
 """Command line front end.
 
-    rectify.py "D:\\Fotos"                    write next to the originals as *_corr.jpg
-    rectify.py "D:\\Fotos" -o "D:\\Out"        write to another folder
-    rectify.py "D:\\Fotos" --overwrite        replace the originals (asks first)
-    rectify.py "D:\\Fotos" --dry-run -v       decide but write nothing
+    perspective_correction.py "D:\\Fotos"                    write next to the originals as *_corr.jpg
+    perspective_correction.py "D:\\Fotos" -o "D:\\Out"        write to another folder
+    perspective_correction.py "D:\\Fotos" --overwrite        replace the originals (asks first)
+    perspective_correction.py "D:\\Fotos" --dry-run -v       decide but write nothing
 """
 from __future__ import annotations
 
@@ -65,7 +65,7 @@ def destination(src, args, roots):
 
 def build_parser():
     p = argparse.ArgumentParser(
-        prog="rectify", formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+        prog="perspective_correction", formatter_class=argparse.ArgumentDefaultsHelpFormatter,
         description="Straighten converging verticals in architectural photos, in batch. "
                     "Images the detector is not confident about are left alone.")
     p.add_argument("inputs", nargs="*", help="image files and/or folders")

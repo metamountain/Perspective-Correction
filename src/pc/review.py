@@ -127,6 +127,16 @@ class ReviewSession:
         # scale, for the surface a person has pointed at (see planar.py).
         self.planar_quad = []
         self.planar_active = False
+        # Lines OR rectangle, never both (user, 2026-10-23). The one put away
+        # waits here and comes back on the way back.
+        self.facade_mode = "lines"
+        self._stashed_lines = (np.zeros((0, 4)), np.zeros((0, 4)))
+        self._stashed_quad = []
+        # The crop goes with its mode: its fractions are of THAT mode's canvas,
+        # and on the other one they cut somewhere nobody chose (user,
+        # 2026-10-23: the saved rectangle kept 24 % because the line mode's
+        # auto crop had come along).
+        self._stashed_crop = ({k: (False, 0.0) for k in self._crop_edges}, False)
         # Horizontal-evidence region: a vertical strip (x0, x1) in ANALYSIS-
         # image pixels, or None.  In a corner view the two facades have two
         # horizontal vanishing points and the estimator takes whichever has
@@ -171,14 +181,14 @@ class ReviewSession:
         """Run the line front end.  Separate from ``__init__`` because changing
         the mask has to redo it, not just refit."""
         try:
-            (_, self.vert, self.horiz, self.detector,
+            (self.all_lines, self.vert, self.horiz, self.detector,
              self.detect_info) = L.prepare(self.gray, self.settings, self._small, self.path)
             self.detect_error = ""
         except Exception as exc:
             # a missing mask file must not take the window down; say so instead
             self.detect_error = str(exc)
             safe = self.settings.replace(mask_mode="off")
-            (_, self.vert, self.horiz, self.detector,
+            (self.all_lines, self.vert, self.horiz, self.detector,
              self.detect_info) = L.prepare(self.gray, safe, self._small, self.path)
         # The automatic source keeps its own slot.  `prepare` hands its mask
         # back in detect_info; taking a copy here is what lets a later source
@@ -351,7 +361,7 @@ class ReviewSession:
             # one, so there is nothing to filter here.  It used to be the single
             # masking idea with its own mechanism and its own place in the
             # pipeline, which is exactly the chaos the registry removes.
-            horiz = self.horiz
+            horiz = self._strip_horizontals()
         # An annotator that TOUCHES the mask is not evidence -- for the
         # DETECTOR. The mask is aimed at what a detector finds and a person
         # would not: sky, branches, parked cars. A hand-drawn control line is
@@ -522,16 +532,16 @@ class ReviewSession:
         Returns ``False``, having changed nothing, when there is no band to cut
         -- an uncorrected photograph, or one the plan already cropped.
         """
+        if self.active_quad() is not None:
+            # On the rectified view the automatic crop is the quad + 20 %;
+            # the canvas around it is there to drag the crop out by hand.
+            return self._planar_default_crop()
         roll, pitch, f, _ = self.current_angles()
         yaw = self.current_yaw()
         if abs(roll) < 1e-9 and abs(pitch) < 1e-9 and abs(yaw) < 1e-9:
             return False
         H = self._build_H(self.w, self.h, f, roll, pitch, yaw, max_area=self.settings.max_area_ratio)
-        _segs = None
-        if len(self.vert) or len(self.horiz):
-            _parts = [x.seg for x in (self.vert, self.horiz) if len(x)]
-            if _parts:
-                _segs = np.concatenate(_parts, axis=0)
+        _segs = self._plan_segs(self.w)
         planned = W.plan(self.w, self.h, H, self.settings, line_segs=_segs, yaw=yaw,
                          strip=self.strip)
         if planned is None:
@@ -604,6 +614,25 @@ class ReviewSession:
             qx1, qy1 = (float(v) for v in np.max(quad, axis=0))
             x0, x1 = max(0.0, qx0, x0 - gx), min(float(ow), qx1, x1 + gx)
             y0, y1 = max(0.0, qy0, y0 - gy), min(float(oh), qy1, y1 + gy)
+        # Centre of interest (user, 2026-10-23: "Dichte LSD", "Himmel fliegt
+        # raus"): with a yaw in play and no strip, frame where the lines are.
+        # With a fill the box is the crop; without one it only trims the
+        # fill-free rectangle, which must stay free of invented pixels.
+        if self.CROP_TO_INTEREST and yawed and self.strip is None:
+            k = self.w / float(self.gray.shape[1])
+            parts = [np.asarray(x.seg, float)[:, :4] * k for x in (self.vert, self.horiz) if len(x)]
+            box = W.interest_box(H_total, np.concatenate(parts), ow, oh) if parts else None
+            if box is not None:
+                bx0, by0, bx1, by1 = box
+                if fill_mode not in (None, "", "none"):
+                    qx0, qy0 = (float(v) for v in np.min(quad, axis=0))
+                    qx1, qy1 = (float(v) for v in np.max(quad, axis=0))
+                    nx0, ny0 = max(bx0, qx0), max(by0, qy0)
+                    nx1, ny1 = min(bx1, qx1), min(by1, qy1)
+                else:
+                    nx0, ny0, nx1, ny1 = max(x0, bx0), max(y0, by0), min(x1, bx1), min(y1, by1)
+                if nx1 - nx0 >= 8 and ny1 - ny0 >= 8:
+                    x0, y0, x1, y1 = nx0, ny0, nx1, ny1
         if fill_mode not in (None, "", "none") and len(self.horiz):
             segs = np.asarray(self.horiz.seg, float)[:, :4]
             segs = segs * (self.w / self.gray.shape[1])
@@ -689,7 +718,9 @@ class ReviewSession:
         # the auto crop "not actualising" the moment the mode it was computed
         # for is in force. The manual _auto_crop keeps it regardless of loss, so
         # match that when the rectify warp is active.
-        if self.crop_loss() > self.auto_crop_threshold and not self._rectify_active():
+        # The rectangle's crop is quad + 20 % of a canvas built with room to
+        # drag it out, so its loss is large by design -- not a band to refuse.
+        if self.crop_loss() > self.auto_crop_threshold and not self._rectify_active()                 and self.active_quad() is None:
             self.clear_crop_rect()
             return before is not None
         self.crop_is_auto = True
@@ -755,8 +786,13 @@ class ReviewSession:
 
     def move_control_line_endpoint(self, index: int, endpoint_idx: int,
                                    x: float, y: float,
-                                   display_scale: float = 1.0, kind: str = "v"):
-        """Move one endpoint of an existing control line to (x, y)."""
+                                   display_scale: float = 1.0, kind: str = "v",
+                                   refit: bool = True):
+        """Move one endpoint of an existing control line to (x, y).
+
+        ``refit=False`` leaves the fit for later: a drag moves the endpoint on
+        every motion event, and a 30 ms refit each time is most of the lag
+        (2026-10-23); the drag refits at its own, slower rate and on release."""
         attr = self._ctrl_attr(kind)
         arr = getattr(self, attr)
         if not (0 <= index < len(arr)):
@@ -766,7 +802,8 @@ class ReviewSession:
         arr[index, col] = x * inv
         arr[index, col + 1] = y * inv
         setattr(self, attr, arr)
-        self.refit()
+        if refit:
+            self.refit()
         return True
 
     def pick_control_line_endpoint(self, x: float, y: float,
@@ -1199,18 +1236,68 @@ class ReviewSession:
                   else np.array([1.0, 0.0, 0.0]))
             vv = W.vp_from_lines(np.asarray(self.control_lines, float) * k, fv)
             vh = W.vp_from_lines(np.asarray(self.control_hlines, float) * k, fh)
-            xs = W.yaw_x_scale(yaw) if self.settings.correct_horizontal else 1.0
-            H = W.rectify(vv, vh, w, h, x_scale=xs)
+            # With horizontal auto the drawn rectangle comes out in its true
+            # proportions, squares square (user, 2026-10-23); without it the
+            # horizontals are left as they are and so is the width.
+            H = (W.rectify_metric(vv, vh, w, h, f) if self.settings.correct_horizontal
+                 else W.rectify(vv, vh, w, h))
             if H is not None:
                 return H
         if self._rectify_active():
             dv = self._data_vertical_vp()
-            H = W.rectify(to_build(dv if dv is not None else self.model.vp),
-                          to_build(self.model.horiz_vps[0]),
-                          w, h, x_scale=W.yaw_x_scale(yaw))
+            H = W.rectify_metric(to_build(dv if dv is not None else self.model.vp),
+                                 to_build(self.model.horiz_vps[0]), w, h, f)
             if H is not None:
                 return H
         return W.build(w, h, f, roll, pitch, yaw, max_area=max_area)
+
+    # How steep a horizontal may stand in the photograph once a facade strip is
+    # placed: up to just short of the vertical window. The detector's own
+    # window (`horizontal_window_deg`, 32) drops the horizontals of a strongly
+    # foreshortened facade, which slope 38-60 deg -- measured on rendered
+    # building-sized cubes, 2 horizontals found in the strip against 33-37
+    # verticals, so horizontal auto had no vanishing point for exactly the
+    # facades it exists for ("das ist der haerteste Contest", user 2026-10-23).
+    # Without a strip nobody has said which wall counts, and the narrow window
+    # keeps roof edges and diagonals out of the vote as before.
+    STRIP_HORIZ_GAP_DEG = 4.0
+    FOLD_MAX_FORESHORTEN = 3.0
+    CROP_TO_INTEREST = True   # auto crop frames the line-dense region (see auto_crop)
+    FOLD_FRAME_TOL = 0.05     # how far the facade may poke out of a plan before the quad path frames it
+
+    def _plan_segs(self, width):
+        """The detected segments in the pixels of a ``width``-wide frame.
+
+        `warp.plan` frames the motif from them in ITS OWN pixels, and they are
+        stored in the analysis image's. Passing them unscaled gave the preview
+        (``sw`` wide) and the full-size crop/save (``self.w``) two different
+        canvases whenever the analysis image was a third size -- a 2400 px
+        rendered street put the auto crop's box in the ground on the preview.
+        """
+        parts = [x.seg for x in (self.vert, self.horiz) if len(x)]
+        if not parts:
+            return None
+        segs = np.concatenate(parts, axis=0).astype(float)
+        segs[:, :4] *= width / float(self.gray.shape[1])
+        return segs
+
+    def _strip_horizontals(self):
+        """The horizontal pool: the detector's, or with a strip a wider one."""
+        ls = getattr(self, "all_lines", None)
+        if self.strip is None or ls is None or len(ls) == 0:
+            return self.horiz
+        st = self.settings
+        window = 90.0 - st.vertical_window_deg - self.STRIP_HORIZ_GAP_DEG
+        if window <= st.horizontal_window_deg:
+            return self.horiz
+        _v, horiz = L.split_by_orientation(ls, st.vertical_window_deg, window,
+                                           st.angular_softness)
+        # Nothing inside the strip: refit falls back to the whole frame, and
+        # that fallback must be the detector's own pool, not the wide one.
+        band = self.layer("strip")
+        if band is None or not len(horiz.seg) or not MK.untouched(horiz.seg, band).any():
+            return self.horiz
+        return horiz
 
     def _data_vertical_vp(self):
         """Where the photograph's vertical lines actually converge (gray px).
@@ -1376,8 +1463,15 @@ class ReviewSession:
                 PV._draw_infinite_line(canvas, G.horizon_line(m.up, K), PV.MAGENTA, 2)
         return _fit(canvas, max_edge)
 
-    def render_after(self, max_edge=900, apply_crop=True):
+    def render_after(self, max_edge=900, apply_crop=True, fill="full"):
         """The corrected frame, at preview size.
+
+        ``fill`` is how the band is filled: ``"full"`` as the settings say,
+        ``"none"`` not at all (a drag in progress: a preview a person is
+        steering wants speed, not paint), ``"defer"`` the stand-in now and,
+        when the chosen backend is a slow one shown live, the job for it left
+        in ``self.deferred_fill`` for the caller to run when it has time
+        (user, 2026-10-23: "erst telea, dann relaxed lama hinterher").
 
         ``apply_crop=False`` returns the *whole* corrected frame with the
         hand-drawn rectangle left un-cut.  That is what a crop tool needs and
@@ -1394,8 +1488,18 @@ class ReviewSession:
         to "straighten this facade" and does not go through roll/pitch/yaw at
         all."""
         self.preview_map = None
-        if len(self.planar_quad) >= 4:
-            return self.planar_rectified(max_edge=max_edge)
+        self.deferred_fill = None
+        if self.active_quad() is not None:
+            r = self._planar_warp(max_edge)
+            if r is None:
+                return _fit(self.bgr, max_edge)
+            out, Hs, sw, sh, ow, oh, s = r
+            crop = self._apply_crop if apply_crop else (lambda img: img)
+            raw = out
+            out = self._fill_preview(out, Hs, sw, sh, ow, oh, mode=fill)
+            self._defer_fill(raw, Hs, sw, sh, ow, oh, fill, crop)
+            self.preview_map = ("warp", s, Hs, 1.0)
+            return crop(out)
         roll, pitch, f, _ = self.current_angles()
         yaw = self.current_yaw()
         crop = self._apply_crop if apply_crop else (lambda img: img)
@@ -1412,11 +1516,7 @@ class ReviewSession:
         H = self._build_H(sw, sh, f * s, roll, pitch, yaw, max_area=self.settings.max_area_ratio)
         # Pass detected line segments so plan() can use the motif reframe
         # (facade + margin, centred) instead of the whole-frame pad.
-        _segs = None
-        if len(self.vert) or len(self.horiz):
-            _parts = [x.seg for x in (self.vert, self.horiz) if len(x)]
-            if _parts:
-                _segs = np.concatenate(_parts, axis=0)
+        _segs = self._plan_segs(sw)
         planned = W.plan(sw, sh, H, self.settings, line_segs=_segs, yaw=yaw,
                          strip=self.strip)
         if planned is None:
@@ -1426,19 +1526,66 @@ class ReviewSession:
         # it, which is *larger* than the input, and a preview that ignores the
         # size it was asked for overflows the pane it was drawn for
         out = W.apply(small, H_total, ow, oh, self.settings)
-        out = self._fill_preview(out, H_total, sw, sh, ow, oh)
+        raw = out
+        out = self._fill_preview(out, H_total, sw, sh, ow, oh, mode=fill)
+        # Everything after the fill, as one step, so a deferred fill can run
+        # it again on its own result. The marks are copied now: the job may
+        # run after they have moved, and is then thrown away, but must not
+        # read an array half way through being changed.
+        marks = (np.array(self.control_hlines, copy=True),
+                 np.array(self.control_lines, copy=True))
+        scale = self.scale
+
+        def finish(img):
+            return self._finish_after(img, crop, max_edge, ow, s, H_total, marks, scale)
+        out = finish(out)
+        fit_s = out.shape[1] / float(ow) if ow > 0 else 1.0
+        self.preview_map = ("warp", s, H_total, fit_s)
+        self._defer_fill(raw, H_total, sw, sh, ow, oh, fill, finish)
+        return out
+
+    def _defer_fill(self, raw, H_total, sw, sh, ow, oh, fill, finish):
+        """Leave the slow backend's job in ``deferred_fill`` (see render_after).
+
+        ``(raw, hole, settings, finish)``: fill ``raw`` over ``hole`` with
+        ``settings``, then ``finish`` the result. Pure on its inputs, so it
+        may run off the Tk thread.
+        """
+        from . import inpaint as FILL
+        mode = getattr(self.settings, "fill", "none")
+        if (fill != "defer" or mode in FILL.LIVE_MODES
+                or not FILL.previews_live(self.settings)):
+            return
+        hole = W.filled_region(H_total, sw, sh, ow, oh)
+        settings = self.settings.replace(fill_max_edge=FILL.PREVIEW_MAX_EDGE)
+        b = self._fill_box(raw.shape)
+        if b is None:
+            self.deferred_fill = (raw.copy(), hole, settings, finish)
+            return
+        x0, y0, x1, y1 = b
+        if not hole[y0:y1, x0:x1].any():
+            return
+        base = raw.copy()
+
+        def paste(sub):
+            img = base.copy()
+            img[y0:y1, x0:x1] = sub
+            return finish(img)
+        self.deferred_fill = (base[y0:y1, x0:x1].copy(), hole[y0:y1, x0:x1], settings, paste)
+
+    def _finish_after(self, out, crop, max_edge, ow, s, H_total, marks, scale):
+        """Crop, fit and draw the hand-made marks on a filled after frame."""
         # Fit FIRST so the final array is at display size, then project the
         # markers onto it.  Drawing before _fit would leave the marker coords
         # in OW×OH space while the array is smaller → wrong position.
         out = _fit(crop(out), max_edge)
         fit_s = out.shape[1] / float(ow) if ow > 0 else 1.0
-        self.preview_map = ("warp", s, H_total, fit_s)
         # Project hand-drawn marker lines through the warp.  H_total maps
         # preview-space → OW×OH output space; scale original→preview before,
         # then scale the result by fit_s to land on the final array.
-        if len(self.control_hlines) > 0 or len(self.control_lines) > 0:
-            for arr, col in ((self.control_hlines, (80, 160, 80)),
-                             (self.control_lines, (200, 80, 200))):
+        if len(marks[0]) > 0 or len(marks[1]) > 0:
+            for arr, col in ((marks[0], (80, 160, 80)),
+                             (marks[1], (200, 80, 200))):
                 if len(arr) == 0:
                     continue
                 # control lines are in GRAY px; the warp H_total maps SMALL px
@@ -1446,8 +1593,8 @@ class ReviewSession:
                 # (off by a factor of `scale` whenever scale != 1.0).
                 pts = np.zeros((len(arr), 2, 2), dtype=np.float32)
                 for i in range(len(arr)):
-                    pts[i, 0] = [arr[i, 0] * s / self.scale, arr[i, 1] * s / self.scale]
-                    pts[i, 1] = [arr[i, 2] * s / self.scale, arr[i, 3] * s / self.scale]
+                    pts[i, 0] = [arr[i, 0] * s / scale, arr[i, 1] * s / scale]
+                    pts[i, 1] = [arr[i, 2] * s / scale, arr[i, 3] * s / scale]
                 mapped = cv2.perspectiveTransform(pts.reshape(-1, 1, 2), H_total)
                 for i in range(len(arr)):
                     a = (int(mapped[2 * i, 0, 0] * fit_s),
@@ -1471,7 +1618,27 @@ class ReviewSession:
             return None
         return q[0] / q[2] * fit_s, q[1] / q[2] * fit_s
 
-    def _fill_preview(self, out, H_total, sw, sh, ow, oh):
+    # The preview fills only what the crop keeps, plus this much of the canvas
+    # on each side so a small drag outward still shows picture. Outside it the
+    # band stays dark under the veil (user, 2026-10-23: "zu krasser telea
+    # Anteil"): on a steep facade most of the canvas is band, and painting all
+    # of it showed mostly invented picture that the crop then throws away.
+    PREVIEW_FILL_CROP_MARGIN = 0.05
+
+    def _fill_box(self, shape):
+        """``(x0, y0, x1, y1)`` in pixels of a ``shape`` frame: the crop plus
+        PREVIEW_FILL_CROP_MARGIN, or None for the whole frame. The fill runs on
+        this window alone, so the band left dark outside it is never read as
+        picture by the fill (it pulled the fill dark at the crop's edge)."""
+        r = self.crop_rect
+        if r is None:
+            return None
+        hh, ww = shape[:2]
+        m = self.PREVIEW_FILL_CROP_MARGIN
+        return (int(max(0.0, r[0] - m) * ww), int(max(0.0, r[1] - m) * hh),
+                int(np.ceil(min(1.0, r[2] + m) * ww)), int(np.ceil(min(1.0, r[3] + m) * hh)))
+
+    def _fill_preview(self, out, H_total, sw, sh, ow, oh, mode="full"):
         """Fill the band in the preview -- with the chosen backend, or a stand-in.
 
         The save path fills unconditionally.  This one has a cost limit, and
@@ -1495,11 +1662,10 @@ class ReviewSession:
         rather than an exception, because a preview is not the place to fail.
         """
         from . import inpaint as FILL
-        mode = getattr(self.settings, "fill", "none")
-        if mode in ("", "none"):
+        if mode == "none" or getattr(self.settings, "fill", "none") in ("", "none"):
             return out
         preview = self.settings.replace(fill_max_edge=FILL.PREVIEW_MAX_EDGE)
-        if not FILL.previews_live(self.settings):
+        if mode == "defer" or not FILL.previews_live(self.settings):
             preview = preview.replace(fill=FILL.PREVIEW_STANDIN)
         # A stand-in is 38 ms and wants no indicator; the real backend on the
         # live path is seconds and does. Only the slow case gets the listener,
@@ -1508,7 +1674,17 @@ class ReviewSession:
                 if preview.fill not in FILL.LIVE_MODES else None)
         try:
             hole = W.filled_region(H_total, sw, sh, ow, oh)
-            filled, _note = FILL.fill(out, hole, preview, on_step=step)
+            b = self._fill_box(out.shape)
+            if b is None:
+                filled, _note = FILL.fill(out, hole, preview, on_step=step)
+                return filled
+            x0, y0, x1, y1 = b
+            if not hole[y0:y1, x0:x1].any():
+                return out
+            sub, _note = FILL.fill(out[y0:y1, x0:x1], hole[y0:y1, x0:x1], preview,
+                                   on_step=step)
+            filled = out.copy()
+            filled[y0:y1, x0:x1] = sub
             return filled
         except FILL.FillUnavailable:
             return out
@@ -1528,9 +1704,8 @@ class ReviewSession:
             return None
         H = self._build_H(self.w, self.h, f, roll, pitch, yaw,
                     max_area=self.settings.max_area_ratio)
-        segs = [x.seg for x in (self.vert, self.horiz) if len(x)]
         planned = W.plan(self.w, self.h, H, self.settings,
-                         line_segs=np.concatenate(segs, axis=0) if segs else None,
+                         line_segs=self._plan_segs(self.w),
                          yaw=yaw, strip=self.strip)
         if planned is None:
             return None
@@ -1613,8 +1788,11 @@ class ReviewSession:
             # The facade-to-rectangle warp is the correction, not roll/pitch/focal
             # (none of which enter it), so the first line names the warp and drops
             # those three.  Every other line is unchanged.
-            first = (f"HORIZONTAL AUTO (warp)  facade -> rectangle  "
-                     f"x-scale {W.yaw_x_scale(self.current_yaw()):.2f}")
+            first = "HORIZONTAL AUTO (warp)  facade -> rectangle, squares kept square"
+            if len(self.planar_quad) < 4 and self.ha_fold_quad() is not None:
+                first += ("  -- its vanishing line crosses the photo, so the "
+                          "canvas is framed around the facade (move the facade "
+                          "strip to frame another)")
         else:
             first = (f"{head}  roll={math.degrees(roll):+.2f}deg  "
                      f"pitch={math.degrees(pitch):+.2f}deg{yaw_note}")
@@ -1717,9 +1895,177 @@ class ReviewSession:
         return had
 
     # -- planar (four-point) correction ---------------------------------
+    def set_facade_mode(self, mode: str) -> bool:
+        """Switch between drawn lines ("lines") and the PC Rectangle ("rect").
+
+        The side that goes is moved aside, not deleted, and the side that comes
+        back is restored exactly; then the fit runs again. Returns True when the
+        mode changed.
+        """
+        if mode not in ("lines", "rect"):
+            raise ValueError(mode)
+        if mode == self.facade_mode:
+            return False
+        if mode == "rect":
+            self._stashed_lines = (self.control_lines, self.control_hlines)
+            self.control_lines = np.zeros((0, 4))
+            self.control_hlines = np.zeros((0, 4))
+            self.planar_quad = list(self._stashed_quad)
+            self._stashed_quad = []
+        else:
+            self._stashed_quad = list(self.planar_quad)
+            self.planar_quad = []
+            self.control_lines, self.control_hlines = self._stashed_lines
+            self._stashed_lines = (np.zeros((0, 4)), np.zeros((0, 4)))
+        crop = (dict(self._crop_edges), getattr(self, "crop_is_auto", False))
+        self._crop_edges, self.crop_is_auto = dict(self._stashed_crop[0]), self._stashed_crop[1]
+        self._stashed_crop = crop
+        self.facade_mode = mode
+        self.refit()
+        return True
+
     def planar_is_set(self) -> bool:
         """Four corners down: the planar rectification is what the user sees."""
         return len(self.planar_quad) >= 4
+
+    def active_quad(self):
+        """The quad the planar path rectifies: the hand-placed one, else the
+        facade horizontal auto would fold (:meth:`ha_fold_quad`); None when
+        neither is in force."""
+        if len(self.planar_quad) >= 4:
+            return np.array(self.planar_quad, float)
+        return self.ha_fold_quad()
+
+    def ha_fold_quad(self):
+        """Horizontal auto on a facade whose vanishing line crosses the photo.
+
+        A strongly foreshortened facade sends its horizontals to a vanishing
+        point near or inside the frame; warping the WHOLE photograph then folds
+        the part beyond that line over, and `warp.plan` used to give up -- the
+        preview fell back to the uncorrected photo and Save refused. User,
+        2026-10-23: "Warps muessen kontrolliert, nicht verworfen werden" -- and
+        squares must stay squares there too ("das ist der haerteste Contest").
+
+        So the warp is kept and only its CANVAS changes: the facade is framed
+        by four lines, two through each vanishing point, at the facade strip's
+        edges (or the extent of the horizontal evidence) and at the extent of
+        the vertical lines between them, and that quad goes the PC Rectangle
+        way (`planar.canvas_for`: true proportions, room to drag the crop out,
+        never past the photograph). Same geometry as the warp, since a quad
+        whose sides meet at the two vanishing points is rectified by the same
+        map up to scale. Full-resolution pixels, or None when the warp does
+        not fold or there is nothing to frame."""
+        if not self._rectify_active():
+            return None
+        key = (id(self.model), self.state_key())
+        cache = getattr(self, "_fold_cache", None)
+        if cache is not None and key is not None and cache[0] == key:
+            return cache[1]
+        q = self._ha_fold_quad_uncached()
+        self._fold_cache = (key, q)
+        return q
+
+    def _ha_fold_quad_uncached(self):
+        roll, pitch, f, _ = self.current_angles()
+        yaw = self.current_yaw()
+        H = self._build_H(self.w, self.h, f, roll, pitch, yaw,
+                          max_area=self.settings.max_area_ratio)
+        planned = W.plan(self.w, self.h, H, self.settings,
+                         line_segs=self._plan_segs(self.w),
+                         yaw=yaw, strip=self.strip)
+        # Without a strip a plan that exists is taken as it is. With one, the
+        # plan must also SHOW that facade: on a close, steep view (rendered
+        # cube, 16 mm, 22 deg up) the plan succeeded and framed a sliver of sky
+        # and street beside the wall (user: "rechte [Seite] fail").
+        if planned is not None and self.strip is None:
+            return None
+        gw = self.gray.shape[1]
+        k = self.w / float(gw)
+        dv = self._data_vertical_vp()
+        vv = np.asarray(dv if dv is not None else self.model.vp, float)
+        vh = np.asarray(self.model.horiz_vps[0], float)
+        vv = np.array([vv[0] * k, vv[1] * k, vv[2]])
+        vh = np.array([vh[0] * k, vh[1] * k, vh[2]])
+        if self.strip is not None:
+            x0, x1 = self.strip[0] * self.w, self.strip[1] * self.w
+        else:
+            hs = np.asarray(getattr(self.horiz, "seg", np.zeros((0, 4))), float)
+            if len(hs) == 0:
+                return None
+            xs = hs[:, [0, 2]].ravel() * k
+            x0, x1 = float(np.percentile(xs, 2)), float(np.percentile(xs, 98))
+            # A vanishing point inside the span means the lines on its two
+            # sides belong to two walls receding towards it; lines through a
+            # point inside the quad cross over (Marianske Hory: VP at x=137 of
+            # 1024 gave a 1970x11665 canvas). Keep the side with more lines.
+            if abs(vh[2]) > 1e-12:
+                vx = vh[0] / vh[2]
+                if x0 < vx < x1:
+                    mid = (hs[:, 0] + hs[:, 2]) * 0.5 * k
+                    gap = 0.05 * self.w
+                    if (mid > vx).sum() >= (mid < vx).sum():
+                        x0 = max(x0, vx + gap)
+                    else:
+                        x1 = min(x1, vx - gap)
+        # Crop in time: a wall drawn right up to its vanishing point needs an
+        # unbounded magnification there (user: "rechtzeitig croppen, darf nicht
+        # abschmieren"). The near end stays at least a third of the far end's
+        # distance from the vanishing point, so no part of the facade is
+        # foreshortened more than FOLD_MAX_FORESHORTEN times the rest.
+        if abs(vh[2]) > 1e-12:
+            vx = vh[0] / vh[2]
+            if vx <= x0:
+                x0 = max(x0, vx + (x1 - vx) / self.FOLD_MAX_FORESHORTEN)
+            elif vx >= x1:
+                x1 = min(x1, vx - (vx - x0) / self.FOLD_MAX_FORESHORTEN)
+        vs = np.asarray(getattr(self.vert, "seg", np.zeros((0, 4))), float)
+        if len(vs):
+            mid = (vs[:, 0] + vs[:, 2]) * 0.5 * k
+            sel = vs[(mid >= x0) & (mid <= x1)]
+            sel = sel if len(sel) else vs
+            # Each end slid along its own line to the horizontal vanishing
+            # point onto the strip's middle: the top and bottom edges then hug
+            # the wall. Taking the raw extremes put the tallest (nearest) edge's
+            # height at the middle, and the quad overshot the facade threefold.
+            xc = (x0 + x1) / 2.0
+            pts = np.c_[sel[:, [0, 2]].ravel() * k, sel[:, [1, 3]].ravel() * k,
+                        np.ones(2 * len(sel))]
+            at = np.cross(np.cross(np.broadcast_to(vh, pts.shape), pts),
+                          np.array([1.0, 0.0, -xc]))
+            ok = np.abs(at[:, 2]) > 1e-12
+            ys = at[ok, 1] / at[ok, 2] if ok.any() else pts[:, 1]
+            y0, y1 = float(ys.min()), float(ys.max())
+        else:
+            y0, y1 = 0.1 * self.h, 0.9 * self.h
+        if x1 - x0 < 8 or y1 - y0 < 8:
+            return None
+        yc, xc = (y0 + y1) / 2.0, (x0 + x1) / 2.0
+        left = np.cross(vv, [x0, yc, 1.0]); right = np.cross(vv, [x1, yc, 1.0])
+        top = np.cross(vh, [xc, y0, 1.0]); bottom = np.cross(vh, [xc, y1, 1.0])
+        corners = []
+        for a, b in ((top, left), (top, right), (bottom, right), (bottom, left)):
+            p = np.cross(a, b)
+            if abs(p[2]) < 1e-12:
+                return None
+            corners.append(p[:2] / p[2])
+        q = np.array(corners)
+        if not np.all(np.isfinite(q)) or abs(P.quad_area(q)) < 64:
+            return None
+        # Only a convex quad (TL, TR, BR, BL turning one way) is a facade.
+        e = np.roll(q, -1, axis=0) - q
+        turn = e[:, 0] * np.roll(e, -1, axis=0)[:, 1] - e[:, 1] * np.roll(e, -1, axis=0)[:, 0]
+        if not (np.all(turn > 0) or np.all(turn < 0)):
+            return None
+        if planned is not None:
+            H_total, ow, oh = planned[0], planned[1], planned[2]
+            p = np.c_[q, np.ones(4)] @ np.asarray(H_total, float).T
+            if np.all(p[:, 2] * p[0, 2] > 0):
+                p = p[:, :2] / p[:, 2:3]
+                tol = self.FOLD_FRAME_TOL
+                if (p[:, 0].min() >= -tol * ow and p[:, 0].max() <= (1 + tol) * ow
+                        and p[:, 1].min() >= -tol * oh and p[:, 1].max() <= (1 + tol) * oh):
+                    return None
+        return q
 
     def drop_planar_for(self, reason: str) -> bool:
         """Put the quad away because something incompatible arrived.
@@ -1745,6 +2091,30 @@ class ReviewSession:
         while len(self.planar_quad) <= i:
             self.planar_quad.append((0.0, 0.0))
         self.planar_quad[i] = (float(x), float(y))
+        if len(self.planar_quad) >= 4 and (self.crop_rect is None
+                                            or getattr(self, "crop_is_auto", False)):
+            self._planar_default_crop()
+
+    def _planar_default_crop(self) -> bool:
+        """Crop the rectified canvas to the quad + ``planar.CROP_MARGIN``.
+
+        The canvas keeps more (``planar.KEEP_MARGIN``) so the crop can be
+        dragged outward; this is only where it starts. Marked automatic, so
+        moving a corner moves it along and a hand-drawn crop is left alone."""
+        try:
+            t = self.planar_homography()
+        except ValueError:
+            return False
+        if t is None:
+            return False
+        _H, cw, ch = t
+        x0, y0, x1, y1 = self._planar_box
+        self._crop_edges["left"] = (True, max(0.0, x0 / cw))
+        self._crop_edges["top"] = (True, max(0.0, y0 / ch))
+        self._crop_edges["right"] = (True, max(0.0, 1.0 - (x1 + 1) / cw))
+        self._crop_edges["bottom"] = (True, max(0.0, 1.0 - (y1 + 1) / ch))
+        self.crop_is_auto = True
+        return True
 
     def pick_planar_corner(self, x: float, y: float, display_scale: float):
         """Index of the corner under a full-resolution point, or None.
@@ -1765,18 +2135,36 @@ class ReviewSession:
 
         Raises on a degenerate quad rather than returning a homography that
         would flatten the photograph into a sliver."""
-        if len(self.planar_quad) < 4:
+        if self.active_quad() is None:
             return None
-        return P.transform_for(np.array(self.planar_quad))
+        # True proportions need a focal: the quad's own, blended with the
+        # estimator's (planar.target_size). A failed estimate only costs the
+        # blend, never the rectangle.
+        try:
+            focal = self.current_angles()[2]
+        except Exception:
+            focal = None
+        H, cw, ch, self._planar_box = P.canvas_for(
+            self.active_quad(), self.w, self.h,
+            center=(self.w / 2.0, self.h / 2.0), focal=focal,
+            long_edge=max(self.w, self.h))
+        return H, cw, ch
 
     def planar_rectified(self, max_edge=None):
-        """The rectified frame from the four corners.
+        """The rectified frame from the four corners, un-filled.
 
         ``max_edge`` renders from a reduced copy -- a full-resolution warp per
         corner drag is unusable on a 24 MP frame, and the homography scales
         with the image, so warping small and calling it a preview is exact up
         to the preview's own resolution.  Saving passes nothing and gets the
         full-size result."""
+        r = self._planar_warp(max_edge)
+        return None if r is None else r[0]
+
+    def _planar_warp(self, max_edge=None):
+        """``(out, Hs, sw, sh, ow, oh, s)``: the warp, the homography from the
+        (possibly reduced) source of ``sw x sh`` onto the ``ow x oh`` canvas,
+        and the reduction ``s``; None until four corners exist."""
         t = self.planar_homography()
         if t is None:
             return None
@@ -1796,16 +2184,39 @@ class ReviewSession:
             img = cv2.resize(self.bgr,
                              (max(1, int(self.w * s)), max(1, int(self.h * s))),
                              interpolation=cv2.INTER_AREA)
-            return cv2.warpPerspective(img, S @ H @ np.linalg.inv(S),
-                                       (max(1, int(w * s)), max(1, int(h * s))))
-        return cv2.warpPerspective(self.bgr, H, (w, h))
+            Hs = S @ H @ np.linalg.inv(S)
+            ow, oh = max(1, int(w * s)), max(1, int(h * s))
+            sh, sw = img.shape[:2]
+            return cv2.warpPerspective(img, Hs, (ow, oh)), Hs, sw, sh, ow, oh, s
+        return cv2.warpPerspective(self.bgr, H, (w, h)), H, self.w, self.h, w, h, 1.0
 
-    def save_planar(self, dst_path: str) -> str:
-        """Write the rectified view.  No fill band exists to fill: the output
-        is exactly the warped quad."""
-        out = self.planar_rectified()
-        if out is None:
+    def save_planar(self, dst_path: str, on_stage=None) -> str:
+        """Write the rectified view.
+
+        The canvas keeps ``planar.KEEP_MARGIN`` of picture around the quad and
+        the crop (by default the quad + ``planar.CROP_MARGIN``) is cut FIRST,
+        so the fill only ever works on what is written. Whatever of that lies
+        outside the photograph is filled like the rotation path's band."""
+        r = self._planar_warp(None)
+        if r is None:
             raise ValueError("planar correction needs four corners")
+        out, H, _sw, _sh, ow, oh, _s = r
+        mpx = ow * oh / 1e6
+        if on_stage is not None:
+            on_stage("warping", mpx)
+        fill = getattr(self.settings, "fill", "none")
+        hole = W.filled_region(H, self.w, self.h, ow, oh)             if fill not in ("", "none") else None
+        out = self._apply_crop(out)
+        if hole is not None:
+            hole = self._apply_crop(hole)
+            if hole.any():
+                from . import inpaint as FILL
+                if on_stage is not None:
+                    on_stage("fill:" + str(fill), mpx)
+                out, _note = FILL.fill(out, hole, self.settings,
+                                       on_step=getattr(self, "on_fill_step", None))
+        if on_stage is not None:
+            on_stage("writing", mpx)
         os.makedirs(os.path.dirname(os.path.abspath(dst_path)) or ".", exist_ok=True)
         IO.save(dst_path, out, self.src, self.settings)
         return dst_path
@@ -1821,17 +2232,19 @@ class ReviewSession:
         case ``save()`` special-cases into a copy-through) or when the plan is
         degenerate, matching what a save would actually produce in each case.
         """
+        if self.active_quad() is not None:
+            t = self.planar_homography()
+            if t is not None:
+                _H, cw, ch = t
+                x0, y0, x1, y1 = self.crop_rect or (0.0, 0.0, 1.0, 1.0)
+                return int(round((x1 - x0) * cw)), int(round((y1 - y0) * ch))
         roll, pitch, f, _ = self.current_angles()
         yaw = self.current_yaw()
         if abs(roll) < 1e-12 and abs(pitch) < 1e-12 and abs(yaw) < 1e-12:
             return self.w, self.h
         save_settings = self.settings.replace(keep_size=True)
         H = self._build_H(self.w, self.h, f, roll, pitch, yaw, max_area=save_settings.max_area_ratio)
-        _segs = None
-        if len(self.vert) or len(self.horiz):
-            _parts = [x.seg for x in (self.vert, self.horiz) if len(x)]
-            if _parts:
-                _segs = np.concatenate(_parts, axis=0)
+        _segs = self._plan_segs(self.w)
         planned = W.plan(self.w, self.h, H, save_settings, line_segs=_segs, yaw=yaw,
                          strip=self.strip)
         if planned is None:
@@ -1851,6 +2264,10 @@ class ReviewSession:
         def _stage(name, mpx=0.0):
             if on_stage is not None:
                 on_stage(name, mpx)
+        if self.active_quad() is not None:
+            # A placed rectangle, or horizontal auto on a facade whose warp
+            # would fold: framed around the facade, never refused.
+            return self.save_planar(dst_path, on_stage=on_stage)
         roll, pitch, f, _ = self.current_angles()
         yaw = self.current_yaw()
         if (abs(roll) < 1e-12 and abs(pitch) < 1e-12 and abs(yaw) < 1e-12
@@ -1874,11 +2291,7 @@ class ReviewSession:
         # the canvas: 0 = source long edge, 1 = every near-edge pixel kept.
         save_settings = self.settings.replace(keep_size=True)
         H = self._build_H(self.w, self.h, f, roll, pitch, yaw, max_area=save_settings.max_area_ratio)
-        _segs = None
-        if len(self.vert) or len(self.horiz):
-            _parts = [x.seg for x in (self.vert, self.horiz) if len(x)]
-            if _parts:
-                _segs = np.concatenate(_parts, axis=0)
+        _segs = self._plan_segs(self.w)
         planned = W.plan(self.w, self.h, H, save_settings, line_segs=_segs, yaw=yaw,
                          strip=self.strip)
         if planned is None:

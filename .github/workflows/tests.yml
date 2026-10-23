@@ -11,7 +11,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest, macos-latest]
         python: ["3.9", "3.12"]
     steps:
       - uses: actions/checkout@v4
@@ -28,7 +28,7 @@ jobs:
         # the same gate a user gets before any file is touched; exits 2 when a
         # required package is missing, so a broken install fails here and not
         # halfway through the suite
-        run: python rectify.py --doctor
+        run: python perspective_correction.py --doctor
       - name: run tests
         run: python tests/run_tests.py -v
 

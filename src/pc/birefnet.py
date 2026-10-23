@@ -152,7 +152,7 @@ def what_you_need(missing_weights=True, missing_arch=True) -> str:
               "there on first use, and then pass --birefnet-model auto.",
               "",
               "Check the result with:",
-              "    python rectify.py --mask-info --birefnet-model auto"]
+              "    python perspective_correction.py --mask-info --birefnet-model auto"]
     return "\n".join(lines)
 
 
@@ -322,7 +322,7 @@ def _install_hint() -> str:
     missing = [n for n in ("torch", "timm", "transformers", "safetensors",
                            "torchvision") if not have.get(n)]
     install = "    " + sys.executable + " -m pip install " + " ".join(missing or ["torch"])
-    export = ('    <python with torch> rectify.py "<folder>" '
+    export = ('    <python with torch> perspective_correction.py "<folder>" '
               '--mask-export "<mask folder>"\n'
               '    then, from here:  --mask file --mask-file "<mask folder>"')
     if have.get("tkinter") and not have.get("torch"):

@@ -48,19 +48,111 @@ def homography_from_quad(src, dst):
                                        dst.astype(np.float32))
 
 
-def target_size(quad):
-    """Output ``(w, h)`` from a quad's apparent edge lengths.
+FOCAL_RANGE = (0.25, 6.0)
+"""Focal lengths, in multiples of the photograph's long edge, that a focal
+recovered from four clicked corners may take (about 9 mm to 210 mm on a 35 mm
+frame). Outside it the clicks were too rough or the quad no rectangle, and the
+estimator's focal is used instead."""
 
-    The width is the longer of the top and bottom edges, the height the longer of
-    the left and right -- the document-scanner convention.  It preserves the
-    *apparent* aspect of the surface as it sits in the photograph; recovering the
-    true aspect would need the focal length, which a frontal facade does not give.
 
-    The result is then scaled up (never down) so that the output canvas covers
-    at least the source quad's bounding box.  This guarantees the warp ADDS
-    pixels for the perspective expansion instead of compressing them -- a facade
-    shot at an angle has apparent edges shorter than its true size, and mapping
-    those short lengths onto the output would squeeze the image.
+def _side_vectors(quad, center):
+    """``(n2, n3)``: the width and height directions of the 3D rectangle behind
+    ``quad``, in camera coordinates with the focal still unapplied (x and y in
+    pixels, z = 1 units) -- Zhang & He's construction. None for a degenerate quad.
+    """
+    tl, tr, br, bl = [np.array([x - center[0], y - center[1], 1.0])
+                      for x, y in np.asarray(quad, dtype=np.float64)]
+    m1, m2, m3, m4 = bl, br, tl, tr
+    d2, d3 = np.dot(np.cross(m2, m4), m3), np.dot(np.cross(m3, m4), m2)
+    if abs(d2) < 1e-12 or abs(d3) < 1e-12:
+        return None
+    k2 = np.dot(np.cross(m1, m4), m3) / d2
+    k3 = np.dot(np.cross(m1, m4), m2) / d3
+    return k2 * m2 - m1, k3 * m3 - m1
+
+
+def quad_focal(quad, center):
+    """Focal length in pixels implied by a quad that is a rectangle in 3D, or None.
+
+    Zhang & He, "Whiteboard scanning and image enhancement" (2004): the two
+    vanishing points of a rectangle's sides must be orthogonal directions, which
+    fixes ``f`` once the principal point ``center`` is assumed. None when the
+    quad has a pair of parallel sides (that vanishing point is at infinity and
+    says nothing about ``f``) or when the answer is not a real focal length.
+    """
+    sv = _side_vectors(quad, center)
+    if sv is None:
+        return None
+    n2, n3 = sv
+    den = n2[2] * n3[2]
+    # Sides parallel in the photograph leave n2 or n3 with no z part, and the
+    # rest of the expression is then rounding noise, not a focal.
+    scale = np.linalg.norm(n2[:2]) * np.linalg.norm(n3[:2])
+    if abs(den) < 1e-9 * max(scale, 1e-12):
+        return None
+    f2 = -(n2[0] * n3[0] + n2[1] * n3[1]) / den
+    return float(np.sqrt(f2)) if f2 > 0 else None
+
+
+def true_aspect(quad, center, focal):
+    """Width / height of the 3D rectangle behind ``quad`` at focal ``focal`` px.
+
+    ``n2`` and ``n3`` (:func:`_side_vectors`) are the rectangle's two side
+    directions; their lengths through the calibration matrix are the true side
+    lengths up to one common scale.
+    """
+    sv = _side_vectors(quad, center)
+    if sv is None or not focal or focal <= 0:
+        return None
+    n2, n3 = sv
+    a = np.diag([1.0 / focal ** 2, 1.0 / focal ** 2, 1.0])
+    num, den = float(n2 @ a @ n2), float(n3 @ a @ n3)
+    if num <= 0 or den <= 0:
+        return None
+    return float(np.sqrt(num / den))
+
+
+def facade_angle(quad, center, focal):
+    """How far the rectangle's width turns away from the image plane, radians.
+
+    The rectangle's own yaw: 0 for a facade seen square on, 60 deg for one seen
+    as obliquely as altbau. It is the angle horizontal auto would rotate by, so
+    the same ``warp.yaw_x_scale`` can follow it (Fable's review, 2026-10-23:
+    checked 30.0 / 45.0 / 60.0 deg on synthetic facades, 29.7 / 44.5 / 59.1 at
+    8 deg pitch).
+    """
+    sv = _side_vectors(quad, center)
+    if sv is None or not focal or focal <= 0:
+        return None
+    n2 = sv[0]
+    dx, dy, dz = n2[0] / focal, n2[1] / focal, n2[2]
+    return float(np.arctan2(abs(dz), np.hypot(dx, dy)))
+
+
+def target_size(quad, center=None, focal=None, long_edge=None, foreshorten=False):
+    """Output ``(w, h)`` for a quad: its true proportions, never fewer pixels.
+
+    **Proportions** (2026-10-23, measured on synthetic boxes): the apparent edge
+    lengths -- the document-scanner convention this used before -- keep the
+    foreshortening, so a 2:1 facade seen at 40 deg came out 1.28:1, 36 % too
+    narrow. With ``center`` given, the true aspect is recovered from the quad
+    itself (:func:`quad_focal`); when the quad cannot fix the focal -- a pair of
+    sides parallel in the photograph, or a result outside :data:`FOCAL_RANGE`
+    times ``long_edge`` -- ``focal`` (the estimator's) stands in. With neither,
+    the apparent aspect is kept as before.
+
+    **No compression by default** (user, 2026-10-23: "es muessen nach
+    Entzerrung wieder Quadrate rauskommen"). Measured on rendered Rubik cubes
+    (4x4 squares a face, yaw 25-55 deg): the true aspect gives cells of 1.000
+    with the true focal and 0.93-1.06 with the estimator's (no EXIF); the
+    horizontal-auto compression, the default for a few hours that day, made
+    them 0.66-0.95. ``foreshorten=True`` still applies ``warp.yaw_x_scale`` of
+    the facade's own yaw (:func:`facade_angle`), as horizontal auto does.
+
+    **Size**: at least the longer of each pair of opposite edges and at least
+    the quad's bounding box, so the warp ADDS pixels for the perspective
+    expansion instead of compressing them; the aspect is then reached by growing
+    one side, never by shrinking the other.
     """
     quad = np.asarray(quad, dtype=np.float64)
     p0, p1, p2, p3 = quad
@@ -74,7 +166,34 @@ def target_size(quad):
     bbox_h = int(np.ceil(max(p0[1], p1[1], p2[1], p3[1]) - min(p0[1], p1[1], p2[1], p3[1])))
     w = max(w, bbox_w)
     h = max(h, bbox_h)
-    return w, h
+    aspect = None
+    if center is not None:
+        f = quad_focal(quad, center)
+        lo, hi = FOCAL_RANGE
+        edge = long_edge or max(bbox_w, bbox_h)
+        if f is None or not (lo * edge <= f <= hi * edge):
+            f = focal
+        elif focal:
+            # Both, geometric mean: over 3263 synthetic box faces with 1.5 px
+            # click noise and the estimator's focal off by up to 30 %, the
+            # quad alone erred 9.1 % mean / 21.6 % p90, the estimator alone
+            # 8.7 / 19.0, the blend 6.9 / 15.4 (apparent edges: 84 / 194).
+            f = float(np.sqrt(f * focal))
+        aspect = true_aspect(quad, center, f) if f else None
+        if aspect is not None and foreshorten:
+            # Rectangle follows horizontal auto (user-calibrated sqrt(cos yaw),
+            # "Verkuerzung auf 70% bei altbau"): one facade, one width, whichever
+            # tool straightened it.
+            from . import warp as W
+            theta = facade_angle(quad, center, f)
+            if theta is not None:
+                aspect *= W.yaw_x_scale(theta)
+    if aspect is not None and aspect > 0:
+        if w / float(h) < aspect:
+            w = int(round(h * aspect))
+        else:
+            h = int(round(w / aspect))
+    return max(1, w), max(1, h)
 
 
 def quad_area(quad):
@@ -107,14 +226,25 @@ def order_quad(quad):
     return np.roll(q, -int(np.argmin(q[:, 0] + q[:, 1])), axis=0)
 
 
-def transform_for(quad):
-    """``(H, w, h)`` mapping a source quad to an axis-aligned rectangle at the origin.
+CROP_MARGIN = 0.20
+"""Picture kept around the rectified quad, as a share of its width/height per
+side (user, 2026-10-23: "rechteck modus crop +20%. lieber manuell wenn nötig").
+The quad alone cut everything outside the four clicks; with the margin the
+rest is there to crop by hand. The same 20 % as ``warp.STRIP_CROP_MARGIN``."""
 
-    ``H`` sends the four quad corners onto the four corners of a ``(w, h)`` canvas,
-    so the whole output is covered by the warped quad -- no band to fill, which is
-    what separates planar rectification from the rotation path.  Raises on a
-    degenerate (collinear or repeated-point) quad rather than returning a broken
-    homography that would warp the image into a sliver.
+
+def transform_for(quad, margin=0.0, center=None, focal=None, long_edge=None):
+    """``(H, w, h)`` mapping a source quad to an axis-aligned rectangle.
+
+    ``H`` sends the four quad corners onto the four corners of a rectangle the
+    size :func:`target_size` gives, inset by ``margin`` times its width (left and
+    right) and height (top and bottom) on a canvas that much larger.  At
+    ``margin=0`` the whole output is the warped quad -- no band to fill; with a
+    margin, part of it may lie outside the photograph and is the fill's job.
+    ``center``, ``focal`` and ``long_edge`` go to :func:`target_size` and buy
+    the true proportions. Raises on a degenerate (collinear or repeated-point)
+    quad rather than returning a broken homography that would warp the image
+    into a sliver.
     """
     # Sorted here rather than where the corners are stored: dragging a corner
     # must keep hold of the one that was grabbed, so the stored quad keeps the
@@ -122,9 +252,71 @@ def transform_for(quad):
     q = order_quad(np.asarray(quad, dtype=np.float64))
     if abs(quad_area(q)) < 1e-6:
         raise ValueError("planar quad is degenerate (collinear or repeated points)")
-    w, h = target_size(q)
-    dst = np.array([[0.0, 0.0], [w - 1, 0.0], [w - 1, h - 1], [0.0, h - 1]], dtype=np.float64)
-    return homography_from_quad(q, dst), w, h
+    w, h = target_size(q, center=center, focal=focal, long_edge=long_edge)
+    mx, my = int(round(margin * w)), int(round(margin * h))
+    dst = np.array([[mx, my], [mx + w - 1, my], [mx + w - 1, my + h - 1],
+                    [mx, my + h - 1]], dtype=np.float64)
+    return homography_from_quad(q, dst), w + 2 * mx, h + 2 * my
+
+
+KEEP_MARGIN = 0.50
+"""How much picture the rectified canvas keeps around the quad, as a fraction
+of the quad's own width and height on each side -- never more than the
+photograph itself reaches. The default crop stays at :data:`CROP_MARGIN`; the
+rest is there so a hand crop can be dragged OUT (user, 2026-10-23: "maxime dass
+keine pixel verloren gehen, oder nur moderat"). Measured on the Muenzstrasse
+row: quad + 20 % kept 14-33 % of the photograph, the whole photograph would
+have needed 7-21x the canvas, nearly all of it fill."""
+
+
+def canvas_for(quad, src_w, src_h, center=None, focal=None, long_edge=None,
+               keep=KEEP_MARGIN, crop=CROP_MARGIN):
+    """``(H, cw, ch, box)``: the rectified quad on a canvas with room around it.
+
+    The quad becomes the rectangle :func:`target_size` gives. The canvas
+    reaches ``keep`` times that rectangle beyond it on every side, cut back to
+    where the warped photograph actually ends, and never smaller than the
+    ``crop`` box. ``box`` is ``(x0, y0, x1, y1)`` in canvas pixels: the quad
+    plus ``crop`` -- what :func:`transform_for` used to make the whole canvas,
+    and now the default crop.
+    """
+    q = order_quad(np.asarray(quad, dtype=np.float64))
+    if abs(quad_area(q)) < 1e-6:
+        raise ValueError("planar quad is degenerate (collinear or repeated points)")
+    w, h = target_size(q, center=center, focal=focal, long_edge=long_edge)
+    rect = np.array([[0, 0], [w - 1, 0], [w - 1, h - 1], [0, h - 1]], dtype=np.float64)
+    H0 = homography_from_quad(q, rect)
+    kx0, ky0 = -keep * w, -keep * h
+    kx1, ky1 = (w - 1) + keep * w, (h - 1) + keep * h
+    # Where the photograph ends, from its border sampled densely. A border
+    # point behind the camera (w <= 0, past the vanishing line) means the
+    # outline runs off to infinity, so nothing is cut back at all.
+    n = 64
+    t = np.linspace(0.0, 1.0, n)
+    border = np.concatenate([
+        np.stack([t * (src_w - 1), np.zeros(n)], 1),
+        np.stack([np.full(n, src_w - 1.0), t * (src_h - 1)], 1),
+        np.stack([t * (src_w - 1), np.full(n, src_h - 1.0)], 1),
+        np.stack([np.zeros(n), t * (src_h - 1)], 1)])
+    hp = np.c_[border, np.ones(len(border))] @ H0.T
+    sign = np.sign((np.c_[q, np.ones(4)] @ H0.T)[0, 2])
+    if np.all(hp[:, 2] * sign > 1e-12):
+        p = hp[:, :2] / hp[:, 2:3]
+        kx0, ky0 = max(kx0, p[:, 0].min()), max(ky0, p[:, 1].min())
+        kx1, ky1 = min(kx1, p[:, 0].max()), min(ky1, p[:, 1].max())
+    # Centred on the quad (user, 2026-10-23: "roi centered"): the photograph
+    # usually ends sooner on one side, and the facade then sat in a corner of
+    # its own canvas. The narrower side's room is used on both.
+    rx = max(0.0, min(-kx0, kx1 - (w - 1)))
+    ry = max(0.0, min(-ky0, ky1 - (h - 1)))
+    kx0, kx1, ky0, ky1 = -rx, (w - 1) + rx, -ry, (h - 1) + ry
+    bx0, by0 = -crop * w, -crop * h
+    bx1, by1 = (w - 1) + crop * w, (h - 1) + crop * h
+    x0, y0 = int(np.floor(min(kx0, bx0))), int(np.floor(min(ky0, by0)))
+    x1, y1 = int(np.ceil(max(kx1, bx1))), int(np.ceil(max(ky1, by1)))
+    T = np.array([[1.0, 0.0, -x0], [0.0, 1.0, -y0], [0.0, 0.0, 1.0]])
+    box = (bx0 - x0, by0 - y0, bx1 - x0, by1 - y0)
+    return T @ H0, x1 - x0 + 1, y1 - y0 + 1, box
 
 
 # ---------------------------------------------------------------------------

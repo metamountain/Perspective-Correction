@@ -10,7 +10,7 @@ returns few, long, structural segments instead. The 512 large model is 6.1 MB
 and is vendored in `models/`. It needs a TFLite runtime, which is optional:
 
     pip install ai-edge-litert        # or tflite-runtime on older setups
-    python rectify.py "D:\Fotos" --detector mlsd
+    python perspective_correction.py "D:\Fotos" --detector mlsd
 
 ## What the detectors actually return
 
@@ -128,7 +128,7 @@ on PyPI and a `pytlsd` that builds from source -- and it buys 0.06° of mean.
     git clone https://github.com/cvg/DeepLSD tools/DeepLSD
     pip install omegaconf scikit-image pytlsd        # pytlsd wants cmake + a C++ compiler
     curl -L -o models/deeplsd_md.tar https://cvg-data.inf.ethz.ch/DeepLSD/deeplsd_md.tar
-    python rectify.py --detector-info
+    python perspective_correction.py --detector-info
 
 `deeplsd_md` is the MegaDepth model and the right one outdoors;
 `deeplsd_wireframe` is the indoor one. `--no-grad-nfa` turns off the image

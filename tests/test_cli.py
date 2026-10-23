@@ -65,7 +65,7 @@ def test_overwrite_without_yes_refuses_when_stdin_is_not_a_tty():
     """--overwrite replaces the user's original files, so a caller nobody
     can answer for must never be waved through. An audit once filed the
     isatty() check itself as the defect ("blocks piped double-click") --
-    but that check *is* the safety: with no --yes, ``echo y | rectify
+    but that check *is* the safety: with no --yes, ``echo y | perspective_correction
     --overwrite *.jpg`` correctly does not work either, because reading a
     piped "y" would let an accidental redirect authorise destroying
     originals just as easily as a deliberate one. See the comment above
