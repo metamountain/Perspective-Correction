@@ -66,3 +66,16 @@ default path. Where a method was read rather than reimplemented, it is cited in
 `docs/prior-art.md`: Rother (2002), Tardif / J-Linkage (2009), Bazin &
 Pollefeys (2012), Chaudhury et al. (2014), Lezama et al. (2014), Zhai et al.
 (2016), NeurVPS (2019), VaPiD (2021) and GeoCalib (2024).
+
+## Fonts shipped in `fonts/`
+
+Cut to the characters the window uses by `tools/build_fonts.py`; each licence
+sits beside its font.
+
+* **Inter** (Rasmus Andersson, SIL Open Font License 1.1) — the UI face.
+* **JetBrains Mono** (JetBrains, SIL Open Font License 1.1) — the retro themes'
+  terminal face.
+* **Material Symbols** (Google, Apache License 2.0) — the add / folder / paste
+  icons.
+* **Noto Emoji** (Google, SIL Open Font License 1.1) — the dinosaur on the
+  Grounding DINO key.

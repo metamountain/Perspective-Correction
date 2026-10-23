@@ -241,7 +241,7 @@ THEMES = {
         "cross": "#808080", "line": "#FFFFFF",
         "text": "#000000", "dim": "#555555",
         "accent": "#0055BB", "ok": "#008800", "warn": "#886600", "err": "#CC0000",
-        "ui_font": "Verdana", "mono_font": "Consolas",
+        "ui_font": "Inter", "mono_font": "JetBrains Mono",
     },
     # --- Dark Grey: replaces "Light" (user, 2026-10-21: "light looks
     #     shitty"). A neutral mid-dark grey, a step up from Minimal Black so
@@ -259,13 +259,13 @@ THEMES = {
     #     photograph and a loud chrome shifts every tone in it.  The one thing
     #     no other palette has is `grad`: the two picture wells get a ramp from
     #     slate-indigo down to teal ink instead of a flat fill, which is where
-    #     the phosphor is still visible.  Consolas keeps the terminal in it. ---
+    #     the phosphor is still visible.  JetBrains Mono keeps the terminal in it. ---
     "Phosphor": {
         "bg": "#151b22", "panel": "#1c242d", "field": "#111820",
         "cross": "#0b1016", "line": "#2a3642",
         "text": "#e2eef0", "dim": "#8ba1a7",
         "accent": "#9fd6cb", "ok": "#b6e0c2", "warn": "#efd9ab", "err": "#eeb3b3",
-        "ui_font": "Segoe UI", "mono_font": "Consolas",
+        "ui_font": "Inter", "mono_font": "JetBrains Mono",
         "grad": ("#27323f", "#0e151a", "#9fd6cb"),
     },
 }
@@ -275,8 +275,9 @@ THEMES = {
 # so a column of numbers does not align to the pixel the way a monospace face
 # would -- but one face reads as one instrument, and that is the reference's
 # look.  Retro themes opt back into a terminal face via `mono_font`.
-_UI_FAMILIES = ("Inter", "Segoe UI Variable", "Segoe UI", "Helvetica Neue", "DejaVu Sans")
-_MONO_FAMILIES = ("JetBrains Mono", "Cascadia Mono", "Consolas", "DejaVu Sans Mono")
+# Both first names ship in fonts/; the rest only answer if registering failed.
+_UI_FAMILIES = ("Inter", "Helvetica Neue", "DejaVu Sans")
+_MONO_FAMILIES = ("JetBrains Mono", "Menlo", "DejaVu Sans Mono")
 
 
 def _pick_family(root, candidates, fallback):
@@ -344,7 +345,7 @@ def on_accent(accent, dark=INK_ON_ACCENT_DARK, light=INK_ON_ACCENT_LIGHT):
 
 
 _PRIVATE_FONTS = set()
-_UI_FACE = "Segoe UI"     # the active theme's face; `apply_theme` sets it
+_UI_FACE = "Inter"        # the active theme's face; `apply_theme` sets it
 _UI_PX = None             # ...and its pinned pixel size, if it has one
 
 
@@ -380,31 +381,73 @@ def ui_font(size):
     return (_UI_FACE, -_UI_PX if _UI_PX else size)
 
 
-def _load_private_font(name):
-    """Make a TTF in the repo root visible to this process only (Windows).
+_REPO = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+FONT_DIR = os.path.join(_REPO, "fonts")
+# Google fonts shipped in fonts/ (tools/build_fonts.py), replacing the
+# Windows-only Segoe UI / Consolas (user, 2026-10-23). Registered for this
+# process before Tk starts, so the window looks the same on every OS.
+BUNDLED_FONTS = ("Inter-Regular.ttf", "JetBrainsMono-Regular.ttf")
+ICON_FONT = os.path.join(FONT_DIR, "MaterialSymbols-Subset.ttf")
+EMOJI_FONT = os.path.join(FONT_DIR, "NotoEmoji-Subset.ttf")
 
-    AddFontResourceEx with FR_PRIVATE installs nothing system-wide and is gone
-    when the process ends. A missing file or another OS is a quiet no-op: the
-    theme's family is then simply absent and `_pick_family` falls back."""
-    if not name or name in _PRIVATE_FONTS:
-        return
-    _PRIVATE_FONTS.add(name)
-    import os
-    path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(
-        os.path.abspath(__file__)))), name)
-    if os.name != "nt" or not os.path.exists(path):
-        return
+
+def _register_font_file(path):
+    """Make a font file usable by Tk in this process only, installing nothing.
+
+    Windows: AddFontResourceEx(FR_PRIVATE). macOS: CoreText, process scope.
+    Linux: fontconfig's application fonts. Returns True when the OS accepted
+    it. A failure is quiet: `_pick_family` then falls back to what is there.
+    Only the Windows branch has run; macOS and Linux are written to their
+    documented APIs and untested (2026-10-23)."""
+    if not path or path in _PRIVATE_FONTS or not os.path.exists(path):
+        return False
+    _PRIVATE_FONTS.add(path)
     try:
         import ctypes
-        FR_PRIVATE = 0x10
-        ctypes.windll.gdi32.AddFontResourceExW(path, FR_PRIVATE, 0)
+        if os.name == "nt":
+            FR_PRIVATE = 0x10
+            return ctypes.windll.gdi32.AddFontResourceExW(path, FR_PRIVATE, 0) > 0
+        raw = os.fsencode(path)
+        if sys.platform == "darwin":
+            cf = ctypes.CDLL("/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation")
+            ct = ctypes.CDLL("/System/Library/Frameworks/CoreText.framework/CoreText")
+            cf.CFURLCreateFromFileSystemRepresentation.restype = ctypes.c_void_p
+            cf.CFURLCreateFromFileSystemRepresentation.argtypes = [
+                ctypes.c_void_p, ctypes.c_char_p, ctypes.c_long, ctypes.c_bool]
+            cf.CFRelease.argtypes = [ctypes.c_void_p]
+            ct.CTFontManagerRegisterFontsForURL.restype = ctypes.c_bool
+            ct.CTFontManagerRegisterFontsForURL.argtypes = [
+                ctypes.c_void_p, ctypes.c_uint32, ctypes.c_void_p]
+            url = cf.CFURLCreateFromFileSystemRepresentation(None, raw, len(raw), False)
+            if not url:
+                return False
+            try:
+                return bool(ct.CTFontManagerRegisterFontsForURL(url, 1, None))  # 1 = process
+            finally:
+                cf.CFRelease(url)
+        import ctypes.util
+        fc = ctypes.CDLL(ctypes.util.find_library("fontconfig") or "libfontconfig.so.1")
+        fc.FcConfigAppFontAddFile.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+        return bool(fc.FcConfigAppFontAddFile(None, raw))
     except Exception:
-        pass
+        return False
+
+
+def _register_bundled_fonts():
+    for name in BUNDLED_FONTS:
+        _register_font_file(os.path.join(FONT_DIR, name))
+
+
+def _load_private_font(name):
+    """A theme's own font file in the repo root (the C64 face), for this process."""
+    if name:
+        _register_font_file(os.path.join(_REPO, name))
 
 
 def apply_theme(root, palette=None):
     """Apply a colour palette to all ttk styles.  Returns ``(ui_family, mono_family)``."""
     p = palette or INK
+    _register_bundled_fonts()
     _load_private_font(p.get("font_file"))
     # A pixel face is sharp only at its own pixel grid, so a theme may pin ONE
     # pixel size for every text (Tk reads a negative size as pixels).
@@ -703,7 +746,6 @@ def _wordmark_image(height, colour):
     return tint
 
 
-_ICON_FONTS = ("segoeicons.ttf", "SegMDL2.ttf")   # Fluent, then MDL2
 
 
 def _icon_pil(codepoint, size, colour, emoji=False, mono=False):
@@ -728,16 +770,11 @@ def _icon_pil(codepoint, size, colour, emoji=False, mono=False):
     # they are drawn with embedded_color and no tint.  The icon fonts have
     # no dinosaur: they answer with tofu, which measures as a 12x17 box and
     # would have shipped looking like a deliberate glyph.
-    font = None
-    for name in (("seguiemj.ttf",) if emoji else _ICON_FONTS):
-        path = os.path.join(os.environ.get("WINDIR", r"C:\Windows"), "Fonts", name)
-        if os.path.exists(path):
-            try:
-                font = ImageFont.truetype(path, size)
-                break
-            except Exception:
-                continue
-    if font is None:
+    # The shipped Google fonts (fonts/), not Segoe's: those exist on Windows
+    # only, may not be redistributed, and crashed the first Mac (2026-10-23).
+    try:
+        font = ImageFont.truetype(EMOJI_FONT if emoji else ICON_FONT, size)
+    except Exception:
         return None
     pad = size // 2
     scratch = Image.new("RGBA", (size + 2 * pad, size + 2 * pad), (0, 0, 0, 0))
@@ -774,7 +811,8 @@ def _fit_ink(scratch, size):
 
 
 def _load_key_icon(codepoint, name):
-    """A load key's icon: Segoe's where Windows has it, else the drawn twin."""
+    """A load key's icon from the shipped Material Symbols (add, folder,
+    content_paste), else its drawn twin if the font file is missing."""
     return (_icon_pil(codepoint, layout.tool_glyph(), INK["dim"])
             or _glyph_pil(name, layout.tool_glyph(), INK["dim"]))
 
@@ -881,9 +919,9 @@ def _glyph_pil(name, size, colour):
     elif name == "brush":
         # A swatch, not a diagram -- see the docstring.
         dot(0.5, 0.5, 0.47)
-    # The three load keys quote Segoe's icon fonts, which only Windows has;
-    # these stand in for them elsewhere (found on the first Mac run, 2026-10-23:
-    # `_icon_pil` returned None and ImageTk raised "Image is required").
+    # Stand-ins for the three load keys when fonts/ is missing. They came in
+    # when Segoe's icon fonts were still used and crashed the first Mac
+    # (2026-10-23: "Image is required"); Material Symbols replaced Segoe since.
     elif name == "add":
         line((0.50, 0.08), (0.50, 0.92))
         line((0.08, 0.50), (0.92, 0.50))
@@ -1340,7 +1378,7 @@ class ReviewPanel(tk.Frame):
         if getattr(self, "_palette_blank", None) is None:
             self._palette_blank = tk.PhotoImage(width=1, height=1)
         _side, _gap = layout.tool_key()
-        self._add_img = ImageTk.PhotoImage(_load_key_icon("E710", "add"))
+        self._add_img = ImageTk.PhotoImage(_load_key_icon("E145", "add"))
         self.add_btn = tk.Button(addbar,
                                  image=self._add_img, compound="center",
                                  width=_side, height=_side,
@@ -1351,14 +1389,14 @@ class ReviewPanel(tk.Frame):
                                  padx=0, pady=0, highlightthickness=0, command=self._on_add_files)
         self.add_btn.pack(side="top")
         _attach_tooltip(self.add_btn, "Add image files")
-        self._folder_img = ImageTk.PhotoImage(_load_key_icon("E8B7", "folder"))
+        self._folder_img = ImageTk.PhotoImage(_load_key_icon("E2C7", "folder"))
         self.add_folder_btn = tk.Button(addbar, image=self._folder_img, relief="flat",
                                         bd=0, cursor="hand2", background=INK["field"],
                                         width=_side, height=_side, compound="center",
                                         padx=0, pady=0, highlightthickness=0, command=self._on_add_folder)
         self.add_folder_btn.pack(side="top", pady=(_gap, 0))
         _attach_tooltip(self.add_folder_btn, "Add a folder of images")
-        self._paste_img = ImageTk.PhotoImage(_load_key_icon("E77F", "paste"))
+        self._paste_img = ImageTk.PhotoImage(_load_key_icon("E14F", "paste"))
         self.add_paste_btn = tk.Button(addbar, image=self._paste_img, relief="flat",
                                        bd=0, cursor="hand2", background=INK["field"],
                                        width=_side, height=_side, compound="center",
@@ -4516,7 +4554,7 @@ class ReviewPanel(tk.Frame):
                                indicatoron=False, width=side, height=side,
                                padx=0, pady=0, highlightthickness=0,
                                bd=0, relief="flat",
-                               font=("Segoe UI", 20), cursor="hand2",
+                               font=ui_font(20), cursor="hand2",
                                background=INK["text"] if invert else INK["field"],
                                foreground=fg,
                                activebackground=INK["dim"] if invert else INK["line"],

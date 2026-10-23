@@ -84,6 +84,9 @@ def test_torch_comes_before_lama_and_only_when_it_is_missing():
         DI.present = lambda m: m == "torch"
         keys = [i["key"] for i in DI.missing()]
         assert "torch" not in keys and "lama" in keys, keys
+        # lama there, torch not (the first Mac on Python 3.15): torch is missing
+        DI.present = lambda m: m != "torch"
+        assert [i["key"] for i in DI.missing()] == ["torch"]
         DI.present = lambda m: True
         assert DI.missing() == []
     finally:

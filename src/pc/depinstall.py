@@ -59,10 +59,13 @@ def missing():
     """The optional packages not installed, in install order (torch before lama)."""
     out = []
     for pkg in PACKAGES:
+        if pkg["key"] == "lama" and not present(TORCH["module"]):
+            # lama without torch cannot run on any OS -- the first Mac had
+            # exactly that (lama installed, no torch for Python 3.15), and this
+            # list used to call it complete because lama itself was present.
+            out.append(TORCH)
         if present(pkg["module"]):
             continue
-        if pkg["key"] == "lama" and not present(TORCH["module"]):
-            out.append(TORCH)
         out.append(pkg)
     return out
 

@@ -1717,35 +1717,53 @@ def test_the_deps_button_asks_installs_on_a_thread_and_reports():
         app.destroy()
 
 
-def test_the_window_opens_without_the_windows_icon_fonts():
-    """A Mac has no Segoe icon fonts. The first Mac run (2026-10-23) died in
-    `_build` with "Image is required": the three load keys handed
-    `_icon_pil`'s None straight to ImageTk. WINDIR pointed at an empty folder
-    is that machine, here; every key must still carry a drawn glyph."""
-    import tempfile
-    from pc.gui import _glyph_pil, INK
+def test_the_icons_come_from_the_shipped_fonts_and_survive_without_them():
+    """The first Mac run (2026-10-23) died in `_build` with "Image is required":
+    the load keys quoted Segoe's icon fonts, which only Windows has. They now
+    come from fonts/ (Material Symbols, Noto Emoji) on every OS -- and if that
+    folder is missing, the drawn twins still give every key a glyph."""
+    from pc import gui as G
     from pc import layout
-    for name in ("add", "folder", "paste"):
-        img = _glyph_pil(name, layout.tool_glyph(), INK["dim"])
-        assert img is not None and img.getbbox() is not None, f"{name} rendered nothing"
-    old = os.environ.get("WINDIR")
-    with tempfile.TemporaryDirectory() as empty:
-        os.environ["WINDIR"] = empty
+    g = layout.tool_glyph()
+    for cp in ("E145", "E2C7", "E14F"):
+        img = G._icon_pil(cp, g, G.INK["dim"])
+        assert img is not None and img.getbbox() is not None, f"{cp} not in the shipped font"
+    dino = G._icon_pil("1F996", g, G.INK["dim"], emoji=True, mono=True)
+    assert dino is not None and dino.getbbox() is not None, "no dinosaur in the shipped emoji font"
+    real = G.ICON_FONT
+    G.ICON_FONT = os.path.join(G.FONT_DIR, "missing.ttf")
+    try:
+        app = _app()
         try:
-            app = _app()
-            try:
-                app.geometry("1400x800-4000+0")
-                app.update(); time.sleep(0.02)
-                r = app.review
-                for b in (r.add_btn, r.add_folder_btn, r.add_paste_btn):
-                    assert str(b.cget("image")), f"{b} has no icon"
-            finally:
-                app.destroy()
+            app.geometry("1400x800-4000+0")
+            app.update(); time.sleep(0.02)
+            r = app.review
+            for b in (r.add_btn, r.add_folder_btn, r.add_paste_btn):
+                assert str(b.cget("image")), f"{b} has no icon"
         finally:
-            if old is None:
-                os.environ.pop("WINDIR", None)
-            else:
-                os.environ["WINDIR"] = old
+            app.destroy()
+    finally:
+        G.ICON_FONT = real
+
+
+def test_the_shipped_text_fonts_are_what_the_window_uses():
+    """Inter and JetBrains Mono come from fonts/ and are registered for this
+    process, so the window needs neither installed. JetBrains Mono is not
+    installed on the development machine, so finding it proves the
+    registration rather than the system."""
+    from tkinter import font as tkfont
+    app = _app()
+    try:
+        fams = set(tkfont.families(app))
+        assert "JetBrains Mono" in fams and "Inter" in fams, sorted(f for f in fams if "Mono" in f)
+        assert tkfont.nametofont("TkDefaultFont").actual("family") == "Inter"
+        app._theme_var.set("Phosphor")
+        app.update()
+        assert tkfont.nametofont("TkFixedFont").actual("family") == "JetBrains Mono"
+    finally:
+        app._theme_var.set("Minimal Black")      # INK is module state: restore
+        app.update()
+        app.destroy()
 
 
 def test_every_tool_key_is_the_same_size_and_every_glyph_renders():
