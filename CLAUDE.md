@@ -648,7 +648,7 @@ features ahead of everything else.*
   - `warp.apply_undistorted` clipped every lookup into the image, so `pad=black`/a colour never reached remap's border (edge smear instead). `edge` unchanged.
   - CLI: two inputs with one name (`A/img.jpg B/img.jpg -o out`) wrote one file, the second replacing the first; now `-2`, `-3` and a log line (`unique_destination`). The `--horizontal` log measured the SOURCE with the output's pixel focal (`_focal_px(r, shape)`). `correction_log.write_record` wiped a strip `remember_strip` had kept.
   - `tools/install_deps.py --lama` called lama "optional ok" after torch had failed; it is skipped and listed missing now, like the in-app button.
-  - **Open, needs a decision (user):** the mask mode picked in the panel is not carried to the next photograph (`App.v_mask` is only set by the retired defaults panel; the combobox snaps back to "off" on every load). Carrying it means BiRefNet runs on every photo of a walk.
+  - **Decided (user, "Maske muss weg"):** the mask mode picked in the panel is NOT carried to the next photograph; every photo opens with the mask off, so BiRefNet never runs unasked on a walk. Behaviour unchanged, deliberate -- do not re-file it as a bug.
 
 **2026-10-23**
 
