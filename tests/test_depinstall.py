@@ -168,3 +168,33 @@ def test_the_weights_count_only_when_complete_and_survive_a_scanner_lock():
             DI.os.replace = real
         assert ok and os.path.getsize(dst) == 1000 and len(calls) == 3, (ok, why, calls)
         assert DI.fetch_geocalib_weights(dst, url, size=1000) == (True, "")
+
+
+def test_sam_counts_as_installed_only_with_every_file_at_its_size():
+    """SAM 2.1 small is four files from one pinned revision; `deps` must offer
+    it again while any of them is missing or short, and a download fetches
+    exactly those names (user, 2026-10-24: "auf jeden Fall" -- SAM via deps)."""
+    import pathlib
+    with tempfile.TemporaryDirectory() as d:
+        src = os.path.join(d, "hub")
+        os.makedirs(src)
+        files = {"config.json": 10, "model.safetensors": 300}
+        for n, size in files.items():
+            with open(os.path.join(src, n), "wb") as f:
+                f.write(b"x" * size)
+        url = pathlib.Path(src).as_uri() + "/"
+        dst = os.path.join(d, "models", "sam")
+        real = DI.SAM2_FILES
+        DI.SAM2_FILES = files
+        try:
+            assert not DI.sam2_weights_ok(dst)
+            ok, why = DI.fetch_sam2_weights(dst, url, files)
+            assert ok, why
+            assert DI.sam2_weights_ok(dst)
+            with open(os.path.join(dst, "model.safetensors"), "wb") as f:
+                f.write(b"x" * 299)
+            assert not DI.sam2_weights_ok(dst), "a short file must not count"
+        finally:
+            DI.SAM2_FILES = real
+    row = [r for r in DI.catalogue() if r["key"] == "sam"][0]
+    assert "sam" in DI.NEEDS_TORCH and row["module"] == "transformers"

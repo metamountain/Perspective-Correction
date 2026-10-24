@@ -31,6 +31,14 @@ GEOCALIB_WEIGHTS = os.path.join(ROOT, "models", "geocalib", "pinhole.tar")
 GEOCALIB_WEIGHTS_URL = ("https://github.com/cvg/GeoCalib/releases/download/v1.0/"
                         "geocalib-pinhole.tar")
 GEOCALIB_WEIGHTS_SIZE = 116074121
+# SAM 2.1 small for the box select (pc.sam2seg), run through transformers in
+# this Python -- no ComfyUI, no torchvision. One pinned revision; every file is
+# size-checked like GeoCalib's weights.
+SAM2_DIR = os.path.join(ROOT, "models", "sam2.1-hiera-small")
+SAM2_REV = "ee5bba1d82bb8749febdf90f45e84b687142ba03"
+SAM2_URL = "https://huggingface.co/facebook/sam2.1-hiera-small/resolve/" + SAM2_REV + "/"
+SAM2_FILES = {"config.json": 5698, "model.safetensors": 184305280,
+              "preprocessor_config.json": 683, "processor_config.json": 95}
 
 # key, label, import name, pip arguments, rough download size.
 PACKAGES = [
@@ -48,11 +56,16 @@ PACKAGES = [
     {"key": "geocalib", "label": "focal guess without EXIF (GeoCalib)",
      "module": "geocalib", "pip": ["--no-deps", GEOCALIB_URL],
      "size": "~140 MB, needs torch"},
+    # Needs torch the same way. transformers goes in with its own (light,
+    # pure-Python) dependencies; it pins nothing that touches numpy or Pillow.
+    {"key": "sam", "label": "box select (SAM 2.1 small)",
+     "module": "transformers", "pip": ["transformers"],
+     "size": "~200 MB, needs torch"},
 ]
 # lama imports torch and nothing else of its pins at run time. An installed
 # torch is never touched: on Windows it is often a CUDA build that a plain
 # `pip install torch` would replace with the CPU one.
-TORCH = {"key": "torch", "label": "torch (for lama and GeoCalib)", "module": "torch",
+TORCH = {"key": "torch", "label": "torch (for lama, GeoCalib and SAM)", "module": "torch",
          "pip": ["torch"], "size": "~250 MB-2.5 GB"}
 
 
@@ -76,14 +89,15 @@ def present(module):
 
 # What each one is for, in the deps menu.
 PURPOSE = {
-    "torch": "the engine lama and GeoCalib run on",
+    "torch": "the engine lama, GeoCalib and SAM run on",
     "lama": "the good fill for the empty corners (telea fills without it)",
     "geocalib": "a better focal guess for photos without EXIF",
+    "sam": "drag a box around the building, everything else is ignored",
     "mlsd": "a second line detector",
     "dnd": "drag photos onto the window",
 }
-_ORDER = ("torch", "lama", "geocalib", "mlsd", "dnd")
-NEEDS_TORCH = ("lama", "geocalib")
+_ORDER = ("torch", "lama", "geocalib", "sam", "mlsd", "dnd")
+NEEDS_TORCH = ("lama", "geocalib", "sam")
 
 
 def catalogue():
@@ -100,6 +114,8 @@ def catalogue():
         inst = present(pkg["module"])
         if key == "geocalib":
             inst = inst and geocalib_weights_ok()
+        if key == "sam":
+            inst = inst and sam2_weights_ok()
         rows.append(dict(pkg, installed=inst, purpose=PURPOSE[key]))
     return rows
 
@@ -114,12 +130,33 @@ def geocalib_weights_ok(path=None):
     return os.path.isfile(path) and os.path.getsize(path) == GEOCALIB_WEIGHTS_SIZE
 
 
+def sam2_weights_ok(folder=None):
+    folder = folder or SAM2_DIR
+    return all(os.path.isfile(os.path.join(folder, n))
+               and os.path.getsize(os.path.join(folder, n)) == size
+               for n, size in SAM2_FILES.items())
+
+
+def fetch_sam2_weights(folder=None, url=None, files=None):
+    """Download SAM 2.1 small's four files; ``(ok, reason)``."""
+    folder, url = folder or SAM2_DIR, url or SAM2_URL
+    for name, size in (files or SAM2_FILES).items():
+        ok, reason = fetch_file(os.path.join(folder, name), url + name, size)
+        if not ok:
+            return False, f"{name}: {reason}"
+    return True, ""
+
+
 def fetch_geocalib_weights(path=None, url=None, size=None):
-    """Download GeoCalib's weights; ``(ok, reason)``. Written to a temp name
-    and moved into place only at the right size, so a broken download never
-    looks installed."""
-    path, url = path or GEOCALIB_WEIGHTS, url or GEOCALIB_WEIGHTS_URL
-    size = GEOCALIB_WEIGHTS_SIZE if size is None else size
+    """Download GeoCalib's weights; ``(ok, reason)``."""
+    return fetch_file(path or GEOCALIB_WEIGHTS, url or GEOCALIB_WEIGHTS_URL,
+                      GEOCALIB_WEIGHTS_SIZE if size is None else size)
+
+
+def fetch_file(path, url, size):
+    """Download one file; ``(ok, reason)``. Written to a temp name and moved
+    into place only at the right size, so a broken download never looks
+    installed."""
     if os.path.isfile(path) and os.path.getsize(path) == size:
         return True, ""
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -217,17 +254,18 @@ def install(items, py=None, on_step=None):
                 on_step(i, len(items), item["label"])
             except Exception:
                 pass
-        if item["key"] in ("lama", "geocalib") and torch_failed:
+        if item["key"] in NEEDS_TORCH and torch_failed:
             results.append((item, False, "skipped: torch is missing"))
             continue
-        if item["key"] == "geocalib":
+        if item["key"] in ("geocalib", "sam"):
             ok, reason = True, ""
             if not present(item["module"]):
                 code, out = _run([py, "-m", "pip", "install", "--disable-pip-version-check",
                                   *item["pip"]])
                 ok, reason = code == 0, ("" if code == 0 else explain(out))
             if ok:
-                ok, reason = fetch_geocalib_weights()
+                ok, reason = (fetch_geocalib_weights() if item["key"] == "geocalib"
+                              else fetch_sam2_weights())
             results.append((item, ok, reason))
             continue
         if item["key"] == "torch" and not torch_installable(py):

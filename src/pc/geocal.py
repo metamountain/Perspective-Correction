@@ -56,6 +56,12 @@ def available():
 
 
 def _stand_ins():
+    """Register the stand-ins; returns the names that were added, so `_load`
+    can take them out again once GeoCalib holds its own references. Left in
+    `sys.modules` an empty ``torchvision`` (no ``__spec__``) made transformers
+    crash on import -- SAM failed with "torchvision.__spec__ is None" whenever
+    GeoCalib had run first (2026-10-24)."""
+    added = [n for n in ("kornia", "kornia.geometry", "torchvision") if n not in sys.modules]
     if not _present("kornia"):
         import torch.nn.functional as F
 
@@ -70,14 +76,19 @@ def _stand_ins():
         sys.modules.setdefault("kornia.geometry", kornia.geometry)
     if not _present("torchvision"):
         sys.modules.setdefault("torchvision", types.ModuleType("torchvision"))
+    return [n for n in added if n in sys.modules]
 
 
 def _load():
     global _model
     if _model is None:
         import torch
-        _stand_ins()
-        from geocalib import GeoCalib
+        added = _stand_ins()
+        try:
+            from geocalib import GeoCalib
+        finally:
+            for name in added:
+                sys.modules.pop(name, None)
         dev = "cuda" if torch.cuda.is_available() else "cpu"
         _model = GeoCalib(weights=WEIGHTS).to(dev).eval()
         _model._pc_device = dev

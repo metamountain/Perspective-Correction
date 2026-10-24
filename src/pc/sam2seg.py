@@ -230,6 +230,72 @@ def available(python_exe: str = "", ckpt: str = "") -> bool:
     return True
 
 
+# -- in-process route (2026-10-24) ----------------------------------------
+# SAM 2.1 small through transformers in the GUI's own Python, installed by
+# `deps` into models/sam2.1-hiera-small. transformers' own image processor
+# needs torchvision, which would have to match the torch build exactly, so the
+# preprocessing is done here: resize to 1024x1024 (bilinear), scale to 0..1,
+# ImageNet mean/std, box in the 1024 frame; the 256x256 logits go back up
+# through 1024 to the photograph's size and are cut at 0. Measured on
+# Alte_Scheune: 0.66 s on CUDA, 2.0 s on a CPU, the barn selected whole.
+_SAM_MEAN = np.array([0.485, 0.456, 0.406], np.float32)
+_SAM_STD = np.array([0.229, 0.224, 0.225], np.float32)
+_SAM_SIDE = 1024
+_local = {}
+
+
+def local_dir() -> str:
+    from .depinstall import SAM2_DIR
+    return SAM2_DIR
+
+
+def local_available() -> bool:
+    """transformers, torch and the four weight files -- without importing torch."""
+    import importlib.util
+    from .depinstall import sam2_weights_ok
+    try:
+        mods = all(importlib.util.find_spec(m) is not None for m in ("torch", "transformers"))
+    except (ImportError, ValueError):
+        return False
+    return mods and sam2_weights_ok()
+
+
+def _local_model():
+    if "model" not in _local:
+        import torch
+        from transformers import Sam2Model
+        if torch.cuda.is_available():
+            dev = "cuda"
+        elif getattr(torch.backends, "mps", None) is not None and torch.backends.mps.is_available():
+            dev = "mps"
+        else:
+            dev = "cpu"
+        model = Sam2Model.from_pretrained(local_dir(), local_files_only=True).to(dev).eval()
+        _local["model"], _local["device"] = model, dev
+    return _local["model"], _local["device"]
+
+
+def segment_local(bgr: np.ndarray, box: Tuple[int, int, int, int]) -> np.ndarray:
+    """Ignore mask for ``bgr`` (True = outside the selection) from a pixel box."""
+    import torch
+    import torch.nn.functional as F
+    h, w = bgr.shape[:2]
+    model, dev = _local_model()
+    rgb = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+    x = cv2.resize(rgb, (_SAM_SIDE, _SAM_SIDE), interpolation=cv2.INTER_LINEAR)
+    x = ((x.astype(np.float32) / 255.0 - _SAM_MEAN) / _SAM_STD).transpose(2, 0, 1)[None]
+    sx, sy = _SAM_SIDE / w, _SAM_SIDE / h
+    x0, y0, x1, y1 = box
+    b = torch.tensor([[[x0 * sx, y0 * sy, x1 * sx, y1 * sy]]], dtype=torch.float32)
+    with torch.no_grad():
+        out = model(pixel_values=torch.from_numpy(np.ascontiguousarray(x)).to(dev),
+                    input_boxes=b.to(dev), multimask_output=False)
+    lo = out.pred_masks.reshape(1, 1, *out.pred_masks.shape[-2:]).float().cpu()
+    up = F.interpolate(lo, (_SAM_SIDE, _SAM_SIDE), mode="bilinear", align_corners=False)
+    up = F.interpolate(up, (h, w), mode="bilinear", align_corners=False)
+    return ~(up[0, 0].numpy() > 0)
+
+
 def _imread_unicode(path: str, flags: int):
     """``cv2.imread`` that also opens non-ASCII paths.
 

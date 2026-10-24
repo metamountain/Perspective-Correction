@@ -871,13 +871,11 @@ def _glyph_pil(name, size, colour):
     cropped to its ink by ``_fit_ink`` so they share a footprint.
 
     Two deliberate exceptions, both recorded rather than quietly made:
-      * ``brush`` stays a filled disc, and stays inverted. It is the one key
+      * ``brush`` stays a filled disc (no longer inverted, 2026-10-24). It is the one key
         that is a swatch rather than a diagram -- the mark stands for the paint
         it lays down (user, 2026-09-15).
-      * the Grounding DINO key keeps its dinosaur. It is a pun the user put
-        there on purpose; a previous session already traded colour for
-        coherence and stopped short of replacing it, which is the right place
-        to stop.
+      * the Grounding DINO key kept its dinosaur, a pun the user put there --
+        until the key itself went (2026-10-24, its model is 690 MB).
     """
     from PIL import ImageDraw
     d_size = size * 4                       # draw large, downsample: clean edges
@@ -950,8 +948,14 @@ def _glyph_pil(name, size, colour):
         dr.polygon([P(0.44, 0.40), P(0.44, 0.96), P(0.60, 0.80), P(0.80, 0.80)],
                    fill=ink)
     elif name == "brush":
-        # A swatch, not a diagram -- see the docstring.
+        # A swatch, not a diagram -- see the docstring. Grey outside, dark
+        # inside (user, 2026-10-24: "Maskentool invertieren, aussen grau,
+        # innen schwarz"): a broad ring whose middle is cut back to clear, so
+        # the key's own dark shows through and the ring turns white when held.
         dot(0.5, 0.5, 0.47)
+        r = 0.27 * d_size
+        x, y = P(0.5, 0.5)
+        dr.ellipse([x - r, y - r, x + r, y + r], fill=(0, 0, 0, 0))
     # Stand-ins for the three load keys when fonts/ is missing. They came in
     # when Segoe's icon fonts were still used and crashed the first Mac
     # (2026-10-23: "Image is required"); Material Symbols replaced Segoe since.
@@ -1277,11 +1281,20 @@ class ReviewPanel(tk.Frame):
             title = (f"{position}  {os.path.basename(path)}  {W}×{H}  |  "
                      f"Perspective Correction  v{__version__}")
             app.title(title.strip())
-        self._build()
         # The mode switch mirrors the horizontal-auto state the photograph
-        # opened with, so the strip shows the right controls from the start.
+        # opens with, and it must be set BEFORE `_build`: `_build` calls
+        # `_show_mode`, which enforces whatever the switch says. Set after,
+        # the switch still said "horizontal" from the last photo, `_show_mode`
+        # turned HA on for this one, and then the switch was put back to
+        # "auto" -- Auto shown, HA applied (user, 2026-10-24: "HA kommt noch
+        # zum Tragen, obwohl Auto-Modus suggeriert wird").
+        was = self.v_corr_mode.get()
         self.v_corr_mode.set("horizontal" if self.settings.correct_horizontal else "auto")
+        self._build()
         self._mode_frames[self.v_corr_mode.get()].tkraise()
+        if was == "horizontal" and self.v_corr_mode.get() == "auto":
+            self.after(300, lambda: self._notify(
+                "new photo opens in Auto -- horizontal auto was on for the last one"))
         self.v_overwrite.set(bool(overwrite))
         self._refresh_file_names()
         self.v_alpha.set(self.session.mask_alpha)
@@ -2057,10 +2070,8 @@ class ReviewPanel(tk.Frame):
                     birefnet_model=stored)
             else:
                 self.v_maskmode.set("off")
-                if getattr(self, "v_gdino", None) is not None:
-                    self.v_gdino.set(False)
-                self._notify(f"Grounding DINO needs the BiRefNet model -- not found in "
-                             f"{MK.birefnet_home()}. Install it with 'deps' at the bottom right.")
+                self._notify(f"The BiRefNet model was not found in {MK.birefnet_home()} "
+                             f"-- mask left off.")
                 return
         if mode == "gdino":
             # the prompt lives in the entry, not the settings, until it is applied
@@ -3760,8 +3771,8 @@ class ReviewPanel(tk.Frame):
                                   command=self._on_invert_toggle), 1, 2)
         _attach_tooltip(_cb, "Swap it: what is red becomes the part that "
                              "counts, and the rest is ignored.\n"
-                             "Applies to every source at once - brush, SAM, "
-                             "gdino, BiRefNet and the facade strip together.")
+                             "Applies to every source at once - brush, SAM "
+                             "and the facade strip together.")
         self.v_alpha = tk.DoubleVar(value=0.28)
         op = put(ttk.Frame(g), 1, 3)
         ttk.Label(op, text="opacity").pack(side="left", padx=(4, 4))
@@ -4635,22 +4646,9 @@ class ReviewPanel(tk.Frame):
                                "Shift+left or Alt+right dragged sideways sizes\n"
                                "the pen.",
                                invert=True)
-        # The dinosaur moved up here from the prompt label (user, 2026-09-15),
-        # and lost its colours on the way: one coloured glyph among five
-        # monochrome ones reads as a mistake, however charming.
-        # A toggle, not an action.  In the layer registry gdino is a LAYER, and
-        # a layer is on or off -- which is also the answer to "how do I turn it
-        # off again", a question an action key cannot answer at all.  It stays
-        # out of `_TOOL_MODES`: it is a source of mask, not something you hold,
-        # so switching it on must not put the brush down.
-        if getattr(self, "v_gdino", None) is None:
-            self.v_gdino = tk.BooleanVar(value=False)
-        self._gdino_btn = tool(
-            "1F996", self.v_gdino, self._on_gdino_toggle,
-            "Grounding DINO: find the building by name and mask everything "
-            "else.\nRight-click to say what to look for.",
-            emoji=True)
-        self._gdino_btn.bind(f"<Button-{RB}>", lambda _e: self._ask_gdino_prompt())
+        # The Grounding DINO key (the dinosaur) is gone (user, 2026-10-24: "Dino
+        # ist zu gross, nervt ... Tool weg"): its model is 690 MB, and SAM's box
+        # does the same job with 184 MB. `--mask gdino` stays in the CLI.
         self._sam_btn = tool("sam", self.v_sam, self._on_sam_toggle,
                              "SAM (S): drag a box around the building;\n"
                              "everything outside is masked out.\n"
@@ -5006,40 +5004,6 @@ class ReviewPanel(tk.Frame):
         self.c_before.create_line(cx - d, cy + d, cx + d, cy - d, fill=col, **kw)
 
     # -- SAM2 box-prompt segmentation --------------------------------------
-    def _on_gdino_toggle(self):
-        """Switch the Grounding DINO layer on or off.
-
-        It drives the same combobox a user would, so there is one path into
-        `_apply_mask` and the control panel keeps saying what is actually in
-        force rather than disagreeing with the key.
-        """
-        if not self.session or getattr(self, "v_maskmode", None) is None:
-            return
-        self.v_maskmode.set("gdino" if self.v_gdino.get() else "off")
-        self._apply_mask()
-
-    def _ask_gdino_prompt(self):
-        """Right-click: say what to look for, then go and look for it.
-
-        The prompt used to be a labelled entry in the mask panel, three rows
-        away from anything that used it.  It belongs to this key, so it is asked
-        for from this key -- and asking is also applying, because a prompt you
-        typed and did not apply is a note to yourself.
-        """
-        if not self.session or getattr(self, "v_gdino_prompt", None) is None:
-            return "break"
-        from tkinter import simpledialog
-        answer = simpledialog.askstring(
-            "Grounding DINO",
-            "What should it look for?\n(a plain word: building, facade, house)",
-            initialvalue=self.v_gdino_prompt.get(), parent=self)
-        if not answer:
-            return "break"              # cancelled: leave the layer as it was
-        self.v_gdino_prompt.set(answer.strip())
-        self.v_gdino.set(True)
-        self._on_gdino_toggle()
-        return "break"
-
     def _on_sam_toggle(self):
         """Entering or leaving box-select; the caller owns the flip.
 
@@ -5049,6 +5013,13 @@ class ReviewPanel(tk.Frame):
         the tool would look dead.  Read-only, like the other three.
         """
         if self.v_sam.get():
+            # Nothing to run it with: say so and where it comes from, rather
+            # than let a drag end in an error nobody can act on.
+            if not (sam2seg.local_available() or sam2seg.available()):
+                self.v_sam.set(False)
+                self._notify("SAM is not installed -- install it with 'deps' at the "
+                             "bottom right (box select, ~200 MB).")
+                return
             self._exclusive("v_sam")
         else:
             self._sam_box = None
@@ -5121,30 +5092,44 @@ class ReviewPanel(tk.Frame):
         # says "busy" and not "with what, and for how long".
         self._wait_stage("sam")
 
+        local = sam2seg.local_available()
+        app = self._app()
+
+        def back(fn):
+            # Through the App's queue when there is one: `after` from a worker
+            # thread is unreliable in Tk (the deps menu found it), so the
+            # result could sit there with the wait notice up for good.
+            if app is not None:
+                app.queue.put(("call", fn))
+            else:
+                self.after(0, fn)
+
         def _run():
             try:
-                log.info("SAM apply: box_px=%s pts=%d image=%s",
+                log.info("SAM apply: box_px=%s pts=%d image=%s local=%s",
                          list(box_px), len(pts or ()),
-                         os.path.basename(self.session.path))
-                png = sam2seg.run_subprocess(
-                    self.session.path, box_px, pts,
-                    ckpt=getattr(self.session.settings, "sam_model", ""),
-                    device=getattr(self.session.settings, "sam_device", ""))
-                log.info("SAM apply done: %s", os.path.basename(png))
-                self.after(0, lambda p=png: self._on_sam_done(p))
+                         os.path.basename(self.session.path), local)
+                if local:
+                    ignore = sam2seg.segment_local(self.session.bgr, box_px)
+                else:
+                    png = sam2seg.run_subprocess(
+                        self.session.path, box_px, pts,
+                        ckpt=getattr(self.session.settings, "sam_model", ""),
+                        device=getattr(self.session.settings, "sam_device", ""))
+                    ignore = sam2seg.load_mask_png(png, (self.session.h, self.session.w))
+                log.info("SAM apply done")
+                back(lambda m=ignore: self._on_sam_done(m))
             except Exception as exc:
                 log.exception("SAM apply failed")
-                self.after(0, lambda e=exc: self._on_sam_fail(e))
+                back(lambda e=exc: self._on_sam_fail(e))
 
         import threading
         threading.Thread(target=_run, daemon=True).start()
 
-    def _on_sam_done(self, png_path):
+    def _on_sam_done(self, ignore):
         self._busy_sam = False
         self._set_busy(False)
         self._wait_hide()
-        from . import sam2seg
-        ignore = sam2seg.load_mask_png(png_path, (self.session.h, self.session.w))
         self._sam_selection = ~ignore
         # Hand the result to the session, which is the whole point of selecting
         # the building: until this call the segment only drew a green outline

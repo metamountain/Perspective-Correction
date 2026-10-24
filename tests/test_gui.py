@@ -996,19 +996,26 @@ def test_dragging_inside_the_crop_pans_it_and_clips_to_the_frame():
         app.destroy()
 
 
-def test_the_gdino_prompt_field_and_mode_are_reachable():
-    """The gdino mask mode is not a half-feature: its palette key must exist
-    and the prompt must exist with a sane default, so a user can type a
-    word and press Enter to re-find the box.  Pinned off-screen -- the 'Tested is
-    not reachable' gotcha this file exists to close."""
+def test_the_dinosaur_is_gone_and_sam_says_where_it_comes_from():
+    """User, 2026-10-24: the Grounding DINO key goes ("zu gross, nervt"), and a
+    SAM key without its model must say that `deps` installs it instead of
+    leaving a drag to fail."""
+    from pc import sam2seg
     app = _app()
     try:
         r = app.review
-        assert r._gdino_btn.winfo_exists(), "the Grounding DINO key must exist"
-        assert not hasattr(r, "cb_maskmode"), (
-            "the mask-source row was for testing only and is gone (user, 2026-10-24)")
-        assert r.v_gdino_prompt.get() == "building", (
-            f"the prompt should default to 'building', got {r.v_gdino_prompt.get()!r}")
+        assert not hasattr(r, "_gdino_btn"), "the dinosaur key is still built"
+        _loaded(app, 1600, 1000)
+        real = (sam2seg.local_available, sam2seg.available)
+        sam2seg.local_available = lambda: False
+        sam2seg.available = lambda *a, **k: False
+        try:
+            r.v_sam.set(True)
+            r._on_sam_toggle()
+            assert not r.v_sam.get(), "SAM stayed held with nothing to run it"
+            assert "deps" in getattr(r, "_notice", ""), getattr(r, "_notice", "")
+        finally:
+            sam2seg.local_available, sam2seg.available = real
     finally:
         app.destroy()
 
@@ -1833,7 +1840,7 @@ def test_every_tool_key_is_the_same_size_and_every_glyph_renders():
         app._add([ASSET])
         _settle(app)
         keys = getattr(app.review, "_palette_btns", [])
-        assert len(keys) >= 6, f"only {len(keys)} tool keys -- the palette is not built"
+        assert len(keys) >= 5, f"only {len(keys)} tool keys -- the palette is not built"
         sizes = {(k.winfo_width(), k.winfo_height()) for k in keys}
         assert len(sizes) == 1, (
             "the tool keys are not all one size, so the column does not line "
@@ -2518,6 +2525,34 @@ def test_the_logo_sits_large_before_the_wordmark_in_its_true_proportions():
             assert sb._logo_lbl.image is not before, "the mark kept the old theme's tint"
         finally:
             G.INK.clear(); G.INK.update(saved)
+    finally:
+        app.destroy()
+
+
+def test_a_new_photo_after_horizontal_auto_opens_in_auto_and_applies_auto():
+    """User, 2026-10-24: with horizontal auto on, the next photo showed Auto
+    and still applied horizontal auto. `_build` enforced the switch while it
+    still said "horizontal", and `load` set it to "auto" only afterwards.
+    Switch, flag and session must agree, and the change is said."""
+    import tempfile
+    app = _app()
+    try:
+        _loaded(app, 1600, 1000)
+        r = app.review
+        r.v_corr_mode.set("horizontal")
+        r._show_mode()
+        _settle(app)
+        assert r.session.settings.correct_horizontal
+        with tempfile.TemporaryDirectory() as d:
+            r.load(os.path.join(os.path.dirname(ASSET), "Alte_Scheune.jpg"),
+                   r.settings, os.path.join(d, "o.jpg"))
+            _settle(app, 30)
+        s = r.session
+        assert r.v_corr_mode.get() == "auto"
+        assert not r.v_correct_horizontal.get()
+        assert not s.settings.correct_horizontal, "Auto shown, horizontal auto applied"
+        assert abs(s.current_yaw()) < 1e-9, s.current_yaw()
+        assert "Auto" in getattr(r, "_notice", ""), getattr(r, "_notice", "")
     finally:
         app.destroy()
 

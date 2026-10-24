@@ -77,7 +77,7 @@ sits beside its font.
   terminal face.
 * **Material Symbols** (Google, Apache License 2.0) — the add / folder / paste
   icons.
-* **Noto Emoji** (Google, SIL Open Font License 1.1) — the dinosaur on the
+* **Noto Emoji** (Google, SIL Open Font License 1.1) — the dinosaur of the former
   Grounding DINO key.
 
 ## Optional: GeoCalib (installed by the `deps` menu, not shipped)
@@ -88,3 +88,10 @@ sits beside its font.
   weights (`geocalib-pinhole.tar`, downloaded to `models/geocalib/`):
   Creative Commons Attribution 4.0 International (CC BY 4.0). Used only for a
   focal-length guess on photographs without EXIF (`src/pc/geocal.py`).
+
+## Optional: SAM 2.1 small (installed by the `deps` menu, not shipped)
+
+* **SAM 2** — Ravi et al., "SAM 2: Segment Anything in Images and Videos",
+  Meta AI, 2024. Weights `facebook/sam2.1-hiera-small` (Apache-2.0), run
+  through Hugging Face **transformers** (Apache-2.0). Downloaded into
+  `models/sam2.1-hiera-small/` for the box select.

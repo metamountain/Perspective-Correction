@@ -151,3 +151,23 @@ def test_the_child_reads_and_writes_a_photograph_with_an_umlaut_in_its_name():
     ignore = S.load_mask_png(png, (60, 80))
     assert ignore.shape == (60, 80)
     assert not ignore[:, :40].any() and ignore[:, 40:].all(), "left half selected"
+
+
+def test_the_in_process_route_selects_the_boxed_building_where_it_is_installed():
+    """SAM 2.1 small through transformers in this Python (2026-10-24), with
+    the preprocessing done here because transformers' processor needs
+    torchvision. Skips where `deps` has not installed it. A box over the
+    middle of a synthetic scene with one bright block must select the block,
+    not the frame and not nothing."""
+    from pc import sam2seg
+    if not sam2seg.local_available():
+        import pytest
+        pytest.skip("SAM 2.1 small not installed")
+    img = np.full((480, 640, 3), 40, np.uint8)
+    img[120:400, 200:460] = (200, 210, 220)
+    ignore = sam2seg.segment_local(img, (180, 100, 480, 420))
+    assert ignore.shape == (480, 640) and ignore.dtype == bool
+    sel = ~ignore
+    inside = sel[140:380, 220:440].mean()
+    outside = sel[:, :150].mean()
+    assert inside > 0.9 and outside < 0.05, (inside, outside)

@@ -38,7 +38,7 @@ the facade, and on most photographs that is the whole job. Where it is fooled by
 cars, a sloping street, roof battens or a second wall, a few seconds of hand work
 on the picture fix it:
 
-- **paint it out** (`b`), **box it in** with SAM (`s`), or name it (Grounding DINO);
+- **paint it out** (`b`), or **box it in** with SAM (`s`);
 - **draw the truth** (`m`): a drawn line comes out *exactly* vertical or
   horizontal, and 2 + 2 drawn lines make a rectangle with 90° corners;
 - **click four corners** (PC Rectangle): one wall flattened to a front view in
@@ -71,8 +71,26 @@ pip install --no-deps simple-lama-inpainting   optional: lama fill (default; tel
 
 Python 3.9+, numpy, OpenCV, Pillow, piexif. The GUI needs Tkinter.
 `--no-deps` matters: lama's pins otherwise break OpenCV.
-`python perspective_correction.py --doctor` says what is present. Segmentation weights
-(BiRefNet, Grounding DINO, SAM 2) are not in the repo; see [docs/masking.md](docs/masking.md).
+`python perspective_correction.py --doctor` says what is present. Everything
+optional is also installed from inside the program: the **deps** button at the
+bottom right lists only what is missing and installs what you tick.
+
+**Sizes** (measured 2026-10-24 on Windows, Python 3.12). The program itself is
+small; almost everything is the optional AI parts, and most of that is torch:
+
+| part | on disk | needed for |
+|---|---|---|
+| **the program** | **14 MB** | everything (includes the M-LSD model, fonts and 4 test photos) |
+| numpy, OpenCV, Pillow, piexif | 190 MB | everything |
+| tkinterdnd2 | 3 MB | drag photos onto the window |
+| ai-edge-litert | 59 MB | the mlsd detector |
+| torch | 0.25–0.7 GB (CPU, macOS) · 3.1 GB (Windows CUDA) | lama, GeoCalib, SAM |
+| lama + its weights | 206 MB | the good fill for the empty corners (telea fills without it) |
+| GeoCalib + its weights | 117 MB | a better focal guess for photos without EXIF |
+| SAM 2.1 small + transformers | 306 MB | box select (`s`) |
+
+With all of it on Windows that is about 4 GB, of which the program is under
+0.5 %; without the optional parts it is about 7 %.
 
 Screen: made for **1920×1080** or larger. Smaller screens (or display scaling)
 still fit, down to 1366×768, with smaller pictures.

@@ -39,6 +39,7 @@ models/GroundingDINO/
 models/sam2/
 models/sam3/
 models/geocalib/
+models/sam2.1-hiera-small/
 
 # model weights are fetched on demand, never committed
 models/*.pt
