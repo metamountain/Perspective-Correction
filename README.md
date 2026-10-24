@@ -1,6 +1,6 @@
 # Perspective Correction
 
-![The Barcelona Pavilion before and after a vertical correction: on the left the frame is tilted, the roofline sloping down to the right; on the right it is levelled and the building's verticals are plumb.](docs/vertical-correction.jpg)
+![The review window in Auto mode: the tilted Barcelona Pavilion on the left with its detected lines, the levelled correction on the right with the photograph's own border (outline) drawn in yellow.](docs/example_auto.jpg)
 
 Straightens architectural photographs. Two modes:
 
@@ -13,9 +13,7 @@ You review one photograph at a time and nothing is written until **Save**.
 
 ## Horizontal auto: frontal facades from oblique shots
 
-![Panel houses in Mariánské Hory shot at a steep angle, before and after Horizontal auto. On the left the pink block recedes to the left; on the right it faces the camera, windows in level rows and plumb columns.](docs/horizontal-auto.jpg)
-
-<sup>Mariánské Hory, panelové domy — [Wikimedia Commons](https://commons.wikimedia.org/wiki/File:Mari%C3%A1nsk%C3%A9_Hory,_panelov%C3%A9_domy_4.jpg), Lukáš Mižoch, CC BY-SA 2.5. Yaw 59.6°, facade strip on the pink wall, lama fill.</sup>
+![The review window in Horizontal auto: the obliquely shot Bauhaus Dessau facade on the left with its detected lines, the frontal correction on the right with the photograph's own border (outline) drawn in yellow.](docs/example_ha.jpg)
 
 This mode is for **facade textures for 3D**, **Google Street View grabs**,
 elevation tracing, or any wall you could only photograph from the side. The wall
