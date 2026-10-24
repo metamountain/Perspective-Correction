@@ -1344,3 +1344,47 @@ def test_horizontal_auto_warps_without_a_facade_strip():
     assert np.median(leans) < 0.3, f"verticals lean {np.median(leans):.2f} deg"
     s.add_control_line(100, 100, 800, 100, kind="h")
     assert not s._rectify_active(), "a drawn line is the user's instruction"
+
+
+def test_the_overlay_keeps_showing_the_inliers_while_a_mask_drops_lines():
+    """Found by the OpenCode review (2026-10-24), measured on Alte_Scheune:
+    300 of 390 verticals shown as inliers, then 0 once a mask took a fifth of
+    the frame -- the fit saw a shorter pool and its answer was thrown away."""
+    s, sc = _session()
+    shown = int(s.model.vert_inliers.sum())
+    assert shown > 10
+    ign = np.zeros((s.h, s.w), bool)
+    ign[:, : s.w // 5] = True
+    s.apply_sam_mask(ign)
+    from pc.review import _touch_keep
+    pool = s.vert.subset(s.enabled)
+    keep = _touch_keep(pool, s.ignore_mask("v"))
+    assert keep is not None and not keep.all(), "the mask must drop lines here"
+    inl = s.model.vert_inliers
+    assert len(inl) == len(s.vert)
+    assert inl.sum() > 0.5 * shown, f"{int(inl.sum())} of {shown} inliers left"
+    dropped = np.flatnonzero(s.enabled)[~keep]
+    assert not inl[dropped].any(), "a line the fit never saw cannot be its inlier"
+
+
+def test_a_yaw_past_its_cap_says_the_correction_hit_the_limit():
+    """`current_angles` built `clamped` without the yaw, so a yaw-only breach
+    was capped silently (OpenCode review, 2026-10-24)."""
+    s, sc = _session(yaw_deg=25)
+    s.settings = s.settings.replace(correct_horizontal=True, max_horizontal_deg=5.0)
+    s.refit()
+    assert abs(math.degrees(s.model.yaw)) > 5.0, "the scene must carry a yaw"
+    r, p, _f, _c = s.current_angles()
+    assert abs(math.degrees(r)) < s.settings.max_roll_deg
+    assert abs(math.degrees(p)) < s.settings.max_pitch_deg
+    assert s.current_angles()[3], "a capped yaw is a clamp"
+    assert "correction hit the configured limit" in s.status_text()
+
+
+def test_the_size_note_names_the_size_the_save_writes():
+    """size_note planned without save's keep_size/keep_centre: on Platte_1 it
+    said 3726x2366 while the save wrote 2883x1831."""
+    s, sc = _session(yaw_deg=30)
+    s.settings = s.settings.replace(correct_horizontal=True)
+    s.refit()
+    assert s.planned_size() == s.output_size()

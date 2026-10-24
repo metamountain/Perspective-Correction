@@ -100,3 +100,54 @@ def test_availability_names_the_two_halves_separately():
     assert S.available(python_exe="definitely_not_a_python", ckpt=__file__) is False
     assert S.available(python_exe=__file__, ckpt="definitely_not_a_checkpoint") is False
     assert S.available(python_exe=__file__, ckpt=__file__) is True
+
+
+def _stub_sam2(folder):
+    """torch, hydra and sam2 as stand-ins the child can import: the predictor
+    selects the left half.  They go beside the child script, which Python puts
+    first on the child's path."""
+    files = {
+        "torch/__init__.py": "class cuda:\n    @staticmethod\n    def is_available():\n        return False\n",
+        "hydra/__init__.py": "def initialize_config_dir(config_dir=None, version_base=None):\n    pass\n",
+        "hydra/core/__init__.py": "",
+        "hydra/core/global_hydra.py": (
+            "class GlobalHydra:\n    @staticmethod\n    def instance():\n"
+            "        return GlobalHydra()\n    def clear(self):\n        pass\n"),
+        "sam2/__init__.py": "",
+        "sam2/build_sam.py": "def build_sam2(name, ckpt, device=None):\n    return object()\n",
+        "sam2/sam2_image_predictor.py": (
+            "import numpy as np\n"
+            "class SAM2ImagePredictor:\n"
+            "    def __init__(self, model):\n        pass\n"
+            "    def set_image(self, rgb):\n        self.shape = rgb.shape[:2]\n"
+            "    def predict(self, **kw):\n"
+            "        m = np.zeros((1,) + self.shape, bool)\n"
+            "        m[:, :, : self.shape[1] // 2] = True\n"
+            "        return m, np.ones(1), None\n"),
+    }
+    for rel, text in files.items():
+        p = os.path.join(folder, *rel.split("/"))
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p, "w", encoding="utf-8") as fh:
+            fh.write(text)
+
+
+def test_the_child_reads_and_writes_a_photograph_with_an_umlaut_in_its_name():
+    """The child opened the photograph with cv2.imread and wrote the mask with
+    cv2.imwrite; on Windows both fail on a non-ASCII path, so SAM2 failed on
+    every such photograph (OpenCode review, 2026-10-24).  Runs the real child
+    script in this interpreter against stand-in packages."""
+    import sys
+    tmp = tempfile.mkdtemp()
+    src = os.path.join(tmp, "Fassade_Größe.jpg")
+    cv2.imencode(".jpg", np.full((60, 80, 3), 128, np.uint8))[1].tofile(src)
+    out_dir = os.path.join(tmp, "sam2_masks")
+    os.makedirs(out_dir)
+    _stub_sam2(out_dir)
+    ckpt = os.path.join(tmp, "sam2.1_hiera_base_plus.pt")
+    open(ckpt, "wb").close()
+    png = S.run_subprocess(src, (5, 5, 70, 50), [], python_exe=sys.executable,
+                           out_dir=out_dir, ckpt=ckpt, cfgdir=tmp, timeout=120)
+    ignore = S.load_mask_png(png, (60, 80))
+    assert ignore.shape == (60, 80)
+    assert not ignore[:, :40].any() and ignore[:, 40:].all(), "left half selected"

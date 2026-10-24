@@ -176,6 +176,12 @@ def main(argv=None):
     done, missed = [], []
     for label, args in steps:
         say(f"\n== optional: {label}")
+        if args == LAMA[1] and TORCH[0] in missed:
+            # The in-app button skips it the same way: lama installs fine
+            # with --no-deps and then cannot run, and the summary called it ok.
+            say("skipped: lama cannot run without torch")
+            missed.append(label)
+            continue
         if pip(py, args):
             done.append(label)
         else:

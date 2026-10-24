@@ -106,3 +106,31 @@ def test_pip_runs_with_the_console_twin_of_pythonw():
             open(os.path.join(d, n), "w").close()
         assert DI.pip_python(os.path.join(d, "pythonw.exe")) == os.path.join(d, "python.exe")
         assert DI.pip_python(os.path.join(d, "python.exe")) == os.path.join(d, "python.exe")
+
+
+def test_the_installer_does_not_call_lama_ok_when_torch_failed():
+    """`tools/install_deps.py --lama` installed lama with --no-deps after torch
+    had failed and listed it as "optional ok" -- a component that cannot run
+    (OpenCode review, 2026-10-24).  The in-app button already skipped it."""
+    import importlib.util
+    import types
+    here = os.path.dirname(os.path.abspath(__file__))
+    spec = importlib.util.spec_from_file_location(
+        "install_deps_probe", os.path.join(here, "..", "tools", "install_deps.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    said, asked = [], []
+    mod.say = lambda msg="": said.append(msg)
+    mod.MAC, mod.WIN = False, True              # the running Python, no venv
+    mod.tk_problem = lambda: None
+    mod.has_module = lambda py, name: False
+    mod.subprocess = types.SimpleNamespace(call=lambda *a, **k: 0)
+
+    def pip(py, args):
+        asked.append(list(args))
+        return args != mod.TORCH[1]
+    mod.pip = pip
+    assert mod.main(["--lama"]) == 0
+    assert mod.LAMA[1] not in asked, "pip was asked for a lama that cannot run"
+    assert f"optional ok:      {mod.LAMA[0]}" not in said
+    assert any(mod.LAMA[0] in s and "MISSING" in s for s in said), said[-6:]

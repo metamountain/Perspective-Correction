@@ -47,17 +47,27 @@ def _drop_touching(ls, mask):
     operation for both pools and both kinds of line, and the point of the layer
     registry is that there is exactly one of it.
     """
+    keep = _touch_keep(ls, mask)
+    return ls if keep is None else ls.subset(keep)
+
+
+def _touch_keep(ls, mask):
+    """Which segments of ``ls`` survive ``mask``, or ``None`` when all do.
+
+    Split out of `_drop_touching` so refit can tell which of its lines the fit
+    actually saw: the inlier overlay maps the fit's answer back by position.
+    """
     if mask is None or ls is None or not len(ls.seg):
-        return ls
+        return None
     keep = MK.untouched(ls.seg, mask)
     if keep.all():
-        return ls
+        return None
     if not keep.any():
         # A mask that swallows a whole pool is a user error, not a fit: keeping
         # nothing would make the estimator answer from noise. Say nothing and
         # keep the pool -- refit's own floors then decide.
-        return ls
-    return ls.subset(keep)
+        return None
+    return keep
 
 
 class ReviewSession:
@@ -371,8 +381,15 @@ class ReviewSession:
         # already applies to the confidence gate -- refusing evidence for being
         # scarce is right for a detector and wrong for a person.
         # (2026-09-20, user: "maske und marker sollten sich vertragen".)
+        # Positions in self.vert of the lines the fit sees, so its inliers can
+        # be mapped back.  The mask used to drop lines without this, the
+        # lengths no longer matched, and with any mask on the overlay showed
+        # no inlier at all (Alte_Scheune: 300 of 390, then 0).
+        vidx = None if drew_v else np.flatnonzero(self.enabled)
         if not drew_v:
-            vert = _drop_touching(vert, self.ignore_mask("v"))
+            keep = _touch_keep(vert, self.ignore_mask("v"))
+            if keep is not None:
+                vert, vidx = vert.subset(keep), vidx[keep]
         if not drew_h:
             horiz = _drop_touching(horiz, self.ignore_mask("h"))
         exif_px = IO.focal_px_from_exif(self.src, self.w, self.h) \
@@ -394,10 +411,10 @@ class ReviewSession:
         # map the inlier mask back onto the full line list, so the overlay can
         # distinguish "not an inlier" from "struck out by the user"
         full = np.zeros(len(self.vert), dtype=bool)
-        if (not self.control_active
+        if (not self.control_active and vidx is not None
                 and m.vert_inliers is not None
-                and len(m.vert_inliers) == int(self.enabled.sum())):
-            full[np.flatnonzero(self.enabled)] = m.vert_inliers
+                and len(m.vert_inliers) == len(vidx)):
+            full[vidx] = m.vert_inliers
         m.vert_inliers = full
         self.model = m
         if self.mode == AUTO:
@@ -1068,8 +1085,11 @@ class ReviewSession:
             return 0.0, 0.0, M.focal_px_from_35mm(self.settings.default_focal_35mm,
                                                   self.w, self.h), False
         guessed = self.model.f_source in ("default", "prior", "none", "refined")
+        # The yaw goes in too, or `clamped` cannot see a yaw past its cap and
+        # the status never says the correction hit the limit (current_yaw caps
+        # it either way).
         roll, pitch, _yaw, clamped = W.limit(self.model.roll, self.model.pitch,
-                                             self.settings,
+                                             self.settings, yaw=self.model.yaw,
                                              focal_is_a_guess=guessed)
         return roll, pitch, self.model.f, clamped
 
@@ -1697,19 +1717,18 @@ class ReviewSession:
 
         Geometry only -- `warp.plan` works on the quad, never on the pixels --
         so it is cheap enough to ask on every status refresh.
+
+        It is `output_size`, the size save writes.  It used to plan on its own
+        without save's ``keep_size`` and ``keep_centre`` and told the status
+        line "saved size 3726x2366" on Platte_1 while the save wrote 2883x1831.
         """
-        roll, pitch, f, _clamped = self.current_angles()
-        yaw = self.current_yaw()
-        if not f or (abs(roll) < 1e-9 and abs(pitch) < 1e-9 and abs(yaw) < 1e-9):
-            return None
-        H = self._build_H(self.w, self.h, f, roll, pitch, yaw,
-                    max_area=self.settings.max_area_ratio)
-        planned = W.plan(self.w, self.h, H, self.settings,
-                         line_segs=self._plan_segs(self.w),
-                         yaw=yaw, strip=self.strip)
-        if planned is None:
-            return None
-        return int(planned[1]), int(planned[2])
+        if self.active_quad() is None:
+            roll, pitch, f, _clamped = self.current_angles()
+            yaw = self.current_yaw()
+            if not f or (abs(roll) < 1e-9 and abs(pitch) < 1e-9
+                         and abs(yaw) < 1e-9):
+                return None
+        return self.output_size()
 
     def size_note(self):
         """A warning when the saved frame would be much larger than the source.

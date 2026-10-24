@@ -2166,6 +2166,8 @@ class ReviewPanel(tk.Frame):
         va = getattr(self, "v_alpha", None)
         if va is not None:
             va.set(self.v_mask_alpha.get())
+        if self.session is None:
+            return
         self.session.mask_alpha = float(self.v_mask_alpha.get())
         # Throttled: a full re-warp per slider tick is the lag.  The existing
         # _schedule_redraw already coalesces to one redraw per event-loop turn.
@@ -2329,6 +2331,8 @@ class ReviewPanel(tk.Frame):
     def _apply_fill(self):
         """The session owns the settings the save reads; the window only shows
         them.  Writing ``self.settings`` here made the whole control a no-op."""
+        if self.session is None:
+            return
         self.session.settings = self.session.settings.replace(
             fill=self.v_fill.get(),
             live_fill_preview=bool(getattr(self, "v_livefill", None)
@@ -2375,6 +2379,8 @@ class ReviewPanel(tk.Frame):
         A mask the user cannot see is a mask the user cannot trust: when a
         segmenter takes out the wrong half of a building, the only other symptom
         is a quietly worse answer."""
+        if self.session is None:
+            return
         self.session.show_mask = bool(self.v_show_mask.get())
         self._schedule_redraw()
 
@@ -2489,6 +2495,8 @@ class ReviewPanel(tk.Frame):
         self._autocrop_follow()
 
     def _on_slider(self):
+        if self.session is None:
+            return
         self.session.set_manual(roll_deg=self.v_roll.get(), pitch_deg=self.v_pitch.get(),
                                 focal_35mm=self.v_focal.get(), yaw_deg=self.v_yaw.get())
         self._schedule_redraw()
@@ -2501,10 +2509,14 @@ class ReviewPanel(tk.Frame):
         the found angles back after a mis-dragged slider is the common case and
         should not cost all of that.
         """
+        if self.session is None:
+            return
         self.session.use_auto_angles()
         self._sync_from_session()
 
     def _reset(self):
+        if self.session is None:
+            return
         self.session.reset_to_auto()
         self._sync_from_session()
 
@@ -3102,12 +3114,15 @@ class ReviewPanel(tk.Frame):
         # exists before a photograph is open -- so the empty case is reachable.
         if self.session is None:
             return
-        if self.session.clear_control_lines() or \
-                self.session.clear_control_lines(kind="h"):
+        # Both kinds, always: `a() or b()` stopped at the first that removed
+        # something and left every horizontal line behind a vertical one.
+        had_v = self.session.clear_control_lines()
+        had_h = self.session.clear_control_lines(kind="h")
+        if had_v or had_h:
             self._sync_from_session()
 
     def _clear_crop(self):
-        if self.session.clear_crop_rect():
+        if self.session is not None and self.session.clear_crop_rect():
             self._refresh_crop()
 
     def _auto_crop(self):
@@ -3818,6 +3833,11 @@ class ReviewPanel(tk.Frame):
             self._on_stroke_drag(event)
 
     def _on_before_b1release(self, event):
+        # A Shift+drag pen sizing whose Shift came up before the button ends
+        # here, not in `_on_shift_release`; a kept anchor then swallowed the
+        # next right-drag erase (OpenCode review, 2026-10-24).
+        if getattr(self, "_pen_anchor", None) is not None:
+            return self._on_pen_size_end(event)
         if getattr(self, "v_sam", None) is not None and self.v_sam.get():
             self._on_sam_release(event)
             return

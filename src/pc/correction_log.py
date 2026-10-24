@@ -180,9 +180,22 @@ def write_lines(folder: str, stem: str, before: dict, after: dict) -> str:
 
 
 def write_record(folder: str, stem: str, record: dict):
-    """Write (or overwrite) the per-image JSON sidecar."""
+    """Write (or overwrite) the per-image JSON sidecar.
+
+    A strip already remembered for this photograph (`remember_strip`) stays
+    when this run had none: a later CLI run without ``--strip`` used to wipe
+    the facade strip drawn on it, which `remember_strip` promises survives.
+    """
     os.makedirs(folder, exist_ok=True)
     path = os.path.join(folder, f"{stem}.json")
+    if record.get("strip") is None and os.path.isfile(path):
+        try:
+            with open(path, encoding="utf-8") as fh:
+                kept = json.load(fh).get("strip")
+        except (OSError, ValueError, AttributeError):
+            kept = None
+        if kept:
+            record = dict(record, strip=kept)
     with open(path, "w", encoding="utf-8") as fh:
         json.dump(record, fh, indent=2, default=str)
 

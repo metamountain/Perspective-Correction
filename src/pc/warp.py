@@ -1218,6 +1218,7 @@ def apply_undistorted(img: np.ndarray, H_total: np.ndarray, out_w: int, out_h: i
     ones = np.ones_like(xs)
     pts = np.stack([xs.ravel(), ys.ravel(), ones.ravel()], axis=0).astype(np.float64)
     src_pts = H_inv @ pts
+    front = (src_pts[2] > 1e-12).reshape(out_h, out_w)
     src_pts /= src_pts[2:3, :]
     sx = src_pts[0].reshape(out_h, out_w)
     sy = src_pts[1].reshape(out_h, out_w)
@@ -1228,6 +1229,14 @@ def apply_undistorted(img: np.ndarray, H_total: np.ndarray, out_w: int, out_h: i
 
     composed_x = _sample_map(map_x, sx_c, sy_c)
     composed_y = _sample_map(map_y, sx_c, sy_c)
+    # The clip above is only for the map lookup.  A pixel with no source
+    # behind it must stay outside the image, or remap never reaches its
+    # border and `pad` (black, a colour) came out as smeared edge instead.
+    # `edge` keeps the clipped lookup: that IS the nearest edge pixel.
+    if colour is not None:
+        outside = ~front | (sx < 0) | (sx > sw - 1) | (sy < 0) | (sy > sh - 1)
+        composed_x[outside] = -16.0       # past any interpolation kernel
+        composed_y[outside] = -16.0
 
     border = cv2.BORDER_CONSTANT if colour is not None else cv2.BORDER_REPLICATE
     bval = colour if colour is not None else 0

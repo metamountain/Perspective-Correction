@@ -150,3 +150,19 @@ def test_lean_stats_weights_by_length_so_short_edges_cannot_outvote_long_ones():
     s = CLOG._lean_stats(np.array([seg(1151, 0.0), seg(1330, 0.4),
                                    seg(164, 27.2), seg(110, 27.9)]))
     assert abs(s["horizontal_slope_median_deg"]) < 1.0
+
+
+def test_a_correction_run_without_a_strip_keeps_the_one_drawn_on_the_photo():
+    """`remember_strip` promises a hand-placed strip survives a later run;
+    `write_record` replaced the file and wrote ``strip: null`` (OpenCode
+    review, 2026-10-24)."""
+    d = tempfile.mkdtemp()
+    CLOG.remember_strip(d, "x", (0.3, 0.7))
+    CLOG.write_record(d, "x", {"file": "x.jpg", "status": "OK", "strip": None})
+    with open(os.path.join(d, "x.json"), encoding="utf-8") as fh:
+        rec = json.load(fh)
+    assert rec["strip"] == [0.3, 0.7]
+    assert rec["status"] == "OK"
+    CLOG.write_record(d, "x", {"file": "x.jpg", "status": "OK", "strip": [0.1, 0.4]})
+    with open(os.path.join(d, "x.json"), encoding="utf-8") as fh:
+        assert json.load(fh)["strip"] == [0.1, 0.4], "a run's own strip wins"

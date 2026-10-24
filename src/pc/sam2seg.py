@@ -117,7 +117,9 @@ try:
     from sam2.sam2_image_predictor import SAM2ImagePredictor
 
     dev = DEVICE or ("cuda" if torch.cuda.is_available() else "cpu")
-    img = cv2.imread(IMAGE, cv2.IMREAD_COLOR)
+    # np.fromfile + imdecode, not cv2.imread: cv2's own file IO cannot open a
+    # non-ASCII path on Windows (an umlaut in the name was "cannot read").
+    img = cv2.imdecode(np.fromfile(IMAGE, dtype=np.uint8), cv2.IMREAD_COLOR)
     if img is None:
         raise RuntimeError("cannot read " + IMAGE)
     rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
@@ -154,7 +156,10 @@ try:
                           interpolation=cv2.INTER_NEAREST).astype(bool)
     # white = selected (the building); the parent inverts to its ignore
     # convention when it reads the PNG back
-    cv2.imwrite(OUT, (mask * 255).astype(np.uint8))
+    ok, png = cv2.imencode(".png", (mask * 255).astype(np.uint8))
+    if not ok:
+        raise RuntimeError("cannot encode the mask")
+    png.tofile(OUT)
     print("OK " + OUT)
 except Exception:
     traceback.print_exc()

@@ -475,3 +475,26 @@ def test_a_pitch_correction_keeps_the_motif_at_full_resolution():
     assert ow2 <= ow * W.NEAR_EDGE_MAX_SCALE + 1
     # Already at full resolution: left alone.
     assert W.keep_centre(Ht2, ow2, oh2, w, h, segs)[1:] == (ow2, oh2)
+
+
+def test_the_undistorted_render_honours_the_pad_colour():
+    """`apply_undistorted` clipped every lookup into the image, so remap never
+    reached its border and pad=black came out as smeared edge (OpenCode
+    review, 2026-10-24).  With an identity undistortion map it must render
+    exactly what the plain path renders."""
+    import numpy as np
+    from pc.config import Settings
+    rng = np.random.default_rng(3)
+    img = rng.integers(40, 220, (60, 80, 3), dtype=np.uint8)
+    ys, xs = np.mgrid[0:60, 0:80].astype(np.float32)
+    H = np.array([[1.0, 0.0, 20.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]])
+    for pad in ("black", "#ff0000"):
+        st = Settings().replace(pad=pad, interpolation="linear")
+        plain = W.apply(img, H, 100, 60, st)
+        und = W.apply_undistorted(img, H, 100, 60, st, (xs, ys))
+        colour = np.array(W.pad_colour(pad), np.uint8)
+        assert (und[:, :19] == colour).all(), f"{pad}: the band left of the photo"
+        assert np.abs(und.astype(int) - plain.astype(int)).max() <= 1, pad
+    st = Settings().replace(pad="edge", interpolation="linear")
+    und = W.apply_undistorted(img, H, 100, 60, st, (xs, ys))
+    assert (und[:, :19] == img[:, :1]).all(), "edge still extends the nearest edge"

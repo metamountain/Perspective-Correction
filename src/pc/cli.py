@@ -63,6 +63,31 @@ def destination(src, args, roots):
     return os.path.join(args.output, rel, name)
 
 
+def unique_destination(dst, taken, args, log):
+    """``dst``, or ``dst`` with ``-2``, ``-3``... when an earlier photograph of
+    this run already writes there.
+
+    Two inputs with the same name -- ``A/img.jpg`` and ``B/img.jpg`` with
+    ``-o out`` -- both mapped to ``out/img_corr.jpg``, and the second silently
+    replaced the first (in parallel, both wrote it at once).  ``--overwrite``
+    writes each source onto itself, so it cannot collide.
+    """
+    if args.overwrite:
+        return dst
+    key = os.path.normcase(os.path.abspath(dst))
+    if key in taken:
+        stem, ext = os.path.splitext(dst)
+        n = 2
+        while os.path.normcase(os.path.abspath(f"{stem}-{n}{ext}")) in taken:
+            n += 1
+        new = f"{stem}-{n}{ext}"
+        log(f"# {os.path.basename(dst)} is already written by an earlier photograph "
+            f"of this run; this one goes to {os.path.basename(new)}")
+        dst, key = new, os.path.normcase(os.path.abspath(new))
+    taken.add(key)
+    return dst
+
+
 def build_parser():
     p = argparse.ArgumentParser(
         prog="perspective_correction", formatter_class=argparse.ArgumentDefaultsHelpFormatter,
@@ -393,7 +418,8 @@ def _hpc_save(results, settings, log):
         lines_before = lines_after = None
         try:
             src_loaded = io.load(r.src)
-            before = measure_horizontals(src_loaded.bgr, settings, _focal_px(r))
+            before = measure_horizontals(src_loaded.bgr, settings,
+                                         _focal_px(r, src_loaded.bgr.shape))
             lines_before = CLOG.line_records(src_loaded.bgr, settings)
             before["lines"] = CLOG.line_summary(lines_before)
         except Exception:
@@ -404,7 +430,7 @@ def _hpc_save(results, settings, log):
             out_bgr = _imread(r.dst, cv2.IMREAD_COLOR)
             if out_bgr is None:
                 raise ValueError("unreadable")
-            after = measure_horizontals(out_bgr, settings, _focal_px(r))
+            after = measure_horizontals(out_bgr, settings, _focal_px(r, out_bgr.shape))
             lines_after = CLOG.line_records(out_bgr, settings)
             after["lines"] = CLOG.line_summary(lines_after)
         except Exception:
@@ -418,10 +444,15 @@ def _hpc_save(results, settings, log):
         log(f"# correction_log: {ok_count} record(s) written to {folder}/")
 
 
-def _focal_px(r):
-    """Recover the focal length in pixels from a Result (full-res)."""
+def _focal_px(r, shape):
+    """The focal length in pixels of an image of ``shape`` (h, w, ...).
+
+    ``focal_35mm`` is a property of the lens, so the pixel focal follows the
+    image it is applied to.  It used to come from ``out_size`` for both, which
+    gave the SOURCE measurement the output's scale (OpenCode review).
+    """
     import math as _m
-    w, h = r.out_size or (0, 0)
+    h, w = shape[:2]
     if not w or not h:
         return None
     f35 = r.focal_35mm
@@ -720,8 +751,9 @@ def main(argv=None) -> int:
 
     jobs = []
     skipped_existing = 0
+    taken = set()
     for src in files:
-        dst = destination(src, args, roots)
+        dst = unique_destination(destination(src, args, roots), taken, args, log)
         if args.skip_existing and not args.overwrite and os.path.exists(dst):
             skipped_existing += 1
             continue

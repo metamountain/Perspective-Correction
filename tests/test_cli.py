@@ -157,3 +157,50 @@ def test_the_default_fill_steps_down_to_telea_when_lama_is_missing():
     finally:
         inpaint.available = real
         shutil.rmtree(d, ignore_errors=True)
+
+
+def test_two_inputs_with_the_same_name_never_write_the_same_file():
+    """``A/img.jpg B/img.jpg -o out`` mapped both to ``out/img_corr.jpg`` and
+    the second replaced the first, with exit 0 (OpenCode review, 2026-10-24)."""
+    import os
+    import shutil
+    import tempfile
+    import types
+    from pc.pipeline import OK
+
+    tmp = tempfile.mkdtemp()
+    try:
+        for d in ("A", "B"):
+            os.makedirs(os.path.join(tmp, d))
+            open(os.path.join(tmp, d, "img.jpg"), "wb").close()
+        dsts = []
+
+        def fake_process(src, dst, settings, debug_dir=None, dry_run=False, strip=None):
+            dsts.append(dst)
+            return types.SimpleNamespace(status=OK, line=lambda: "ok", src=src, dst=dst)
+
+        real = cli.process
+        cli.process = fake_process
+        try:
+            out = os.path.join(tmp, "out")
+            cli.main([os.path.join(tmp, "A"), os.path.join(tmp, "B"), "-o", out,
+                      "-j", "1", "-q", "--fill", "none"])
+        finally:
+            cli.process = real
+        assert len(dsts) == 2
+        assert len({os.path.normcase(d) for d in dsts}) == 2, dsts
+        assert os.path.basename(dsts[0]) == "img_corr.jpg"
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def test_the_pixel_focal_follows_the_image_it_is_measured_on():
+    """The before measurement used the OUTPUT size's pixel focal on the source
+    (OpenCode review, 2026-10-24)."""
+    import math
+    import types
+    r = types.SimpleNamespace(focal_35mm=28.0, out_size=(3000, 2000))
+    f_src = cli._focal_px(r, (3000, 4000, 3))
+    assert abs(f_src - 28.0 * 5000 / math.hypot(36, 24)) < 1e-6
+    assert abs(cli._focal_px(r, (2000, 3000)) - 28.0 * math.hypot(3000, 2000)
+               / math.hypot(36, 24)) < 1e-6

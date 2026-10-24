@@ -1461,6 +1461,12 @@ def test_sizing_the_pen_does_not_cripple_the_next_erase():
         assert r._pen_anchor is None, (
             "the sizing drag must forget its anchor on release -- while it is "
             "set, `_on_erase_motion` bails out and erasing loses its stroke")
+        # Krita's Shift+drag with Shift let go before the button: the release
+        # arrives as a plain <ButtonRelease-1> (OpenCode review, 2026-10-24).
+        r._on_shift_press(ev(200, 200))
+        r._on_shift_motion(ev(260, 200))
+        r._on_before_b1release(ev(260, 200))
+        assert r._pen_anchor is None, "a plain release must end the sizing too"
 
         s.paint = None
         drag(r._on_click_before, r._on_before_b1motion, r._on_before_b1release)
@@ -2359,4 +2365,44 @@ def test_lama_on_the_cpu_switches_the_live_preview_off_once_and_says_so():
         assert r.v_livefill.get(), "switched off a second time"
     finally:
         FILL.lama_device, G._CPU_LIVE_TOLD = saved
+        app.destroy()
+
+
+def test_the_controls_do_nothing_before_a_photograph_is_open():
+    """The strip and the mask row are built before any photograph; seven of
+    their handlers raised AttributeError on `session is None` (OpenCode
+    review, 2026-10-24)."""
+    app = _app()
+    errors = []
+    app.report_callback_exception = lambda e, v, tb: errors.append(f"{e.__name__}: {v}")
+    try:
+        app.geometry("1600x1000-4000+0")
+        app.update_idletasks(); app.update()
+        r = app.review
+        assert r.session is None
+        for name in ("_toggle_mask", "_on_mask_alpha", "_reset", "_use_auto",
+                     "_on_slider", "_apply_fill", "_clear_crop", "_clear_marks"):
+            try:
+                getattr(r, name)()
+            except Exception as exc:
+                errors.append(f"{name}: {type(exc).__name__}: {exc}")
+        _settle(app, 4)
+        assert not errors, errors
+    finally:
+        app.destroy()
+
+
+def test_clear_marks_removes_the_vertical_and_the_horizontal_lines():
+    """`clear(v) or clear(h)` stopped after the verticals (OpenCode review)."""
+    app = _app()
+    try:
+        _loaded(app, 1280, 800)
+        s = app.review.session
+        s.add_control_line(100, 50, 104, 400)
+        s.add_control_line(50, 300, 400, 302, kind="h")
+        assert len(s.control_lines) == 1 and len(s.control_hlines) == 1
+        app.review._clear_marks()
+        assert len(s.control_lines) == 0
+        assert len(s.control_hlines) == 0, "the horizontal line was left behind"
+    finally:
         app.destroy()
