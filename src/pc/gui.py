@@ -781,11 +781,14 @@ def _icon_pil(codepoint, size, colour, emoji=False, mono=False):
     # The shipped Google fonts (fonts/), not Segoe's: those exist on Windows
     # only, may not be redistributed, and crashed the first Mac (2026-10-23).
     try:
-        font = ImageFont.truetype(EMOJI_FONT if emoji else ICON_FONT, size)
+        # The filled emoji is drawn 4x and scaled down, or at key size the
+        # fill runs its arms and tail into one blob.
+        up = 4 if (emoji and mono) else 1
+        font = ImageFont.truetype(EMOJI_FONT if emoji else ICON_FONT, size * up)
     except Exception:
         return None
-    pad = size // 2
-    scratch = Image.new("RGBA", (size + 2 * pad, size + 2 * pad), (0, 0, 0, 0))
+    pad = size * up // 2
+    scratch = Image.new("RGBA", (size * up + 2 * pad, size * up + 2 * pad), (0, 0, 0, 0))
     if emoji and not mono:
         ImageDraw.Draw(scratch).text((pad, pad), ch, font=font, embedded_color=True)
     else:
@@ -794,6 +797,28 @@ def _icon_pil(codepoint, size, colour, emoji=False, mono=False):
         # the one coloured sticker on the bar.  Measured readable: 27x25 of ink
         # at 39 % coverage, a silhouette rather than a blob.
         ImageDraw.Draw(scratch).text((pad, pad), ch, font=font, fill=_hex_rgba(colour))
+        if emoji:
+            # The emoji font draws the dinosaur as an outline, so it read
+            # thinner and paler than the solid marks around it (user,
+            # 2026-10-24: "Grounding Dino falsche Farbe"). Fill what the
+            # outline encloses: everything transparent that the frame's edge
+            # cannot reach.
+            # Its inner detail strokes leave hairline gaps, so the outline is
+            # closed by one pixel before the flood and the fill shrunk back by
+            # the same pixel afterwards; the original strokes are kept.
+            alpha = np.array(scratch.getchannel("A"))
+            k = np.ones((3, 3), np.uint8)
+            reach = cv2.dilate((alpha > 40).astype(np.uint8), k)
+            flood = np.zeros((reach.shape[0] + 2, reach.shape[1] + 2), np.uint8)
+            cv2.floodFill(reach, flood, (0, 0), 2)
+            holes = cv2.erode((reach != 2).astype(np.uint8), k).astype(bool) & (alpha < 255)
+            alpha[holes] = 255
+            px = np.array(scratch)
+            px[holes, :3] = _hex_rgba(colour)[:3]
+            px[..., 3] = alpha
+            scratch = Image.fromarray(px, "RGBA")
+            scratch = scratch.resize((scratch.width // up, scratch.height // up),
+                                     Image.LANCZOS)
     return _fit_ink(scratch, size)
 
 
@@ -1420,13 +1445,11 @@ class ReviewPanel(tk.Frame):
         # that corner -- it does not scroll or rescale with the image.
         # Vertically centred on the field's left edge (user, 2026-10-21:
         # "tools too high up, middle them out").
-        # Split at mid-height with a gap, where the facade strip's handles sit
-        # (`layout.palette_split`): the load keys and the first tool above, the
-        # rest below.
-        _y_up, _y_lo = layout.palette_split()
-        addbar.place(x=8, rely=0.5, y=_y_up, anchor="sw")
-        self._addbar_lo = tk.Frame(self.c_before, bg=INK["field"])
-        self._addbar_lo.place(x=8, rely=0.5, y=_y_lo, anchor="nw")
+        # One unbroken column. It was split at mid-height for the facade
+        # strip's handle (2026-10-23) and the gap read as a missing tool
+        # (user, 2026-10-24: "Loch in tools", "zwischen Paste und Mark Luecke").
+        # The handle dodges the palette instead (`_strip_handle_y`).
+        addbar.place(x=8, rely=0.5, anchor="w")
         # Lines and Mask draw on *this* image, so their switches sit on it --
         # top-right, opposite the add icons, and mirroring the Grid switch on the
         # after pane (2026-09-13, user-directed).  Made once and reused because
@@ -2016,37 +2039,28 @@ class ReviewPanel(tk.Frame):
             return
         mode = self.v_maskmode.get()
         if mode == "file" and not self.session.settings.mask_file:
-            if not self._pick_mask_folder(apply_now=False):
-                self.v_maskmode.set(self.session.settings.mask_mode)
-                return
+            mode = "off"               # the folder picker is gone with its row
+            self.v_maskmode.set(mode)
         if mode in ("birefnet", "gdino") and not self.session.settings.birefnet_model:
-            # The path was typed once and saved to prefs; a fresh photo reloads
-            # with an empty session, so fall back to the stored value before
-            # asking again -- it must be asked exactly once, not per photograph.
-            # Read the App's remembered birefnet model (mode-independent), not
-            # its v_maskpath field, which holds a folder when the batch side sits
-            # in "file" mode; under a test root there is no App, so use prefs.
+            # The model comes from `deps` into models/BiRefNet, or from a path
+            # remembered from earlier; there is no picker any more (user,
+            # 2026-10-24: the mask-source row was for testing only). Missing
+            # weights are said, with where they were looked for -- never a
+            # file dialog nobody asked for.
             app = self._app()
             remembered = getattr(app, "_remembered", {}) if app is not None else {}
-            # The weights vendored in the repo come BEFORE the file dialog.
-            # Without this the window asked the user to go and find a file that
-            # ships with the project, and cancelling that dialog rolled the
-            # combobox back with no message -- which is exactly what "the mask
-            # does nothing" looked like.  `masks.default_birefnet()` is the same
-            # fallback the CLI path uses, so both agree about what "unset" means.
             stored = (remembered.get("birefnet_model", "")
                       or prefs.load().get("birefnet_model", "")
                       or MK.default_birefnet())
             if stored and os.path.isfile(stored):
                 self.session.settings = self.session.settings.replace(
                     birefnet_model=stored)
-            elif not self._pick_birefnet_model(apply_now=False):
-                # Say so.  A control that silently undoes the user's choice is
-                # indistinguishable from one that is broken.
-                self.v_maskmode.set(self.session.settings.mask_mode)
-                self.lbl_mask.configure(
-                    text=f"no BiRefNet weights chosen -- mask source stays "
-                         f"'{self.session.settings.mask_mode}'")
+            else:
+                self.v_maskmode.set("off")
+                if getattr(self, "v_gdino", None) is not None:
+                    self.v_gdino.set(False)
+                self._notify(f"Grounding DINO needs the BiRefNet model -- not found in "
+                             f"{MK.birefnet_home()}. Install it with 'deps' at the bottom right.")
                 return
         if mode == "gdino":
             # the prompt lives in the entry, not the settings, until it is applied
@@ -2082,54 +2096,6 @@ class ReviewPanel(tk.Frame):
         self.lbl_mask.configure(text="")
         self.c_before.delete("sam_prompts")
         self._sync_from_session()
-
-    def _pick_birefnet_model(self, apply_now=True):
-        """Point at BiRefNet weights and say what they are.
-
-        A folder of these holds look-alikes -- HR, lite, matting, 2K variants
-        that run at different resolutions -- and the architecture has to sit
-        beside them, so the choice is described immediately rather than after a
-        failed batch."""
-        if not self.session:
-            return False               # nothing to attach the model to yet
-        from . import birefnet as BN
-        p = filedialog.askopenfilename(
-            title="BiRefNet weights",
-            filetypes=[("BiRefNet weights", "*.safetensors *.pth *.pt"),
-                       ("all files", "*.*")], parent=self)
-        if not p:
-            return False
-        try:
-            BN._arch_dir(p)
-        except BN.BiRefNetUnavailable as exc:
-            # remembering a checkpoint that cannot be loaded is worse than not
-            # remembering one: every later run fails with the same message and
-            # nothing points at the file dialog as the cause
-            messagebox.showerror("BiRefNet model", str(exc))
-            return False
-        self.session.settings = self.session.settings.replace(birefnet_model=p)
-        prefs.save(birefnet_model=p)     # typed once, not once per session
-        self.lbl_mask.configure(text=BN.describe(p))
-        if apply_now:
-            self.v_maskmode.set("birefnet")
-            self._apply_mask()
-        return True
-
-    def _pick_mask_folder(self, apply_now=True):
-        """A folder of one mask per photo is what ``--mask-export`` writes; a
-        single PNG is the hand-painted case."""
-        if not self.session:
-            return False               # nothing to attach the mask to yet
-        d = filedialog.askdirectory(title="folder of mask images (one per photo)",
-                                    parent=self)
-        if not d:
-            return False
-        self.session.settings = self.session.settings.replace(mask_file=d)
-        prefs.save(mask_file=d)
-        if apply_now:
-            self.v_maskmode.set("file")
-            self._apply_mask()
-        return True
 
     def _on_alpha(self):
         if not self.session:
@@ -3738,8 +3704,7 @@ class ReviewPanel(tk.Frame):
         # 2026-10-20: compact, no half-empty areas, sorted by topic -- not
         # arbitrarily):
         #   row 0  LINES      detector | weights | clear marks (2 cells)
-        #   row 1  MASK FROM  source | folder | BiRefNet model | file polarity
-        #   row 2  MASK USE   active | invert all | opacity | clear mask
+        #   row 1  MASK       active | invert all | opacity | clear mask
         g = ttk.Frame(parent)
         g.pack(fill="x")
         for _c, _w in enumerate((0, 2, 2, 2, 2)):
@@ -3749,7 +3714,7 @@ class ReviewPanel(tk.Frame):
             w.grid(row=row, column=col, sticky="nsew")
             return w
 
-        for _r, _t in enumerate(("lines", "mask from", "mask use")):
+        for _r, _t in enumerate(("lines", "mask")):
             put(ttk.Label(g, text=_t, anchor="w", width=9), _r, 0)
 
         # -- row 0: lines --------------------------------------------------
@@ -3772,59 +3737,38 @@ class ReviewPanel(tk.Frame):
         _attach_tooltip(_b, "Remove all manually placed control lines,\n"
                             "vertical and horizontal.")
 
-        # -- row 1: where the mask comes from --------------------------------
+        # -- where the mask comes from: no row any more ---------------------
+        # The source combobox, mask folder, BiRefNet model picker and file
+        # polarity were for testing only (user, 2026-10-24: "mask from file
+        # Zeile soll weg"). The brush, SAM and the Grounding DINO key are the
+        # mask sources; their models come from `deps`. The variables stay,
+        # hidden, because the gdino key and a reload drive them.
         self.v_maskmode = tk.StringVar(value=self.settings.mask_mode)
-        self.cb_maskmode = put(ttk.Combobox(g, textvariable=self.v_maskmode, width=6,
-                                            style="Compact.TCombobox", state="readonly",
-                                            values=["off", "file", "birefnet", "gdino"]), 1, 1)
-        self.cb_maskmode.bind("<<ComboboxSelected>>", lambda e: self._apply_mask())
-        _attach_tooltip(self.cb_maskmode,
-                        "Where the ignore mask comes from.\n"
-                        "off - none.  file - one PNG per photograph.\n"
-                        "birefnet - cut the subject out automatically.\n"
-                        "gdino - say what to find, see the prompt below.\n"
-                        "gdino finds the building by name, then mattes inside "
-                        "that box with BiRefNet - so it needs a BiRefNet model "
-                        "set below, or it refuses.")
-        _b = put(ttk.Button(g, text="mask folder", style="Compact.TButton",
-                            command=self._pick_mask_folder), 1, 2)
-        _attach_tooltip(_b, "Choose the folder containing mask PNG files (one per image)")
-        _b = put(ttk.Button(g, text="BiRefNet model", style="Compact.TButton",
-                            command=self._pick_birefnet_model), 1, 3)
-        _attach_tooltip(_b, "Select the BiRefNet segmentation model to use")
         self.v_maskinv = tk.BooleanVar(value=self.settings.mask_invert)
-        _mi = put(ttk.Checkbutton(g, text="file: white = keep",
-                                  style="Compact.Toolbutton",
-                                  variable=self.v_maskinv, command=self._apply_mask), 1, 4)
-        _attach_tooltip(
-            _mi,
-            "The polarity of a mask PNG loaded from disk.\n"
-            "Off: white marks what to ignore. On: white marks what to keep.\n"
-            "Affects the file mask only -- not the brush, SAM or BiRefNet.")
 
-        # -- row 2: what is done with the mask -------------------------------
+        # -- row 1: what is done with the mask -------------------------------
         if getattr(self, "v_mask_active", None) is None:
             self.v_mask_active = tk.BooleanVar(value=True)
         self.msk_active_cb = put(ttk.Checkbutton(
             g, text="mask active", style="Compact.Toolbutton",
-            variable=self.v_mask_active, command=self._on_mask_active_toggle), 2, 1)
+            variable=self.v_mask_active, command=self._on_mask_active_toggle), 1, 1)
         _attach_tooltip(self.msk_active_cb,
                         "Toggle mask on/off without clearing the painted region")
         self.v_invert = tk.BooleanVar(value=False)
         _cb = put(ttk.Checkbutton(g, text="invert ALL", style="Compact.Toolbutton",
                                   variable=self.v_invert,
-                                  command=self._on_invert_toggle), 2, 2)
+                                  command=self._on_invert_toggle), 1, 2)
         _attach_tooltip(_cb, "Swap it: what is red becomes the part that "
                              "counts, and the rest is ignored.\n"
                              "Applies to every source at once - brush, SAM, "
                              "gdino, BiRefNet and the facade strip together.")
         self.v_alpha = tk.DoubleVar(value=0.28)
-        op = put(ttk.Frame(g), 2, 3)
+        op = put(ttk.Frame(g), 1, 3)
         ttk.Label(op, text="opacity").pack(side="left", padx=(4, 4))
         ttk.Scale(op, from_=0.0, to=1.0, variable=self.v_alpha, orient="horizontal",
                   command=lambda _v: self._on_alpha()).pack(side="left", fill="x", expand=True)
         _b = put(ttk.Button(g, text="Clear Mask", style="Compact.TButton",
-                            command=self._clear_mask), 2, 4)
+                            command=self._clear_mask), 1, 4)
         _attach_tooltip(_b, "Remove the painted mask and the SAM selection,\n"
                             "and give back the lines they struck out.\n"
                             "The mask source above is left as it is.")
@@ -3957,7 +3901,7 @@ class ReviewPanel(tk.Frame):
         for pxf, frac, side in ((px0, x0f, 1), (px1, x1f, -1)):
             self.c_before.create_line(pxf, oy, pxf, oy + ih, fill=OVERLAY["strip"],
                                       width=2, tags="strip_ruler")
-            cy = oy + ih // 2
+            cy = self._strip_handle_y(pxf, oy, ih)
             self.c_before.create_oval(pxf - 7, cy - 7, pxf + 7, cy + 7,
                                       outline=OVERLAY["strip"], width=2, fill=INK["field"],
                                       tags="strip_ruler")
@@ -3966,6 +3910,16 @@ class ReviewPanel(tk.Frame):
                                       fill=OVERLAY["strip"], font=ui_font(8),
                                       anchor="w" if side > 0 else "e",
                                       tags="strip_ruler")
+
+    def _strip_handle_y(self, px, oy, ih):
+        """Canvas y of the handle on the ruler at *px*: mid-height, unless the
+        tool palette sits there (`layout.strip_handle_y`)."""
+        bar = getattr(self, "_addbar", None)
+        box = None
+        if bar is not None and bar.winfo_ismapped():
+            bx, by = bar.winfo_x(), bar.winfo_y()
+            box = (bx, by, bx + bar.winfo_width(), by + bar.winfo_height())
+        return layout.strip_handle_y(px, oy + ih // 2, oy, oy + ih, box)
 
     def _strip_ruler_at(self, x, y=None):
         """Which ROI ruler (0=left, 1=right) sits near the handle, or None.
@@ -3978,9 +3932,9 @@ class ReviewPanel(tk.Frame):
             return None
         ox, oy = self._before_off
         iw, ih = self._ph_b.width(), self._ph_b.height()
-        cy = oy + ih // 2
         for i, f in enumerate(strip):
             px = ox + f * iw
+            cy = self._strip_handle_y(px, oy, ih)
             if abs(x - px) <= 14:
                 if y is None or abs(y - cy) <= 14:
                     return i
@@ -4593,11 +4547,6 @@ class ReviewPanel(tk.Frame):
         #     this outcome: a size tuned in the window is a size no test sees.
         # The accent won, because that is what an accent is for and two keys
         # already used it.
-        # The keys go into the upper block until the first tool is placed,
-        # then into the lower one, so the gap falls at mid-height.
-        lower = getattr(self, "_addbar_lo", None)
-        dest = [bar]
-
         def tool(glyph, var, command, tip, invert=False, lead=False,
                  emoji=False):
             # Inverted is for the mask brush ALONE (2026-09-15, user): it is the
@@ -4605,40 +4554,49 @@ class ReviewPanel(tk.Frame):
             # circle on a light key reads as the brush tip itself.  Inverting
             # the whole palette instead made every tool shout equally, which is
             # no emphasis at all.
-            fg = INK["field"] if invert else INK["dim"]
+            # One look for every key (user, 2026-10-24: "alles soll gleich
+            # aussehen", "lieber weiss wenn aktiv, sonst mittelgrau"): the
+            # glyph is grey at rest and turns white while its tool is held; the
+            # key itself never changes colour. The brush used to be inverted
+            # at rest, so it looked held when it was not. `invert` is kept in
+            # the signature for callers but no longer changes the look.
+            fg, fg_on = INK["dim"], INK["text"]
             # A name draws; a hex codepoint quotes the icon font. The font is
             # still right for anything it says well -- the dinosaur is a pun
             # the user put there and it stays -- but the six tool marks are
             # drawn, because the stock set has no vocabulary for them and
             # borrowing the nearest picture is what put an eyedropper on a
             # building selector.
-            if _DRAWN_GLYPHS and glyph in _DRAWN_GLYPHS:
-                img = _glyph_pil(glyph, layout.tool_glyph(), fg)
-            else:
-                img = _icon_pil(glyph, layout.tool_glyph(), fg,
-                                emoji=emoji, mono=emoji)
-            if img is not None:
+            def render(colour):
+                if _DRAWN_GLYPHS and glyph in _DRAWN_GLYPHS:
+                    return _glyph_pil(glyph, layout.tool_glyph(), colour)
+                return _icon_pil(glyph, layout.tool_glyph(), colour,
+                                 emoji=emoji, mono=emoji)
+            img, img_on = render(fg), render(fg_on)
+            if img is not None and img_on is not None:
                 self._palette_imgs.append(ImageTk.PhotoImage(img))
-            b = tk.Checkbutton(dest[0], variable=var, command=command,
-                               image=(self._palette_imgs[-1] if img is not None else self._palette_blank),
-                               text="" if img is not None else chr(0x25CF), compound="center",
+                self._palette_imgs.append(ImageTk.PhotoImage(img_on))
+                pics = dict(image=self._palette_imgs[-2],
+                            selectimage=self._palette_imgs[-1], text="")
+            else:
+                pics = dict(image=self._palette_blank, text=chr(0x25CF))
+            b = tk.Checkbutton(bar, variable=var, command=command,
+                               compound="center", **pics,
                                indicatoron=False, width=side, height=side,
                                padx=0, pady=0, highlightthickness=0,
                                bd=0, relief="flat",
                                font=ui_font(20), cursor="hand2",
-                               background=INK["text"] if invert else INK["field"],
+                               background=INK["field"],
                                foreground=fg,
-                               activebackground=INK["dim"] if invert else INK["line"],
-                               activeforeground=fg if invert else INK["text"],
-                               selectcolor=INK["dim"] if invert else INK["accent"])
+                               activebackground=INK["line"],
+                               activeforeground=INK["text"],
+                               selectcolor=INK["field"])
             # A double gap above the first tool: the load group and the tool
             # group are different kinds of thing, and one skipped pitch says so
             # without a separator line.
             b.pack(side="top", pady=(gap * 2 if lead else gap, 0))
             _attach_tooltip(b, tip)
             self._palette_btns.append(b)
-            if lead and lower is not None:
-                dest[0] = lower
             return b
 
         _mk_btn = tool("mark", self.v_mark, self._on_mark_toggle,

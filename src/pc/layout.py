@@ -427,16 +427,27 @@ GRID = 4
 # The facade strip's rulers carry their grab handle at the picture's
 # mid-height, which is exactly where the centred tool palette sits: a ruler near
 # the left edge put its handle under the palette, out of reach (user,
-# 2026-10-23: "auf Handle-Hoehe kleine Aussparung"). The palette is split there
-# and leaves this much free: the 14 px handle plus its 14 px grab zone each way
-# fits inside.
-PALETTE_HANDLE_GAP = 8 * GRID
+# 2026-10-23). The palette was split there first, and the gap read as a missing
+# tool (2026-10-24), so the handle dodges instead: below the palette, or above
+# it when below would leave the picture. The 14 px handle's grab zone is 14 px
+# each way; this much is kept clear of a key.
+STRIP_HANDLE_CLEAR = 6 * GRID
 
 
-def palette_split():
-    """``(y_upper, y_lower)``: offsets from the field's mid-height at which the
-    upper palette block ends and the lower one starts."""
-    return -PALETTE_HANDLE_GAP // 2, PALETTE_HANDLE_GAP // 2
+def strip_handle_y(px, mid, top, bottom, bar):
+    """y of a strip ruler's handle at x = *px*.
+
+    *mid* is the picture's mid-height, *top*/*bottom* its edges, *bar* the
+    palette's ``(x0, y0, x1, y1)`` in the same pixels (or None)."""
+    if bar is None:
+        return mid
+    x0, y0, x1, y1 = bar
+    c = STRIP_HANDLE_CLEAR
+    if not (x0 - c <= px <= x1 + c) or not (y0 - c <= mid <= y1 + c):
+        return mid
+    if y1 + c <= bottom - c:
+        return y1 + c
+    return max(top + c, y0 - c)
 
 
 def tool_key(unit=GRID):

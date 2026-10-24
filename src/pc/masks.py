@@ -131,6 +131,12 @@ def default_gdino_dir() -> str:
     return os.path.join(root, "models", "GroundingDINO")
 
 
+def birefnet_home() -> str:
+    """Where `deps` puts the BiRefNet weights and where the window looks."""
+    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    return os.path.join(root, "models", "BiRefNet")
+
+
 def default_birefnet() -> str:
     """The vendored BiRefNet weights, or "" when they are not there.
 
@@ -140,8 +146,7 @@ def default_birefnet() -> str:
     while their weights sat in the repo, unreferenced. An explicit setting
     still wins; this only fills the blank.
     """
-    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    path = os.path.join(root, "models", "BiRefNet", "BiRefNet_lite.safetensors")
+    path = os.path.join(birefnet_home(), "BiRefNet_lite.safetensors")
     return path if os.path.isfile(path) else ""
 
 

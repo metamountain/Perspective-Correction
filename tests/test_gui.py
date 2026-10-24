@@ -997,15 +997,16 @@ def test_dragging_inside_the_crop_pans_it_and_clips_to_the_frame():
 
 
 def test_the_gdino_prompt_field_and_mode_are_reachable():
-    """The gdino mask mode is not a half-feature: the source combobox must offer
-    it and the prompt entry must exist with a sane default, so a user can type a
+    """The gdino mask mode is not a half-feature: its palette key must exist
+    and the prompt must exist with a sane default, so a user can type a
     word and press Enter to re-find the box.  Pinned off-screen -- the 'Tested is
     not reachable' gotcha this file exists to close."""
     app = _app()
     try:
         r = app.review
-        assert "gdino" in list(r.cb_maskmode["values"]), (
-            f"the mask source combobox must offer gdino: {r.cb_maskmode['values']}")
+        assert r._gdino_btn.winfo_exists(), "the Grounding DINO key must exist"
+        assert not hasattr(r, "cb_maskmode"), (
+            "the mask-source row was for testing only and is gone (user, 2026-10-24)")
         assert r.v_gdino_prompt.get() == "building", (
             f"the prompt should default to 'building', got {r.v_gdino_prompt.get()!r}")
     finally:
@@ -1841,10 +1842,16 @@ def test_every_tool_key_is_the_same_size_and_every_glyph_renders():
         assert len(highlights) == 1, (
             "a key carries a different highlight thickness, which Tk adds "
             f"outside the requested width: {sorted(highlights)}")
+        # One look at rest and one when held, for every key (user, 2026-10-24:
+        # "alles soll gleich aussehen, Maske muss nach Aktivierung weiss
+        # werden, nicht vorher"): the brush was light at rest and looked held.
         selects = {str(k.cget("selectcolor")) for k in keys}
-        assert len(selects) <= 2, (
-            "more than two 'held' colours in one palette -- which tool am I "
-            f"holding has to have one answer (the brush inverts, so two): {sorted(selects)}")
+        assert len(selects) == 1, (
+            f"more than one 'held' colour in one palette: {sorted(selects)}")
+        rests = {str(k.cget("background")) for k in keys}
+        assert len(rests) == 1, f"a key looks different at rest: {sorted(rests)}"
+        assert all(str(k.cget("selectimage")) for k in keys), (
+            "every key needs its own held glyph, or a dim glyph sits on the light key")
     finally:
         app.destroy()
 
@@ -2304,9 +2311,12 @@ def test_lines_and_rectangle_never_share_the_picture():
 
 def test_the_strip_handle_is_never_under_the_tool_palette():
     """User, 2026-10-23: the facade strip's ruler near the left edge put its
-    grab handle (mid-height) under the centred tool palette, out of reach --
-    "auf Handle-Hoehe kleine Aussparung". The palette is split there; the
-    handle of a ruler at 2.5 % must fall in the gap, not on a key."""
+    grab handle (mid-height) under the centred tool palette, out of reach.
+    The palette was split there, and the gap read as a missing tool
+    (2026-10-24: "Loch in tools"). Now the palette is one column with no gap
+    wider than the one between the load keys and the tools, and the handle of
+    a ruler at 2.5 % dodges it -- while a ruler in the open stays at
+    mid-height."""
     app = _app()
     try:
         _loaded(app, 1920, 1200)
@@ -2318,11 +2328,19 @@ def test_the_strip_handle_is_never_under_the_tool_palette():
         _settle(app)
         ox, oy = r._before_off
         iw, ih = r._ph_b.width(), r._ph_b.height()
-        hx, hy = ox + 0.025 * iw, oy + ih // 2
+        hx = ox + 0.025 * iw
+        hy = r._strip_handle_y(hx, oy, ih)
         assert r._strip_ruler_at(hx, hy) == 0
-        keys = [w for w in r._palette_btns + [r.add_btn, r.add_folder_btn, r.add_paste_btn]
+        assert r._strip_ruler_at(hx, oy + ih // 2) is None,             "the handle must not be grabbed under the palette"
+        rx = ox + 0.60 * iw
+        assert r._strip_handle_y(rx, oy, ih) == oy + ih // 2,             "a ruler away from the palette keeps its handle at mid-height"
+        keys = [w for w in [r.add_btn, r.add_folder_btn, r.add_paste_btn] + r._palette_btns
                 if w.winfo_ismapped()]
         assert len(keys) >= 6
+        side, gap = layout.tool_key()
+        tops = sorted(k.winfo_rooty() for k in keys)
+        steps = [b - a for a, b in zip(tops, tops[1:])]
+        assert max(steps) <= side + 2 * gap + 1,             f"a hole in the palette: steps {steps}"
         for k in keys:
             par = k.nametowidget(k.winfo_parent())
             x0, y0 = par.winfo_x() + k.winfo_x(), par.winfo_y() + k.winfo_y()
