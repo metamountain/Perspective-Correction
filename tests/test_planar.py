@@ -587,6 +587,64 @@ def test_a_soft_horizontal_auto_crops_around_the_middle_of_the_outline():
             assert off > 0.05, ("a strong correction lost its interest crop", yaw, mid, c)
 
 
+def test_a_sam_selection_makes_the_crop_box_and_painted_dabs_do_not():
+    """User, 2026-10-24: "Maskierung soll Crop-Box generieren. Nur der innere
+    Bereich" -- the kept region + STRIP_CROP_MARGIN frames the auto crop, in
+    Auto and in horizontal auto. "Maskierung manuell muss anders bewertet
+    werden, da oft nur punktweise": painted dabs leave the crop alone, a broad
+    painted wash outside the subject frames it like SAM ("grundsaetzlich wird
+    eher ausserhalb POI maskiert")."""
+    import cv2 as _cv2
+    for ha in (False, True):
+        img, _, faces = synth.rubik_street([(0, 60, 0), (-30, 70, 0)], 10, 28, yaw_deg=12,
+                                           w=1600, h=1067)
+        corners = np.asarray(faces[sorted(faces)[0]][0], float)
+        x0, y0 = corners.min(axis=0)
+        x1, y1 = corners.max(axis=0)
+
+        def fresh():
+            s = ReviewSession("street.png",
+                              Settings().replace(correct_horizontal=ha, fill="telea"), image=img)
+            s.refit()
+            return s
+
+        def share(s):
+            assert s.auto_crop()
+            r = s.crop_rect
+            return (r[2] - r[0]) * (r[3] - r[1])
+        plain = share(fresh())
+
+        s = fresh()
+        ign = np.ones(img.shape[:2], bool)
+        ign[int(y0):int(y1), int(x0):int(x1)] = False
+        s.apply_sam_mask(ign)
+        masked = share(s)
+        assert masked < 0.6 * plain, ("the SAM selection did not frame the crop", ha, plain, masked)
+        if not ha:
+            r = s.crop_rect
+            out = s.render_after(max_edge=1000, fill="none", apply_crop=False)
+            oh, ow = out.shape[:2]
+            for cx, cy in corners:
+                px, py = s.source_to_preview(cx, cy)
+                assert r[0] * ow - 2 <= px <= r[2] * ow + 2 and r[1] * oh - 2 <= py <= r[3] * oh + 2,                     ("the selected face was cropped", (cx, cy), (px, py), r)
+
+        s = fresh()
+        gh, gw = s.gray.shape[:2]
+        dabs = np.zeros((gh, gw), np.uint8)
+        for cx, cy in ((0.2, 0.3), (0.7, 0.6), (0.5, 0.8)):
+            # ~8 % of the frame together: past KEPT_BOX_MAX_SHARE's 5 %, so only
+            # PAINT_FRAMES_SHARE keeps them out of the framing.
+            _cv2.circle(dabs, (int(cx * gw), int(cy * gh)),
+                        int(np.sqrt(0.08 * gw * gh / (3 * np.pi))), 1, -1)
+        s.paint = dabs.astype(bool)
+        assert abs(share(s) - plain) < 1e-6, ("painted dabs moved the crop", ha)
+
+        s = fresh()
+        s.paint = _cv2.resize(ign.astype(np.uint8), (gw, gh),
+                              interpolation=_cv2.INTER_NEAREST).astype(bool)
+        assert share(s) < 0.6 * plain, ("a broad painted wash did not frame the crop", ha)
+
+
 def test_the_plan_gets_its_line_segments_in_its_own_pixels():
     """W.plan(line_segs=...) reads segments in the plan's pixels; they were
     passed in analysis pixels, so on a photograph wider than detect_max_edge

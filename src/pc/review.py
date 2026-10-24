@@ -578,6 +578,13 @@ class ReviewSession:
             band = W._strip_band(H_total, quad, self.strip, self.w, self.h)
             if band is not None:
                 region = W._clip_quad_to_x_band(region, band[0], band[1])
+        # A mask says what matters (user, 2026-10-24: "Maskierung muss relevant
+        # sein ... nur der unmaskierte Ausschnitt, wie ROI"): the kept region,
+        # warped, + STRIP_CROP_MARGIN bounds the search like a facade strip
+        # does, ahead of the centre of interest; the centring then centres on it.
+        kept = self._kept_box(H_total, ow, oh) if self.strip is None else None
+        if kept is not None and len(region) >= 3:
+            region = W.clip_to_box(region, *kept)
         if len(region) < 3:
             return False
         # Free aspect once a yaw is in play: the output's proportions are not
@@ -649,21 +656,22 @@ class ReviewSession:
         # raus"): with a yaw in play and no strip, frame where the lines are.
         # With a fill the box is the crop; without one it only trims the
         # fill-free rectangle, which must stay free of invented pixels.
-        if self.CROP_TO_INTEREST and yawed and self.strip is None and not soft:
+        box = kept
+        if box is None and self.CROP_TO_INTEREST and yawed and self.strip is None and not soft:
             k = self.w / float(self.gray.shape[1])
             parts = [np.asarray(x.seg, float)[:, :4] * k for x in (self.vert, self.horiz) if len(x)]
             box = W.interest_box(H_total, np.concatenate(parts), ow, oh) if parts else None
-            if box is not None:
-                bx0, by0, bx1, by1 = box
-                if fill_mode not in (None, "", "none"):
-                    qx0, qy0 = (float(v) for v in np.min(quad, axis=0))
-                    qx1, qy1 = (float(v) for v in np.max(quad, axis=0))
-                    nx0, ny0 = max(bx0, qx0), max(by0, qy0)
-                    nx1, ny1 = min(bx1, qx1), min(by1, qy1)
-                else:
-                    nx0, ny0, nx1, ny1 = max(x0, bx0), max(y0, by0), min(x1, bx1), min(y1, by1)
-                if nx1 - nx0 >= 8 and ny1 - ny0 >= 8:
-                    x0, y0, x1, y1 = nx0, ny0, nx1, ny1
+        if box is not None:
+            bx0, by0, bx1, by1 = box
+            if fill_mode not in (None, "", "none"):
+                qx0, qy0 = (float(v) for v in np.min(quad, axis=0))
+                qx1, qy1 = (float(v) for v in np.max(quad, axis=0))
+                nx0, ny0 = max(bx0, qx0), max(by0, qy0)
+                nx1, ny1 = min(bx1, qx1), min(by1, qy1)
+            else:
+                nx0, ny0, nx1, ny1 = max(x0, bx0), max(y0, by0), min(x1, bx1), min(y1, by1)
+            if nx1 - nx0 >= 8 and ny1 - ny0 >= 8:
+                x0, y0, x1, y1 = nx0, ny0, nx1, ny1
         if fill_mode not in (None, "", "none") and len(self.horiz):
             segs = np.asarray(self.horiz.seg, float)[:, :4]
             segs = segs * (self.w / self.gray.shape[1])
@@ -671,6 +679,78 @@ class ReviewSession:
             if ye is not None and y0 > ye - W.EAVE_HEADROOM * (y1 - ye):
                 y0 = max(0.0, ye - W.EAVE_HEADROOM * (y1 - ye))
         return self.set_crop_rect(x0, y0, x1, y1, ow, oh)
+
+    KEPT_BOX_MAX_SHARE = 0.95  # a mask keeping more than this frames nothing
+    PAINT_FRAMES_SHARE = 0.15  # painted mask frames the crop only from this share on
+
+    def _kept_mask(self):
+        """What the SAM selection / automatic mask keeps (analysis pixels, True =
+        kept), or None when neither is in force or it keeps nearly everything.
+
+        The painted mask counts only from PAINT_FRAMES_SHARE of the frame on
+        (user, 2026-10-24: "Maskierung manuell muss anders bewertet werden, da
+        oft nur punktweise, um Annotatoren zu killen" -- "grundsaetzlich wird
+        aber eher ausserhalb POI maskiert"): a few dabs that switch off lines
+        say nothing about where the subject is, a broad wash does. The strip
+        has its own band."""
+        if not getattr(self, "mask_enabled", True):
+            return None
+        ign = None
+        for name in ("source", "sam", "paint"):
+            arr = self.layer(name)
+            if name == "paint" and arr is not None and arr.mean() < self.PAINT_FRAMES_SHARE:
+                continue
+            if arr is not None and arr.any():
+                ign = arr.astype(bool) if ign is None else (ign | arr.astype(bool))
+        if ign is None:
+            return None
+        if getattr(self, "invert_mask", False):
+            ign = ~ign
+        keep = ~ign
+        if not keep.any() or keep.mean() > self.KEPT_BOX_MAX_SHARE:
+            return None
+        return keep
+
+    def _kept_source_x(self):
+        """``(x0, x1)`` full-resolution px spanned by the kept region, or None."""
+        keep = self._kept_mask()
+        if keep is None:
+            return None
+        cols = np.flatnonzero(keep.any(axis=0))
+        k = self.w / float(keep.shape[1])
+        return float(cols[0] * k), float((cols[-1] + 1) * k)
+
+    def _kept_box(self, H_total, ow, oh):
+        """``(x0, y0, x1, y1)`` output px around what the SAM/automatic mask
+        keeps, + ``W.STRIP_CROP_MARGIN`` on every side, or None without a mask.
+
+        The kept region's outline (analysis pixels) is mapped through
+        ``H_total``; points that land behind the camera are dropped."""
+        keep = self._kept_mask()
+        if keep is None:
+            return None
+        cs, _ = cv2.findContours(keep.astype(np.uint8), cv2.RETR_EXTERNAL,
+                                 cv2.CHAIN_APPROX_NONE)
+        if not cs:
+            return None
+        pts = np.concatenate([c.reshape(-1, 2) for c in cs]).astype(float)
+        pts *= self.w / float(keep.shape[1])
+        hp = np.c_[pts, np.ones(len(pts))] @ np.asarray(H_total, float).T
+        # A homography is defined up to scale, sign included: "in front of the
+        # camera" is the side most of the region maps to.
+        side = np.sign(np.median(hp[:, 2])) or 1.0
+        ok = hp[:, 2] * side > 1e-12
+        if ok.sum() < 3:
+            return None
+        xy = hp[ok, :2] / hp[ok, 2:3]
+        x0, y0 = xy.min(axis=0)
+        x1, y1 = xy.max(axis=0)
+        mx, my = W.STRIP_CROP_MARGIN * (x1 - x0), W.STRIP_CROP_MARGIN * (y1 - y0)
+        x0, x1 = max(0.0, x0 - mx), min(float(ow), x1 + mx)
+        y0, y1 = max(0.0, y0 - my), min(float(oh), y1 + my)
+        if x1 - x0 < 8 or y1 - y0 < 8:
+            return None
+        return float(x0), float(y0), float(x1), float(y1)
 
     def auto_crop_if_cheap(self):
         """Trim the padded band away when doing so costs little frame.
@@ -2029,7 +2109,10 @@ class ReviewSession:
         # plan must also SHOW that facade: on a close, steep view (rendered
         # cube, 16 mm, 22 deg up) the plan succeeded and framed a sliver of sky
         # and street beside the wall (user: "rechte [Seite] fail").
-        if planned is not None and self.strip is None:
+        # A mask frames the facade like a strip does (user, 2026-10-24: "nur
+        # der unmaskierte Ausschnitt ... wie ROI").
+        kept_x = self._kept_source_x() if self.strip is None else None
+        if planned is not None and self.strip is None and kept_x is None:
             return None
         gw = self.gray.shape[1]
         k = self.w / float(gw)
@@ -2040,6 +2123,8 @@ class ReviewSession:
         vh = np.array([vh[0] * k, vh[1] * k, vh[2]])
         if self.strip is not None:
             x0, x1 = self.strip[0] * self.w, self.strip[1] * self.w
+        elif kept_x is not None:
+            x0, x1 = kept_x
         else:
             hs = np.asarray(getattr(self.horiz, "seg", np.zeros((0, 4))), float)
             if len(hs) == 0:
@@ -2073,7 +2158,17 @@ class ReviewSession:
         vs = np.asarray(getattr(self.vert, "seg", np.zeros((0, 4))), float)
         if len(vs):
             mid = (vs[:, 0] + vs[:, 2]) * 0.5 * k
-            sel = vs[(mid >= x0) & (mid <= x1)]
+            inside = (mid >= x0) & (mid <= x1)
+            keep = self._kept_mask() if kept_x is not None else None
+            if keep is not None:
+                # Only lines on what the mask keeps set the height: a near
+                # column beside the facade is inside the x range but masked.
+                gh_, gw_ = keep.shape
+                mx = np.clip(((vs[:, 0] + vs[:, 2]) * 0.5).astype(int), 0, gw_ - 1)
+                my = np.clip(((vs[:, 1] + vs[:, 3]) * 0.5).astype(int), 0, gh_ - 1)
+                on = inside & keep[my, mx]
+                inside = on if on.any() else inside
+            sel = vs[inside]
             sel = sel if len(sel) else vs
             # Each end slid along its own line to the horizontal vanishing
             # point onto the strip's middle: the top and bottom edges then hug
@@ -2161,6 +2256,11 @@ class ReviewSession:
             return False
         _H, cw, ch = t
         x0, y0, x1, y1 = self._planar_box
+        # A mask makes the crop box: what it keeps + STRIP_CROP_MARGIN (user,
+        # 2026-10-24: "Maskierung soll Crop-Box generieren").
+        kept = self._kept_box(_H, cw, ch) if self.strip is None else None
+        if kept is not None:
+            x0, y0, x1, y1 = kept[0], kept[1], kept[2] - 1, kept[3] - 1
         self._crop_edges["left"] = (True, max(0.0, x0 / cw))
         self._crop_edges["top"] = (True, max(0.0, y0 / ch))
         self._crop_edges["right"] = (True, max(0.0, 1.0 - (x1 + 1) / cw))
