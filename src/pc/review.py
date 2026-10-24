@@ -165,6 +165,9 @@ class ReviewSession:
         # None until computed.  The *prompts* -- box and rework points -- live
         # in the GUI, in frame fractions; the session only ever sees the result.
         self.sam_mask = None
+        # The box the user dragged for SAM (full-resolution px), which is also
+        # the crop box (user, 2026-10-24: "SAM-Box sollte Crop-Box sein").
+        self.sam_box = None
         # One switch over the whole union (user, 2026-09-15): whatever the
         # layers ignore, keep, and keep what they ignore.  It belongs here and
         # not per source, because "invert" is a statement about the RESULT --
@@ -716,9 +719,29 @@ class ReviewSession:
         keep = self._kept_mask()
         if keep is None:
             return None
+        box = self._sam_crop_box()
+        if box is not None:
+            return box[0], box[2]
         cols = np.flatnonzero(keep.any(axis=0))
         k = self.w / float(keep.shape[1])
         return float(cols[0] * k), float((cols[-1] + 1) * k)
+
+    def _sam_crop_box(self):
+        """The dragged SAM box in full-resolution px while its selection is in
+        force and the mask is on, else None."""
+        box = getattr(self, "sam_box", None)
+        if box is None or self.sam_mask is None or not getattr(self, "mask_enabled", True):
+            return None
+        if getattr(self, "invert_mask", False):
+            return None          # inverted, the box is what is thrown away
+        x0, y0, x1, y1 = box
+        if max(box) <= 1.0:      # the GUI's fallback hands frame fractions
+            x0, x1, y0, y1 = x0 * self.w, x1 * self.w, y0 * self.h, y1 * self.h
+        x0, x1 = sorted((max(0.0, x0), min(float(self.w), x1)))
+        y0, y1 = sorted((max(0.0, y0), min(float(self.h), y1)))
+        if x1 - x0 < 8 or y1 - y0 < 8:
+            return None
+        return x0, y0, x1, y1
 
     def _kept_box(self, H_total, ow, oh):
         """``(x0, y0, x1, y1)`` output px around what the SAM/automatic mask
@@ -729,12 +752,21 @@ class ReviewSession:
         keep = self._kept_mask()
         if keep is None:
             return None
-        cs, _ = cv2.findContours(keep.astype(np.uint8), cv2.RETR_EXTERNAL,
-                                 cv2.CHAIN_APPROX_NONE)
-        if not cs:
-            return None
-        pts = np.concatenate([c.reshape(-1, 2) for c in cs]).astype(float)
-        pts *= self.w / float(keep.shape[1])
+        box = self._sam_crop_box()
+        if box is not None:
+            # The dragged box IS the crop: its corners, no margin. A
+            # homography keeps its edges straight, so the corners bound it.
+            bx0, by0, bx1, by1 = box
+            pts = np.array([[bx0, by0], [bx1, by0], [bx1, by1], [bx0, by1]], float)
+            margin = 0.0
+        else:
+            cs, _ = cv2.findContours(keep.astype(np.uint8), cv2.RETR_EXTERNAL,
+                                     cv2.CHAIN_APPROX_NONE)
+            if not cs:
+                return None
+            pts = np.concatenate([c.reshape(-1, 2) for c in cs]).astype(float)
+            pts *= self.w / float(keep.shape[1])
+            margin = W.STRIP_CROP_MARGIN
         hp = np.c_[pts, np.ones(len(pts))] @ np.asarray(H_total, float).T
         # A homography is defined up to scale, sign included: "in front of the
         # camera" is the side most of the region maps to.
@@ -745,7 +777,7 @@ class ReviewSession:
         xy = hp[ok, :2] / hp[ok, 2:3]
         x0, y0 = xy.min(axis=0)
         x1, y1 = xy.max(axis=0)
-        mx, my = W.STRIP_CROP_MARGIN * (x1 - x0), W.STRIP_CROP_MARGIN * (y1 - y0)
+        mx, my = margin * (x1 - x0), margin * (y1 - y0)
         x0, x1 = max(0.0, x0 - mx), min(float(ow), x1 + mx)
         y0, y1 = max(0.0, y0 - my), min(float(oh), y1 + my)
         if x1 - x0 < 8 or y1 - y0 < 8:
@@ -831,7 +863,8 @@ class ReviewSession:
         # match that when the rectify warp is active.
         # The rectangle's crop is quad + 20 % of a canvas built with room to
         # drag it out, so its loss is large by design -- not a band to refuse.
-        if self.crop_loss() > self.auto_crop_threshold and not self._rectify_active()                 and self.active_quad() is None:
+        # A mask-made crop is the user's framing too: what they kept.
+        if self.crop_loss() > self.auto_crop_threshold and not self._rectify_active()                 and self.active_quad() is None and self._kept_mask() is None:
             self.clear_crop_rect()
             return before is not None
         self.crop_is_auto = True
@@ -1100,13 +1133,14 @@ class ReviewSession:
         had = self.paint is not None or self.sam_mask is not None
         self.paint = None
         self.sam_mask = None
+        self.sam_box = None
         self._apply_paint()          # releases, then returns on `paint is None`
         self._refresh_mask()
         self.refit()
         return had
 
     # -- SAM2 click-to-select --------------------------------------------
-    def apply_sam_mask(self, ignore: np.ndarray):
+    def apply_sam_mask(self, ignore: np.ndarray, box=None):
         """Install a SAM2-produced ignore mask (True = ignore) and refit.
 
         It is merged into ``detect_info["mask"]`` the same way the paint brush
@@ -1126,6 +1160,8 @@ class ReviewSession:
                 ignore = cv2.resize(ignore.astype(np.uint8), (gw, gh),
                                     interpolation=cv2.INTER_NEAREST).astype(bool)
         self.sam_mask = ignore
+        self.sam_box = (None if box is None or ignore is None
+                        else tuple(float(v) for v in box))
         self._apply_sam_mask()
         self.refit()
 

@@ -645,6 +645,31 @@ def test_a_sam_selection_makes_the_crop_box_and_painted_dabs_do_not():
         assert share(s) < 0.6 * plain, ("a broad painted wash did not frame the crop", ha)
 
 
+def test_the_dragged_sam_box_is_the_crop_box():
+    """User, 2026-10-24: "SAM-Box sollte Crop-Box sein" -- the box dragged for
+    SAM, mapped through the correction, is the crop, without a margin."""
+    img, _, faces = synth.rubik_street([(0, 60, 0), (-30, 70, 0)], 10, 28, yaw_deg=12,
+                                       w=1600, h=1067)
+    corners = np.asarray(faces[sorted(faces)[0]][0], float)
+    x0, y0 = corners.min(axis=0) - 30
+    x1, y1 = corners.max(axis=0) + 30
+    s = ReviewSession("street.png", Settings().replace(fill="telea"), image=img)
+    s.refit()
+    ign = np.ones(img.shape[:2], bool)
+    ign[int(y0 + 40):int(y1 - 40), int(x0 + 40):int(x1 - 40)] = False   # SAM's segment
+    s.apply_sam_mask(ign, (x0, y0, x1, y1))
+    assert s.auto_crop()
+    r = s.crop_rect
+    out = s.render_after(max_edge=1000, fill="none", apply_crop=False)
+    oh, ow = out.shape[:2]
+    pts = np.array([s.source_to_preview(x, y) for x, y in
+                    ((x0, y0), (x1, y0), (x1, y1), (x0, y1))])
+    want = (pts[:, 0].min() / ow, pts[:, 1].min() / oh, pts[:, 0].max() / ow, pts[:, 1].max() / oh)
+    assert max(abs(a - b) for a, b in zip(r, want)) < 0.01, (r, want)
+    s.clear_mask()
+    assert s.sam_box is None, "clearing the selection must forget its box"
+
+
 def test_the_plan_gets_its_line_segments_in_its_own_pixels():
     """W.plan(line_segs=...) reads segments in the plan's pixels; they were
     passed in analysis pixels, so on a photograph wider than detect_max_edge

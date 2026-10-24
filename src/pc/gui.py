@@ -43,6 +43,7 @@ except Exception:                                    # pragma: no cover
 _MAC = sys.platform == "darwin"
 RB = "2" if _MAC else "3"
 ALT_MASK = 0x0010 if _MAC else 0x0008
+SHIFT_MASK = 0x0001     # Tk reports Shift as bit 0 on every platform
 
 import cv2
 import numpy as np
@@ -5036,7 +5037,12 @@ class ReviewPanel(tk.Frame):
         x = (event.x - ox) / self._before_scale
         y = (event.y - oy) / self._before_scale
         self._sam_drag_start = (x, y)
-        self._sam_box = None
+        # Shift+drag adds to the selection (user, 2026-10-24): the new segment
+        # joins the old one and the crop box grows to cover both boxes.
+        self._sam_adding = (bool(event.state & SHIFT_MASK)
+                            and getattr(self.session, "sam_mask", None) is not None)
+        if not self._sam_adding:
+            self._sam_box = None
 
     def _on_sam_drag(self, event):
         if not self.v_sam.get() or not hasattr(self, '_sam_drag_start'):
@@ -5118,7 +5124,7 @@ class ReviewPanel(tk.Frame):
                         device=getattr(self.session.settings, "sam_device", ""))
                     ignore = sam2seg.load_mask_png(png, (self.session.h, self.session.w))
                 log.info("SAM apply done")
-                back(lambda m=ignore: self._on_sam_done(m))
+                back(lambda m=ignore, b=box_px: self._on_sam_done(m, b))
             except Exception as exc:
                 log.exception("SAM apply failed")
                 back(lambda e=exc: self._on_sam_fail(e))
@@ -5126,16 +5132,41 @@ class ReviewPanel(tk.Frame):
         import threading
         threading.Thread(target=_run, daemon=True).start()
 
-    def _on_sam_done(self, ignore):
+    def _on_sam_done(self, ignore, box=None):
         self._busy_sam = False
         self._set_busy(False)
         self._wait_hide()
+        # The last full-resolution segment, valid only while the session still
+        # holds a SAM selection (`_sam_selection` is reset by every redraw).
+        prev_ign = (getattr(self, "_sam_ignore_full", None)
+                    if getattr(self.session, "sam_mask", None) is not None else None)
+        prev_box = getattr(self.session, "sam_box", None)
+        if (getattr(self, "_sam_adding", False) and prev_ign is not None
+                and prev_ign.shape == ignore.shape):
+            ignore = ignore & prev_ign              # kept = old kept OR new kept
+            if box is not None and prev_box is not None:
+                box = (min(box[0], prev_box[0]), min(box[1], prev_box[1]),
+                       max(box[2], prev_box[2]), max(box[3], prev_box[3]))
+            if box is not None:
+                W_, H_ = self.session.w, self.session.h
+                self._sam_box = (box[0] / W_, box[1] / H_, box[2] / W_, box[3] / H_)
+        self._sam_adding = False
+        self._sam_ignore_full = ignore
         self._sam_selection = ~ignore
         # Hand the result to the session, which is the whole point of selecting
         # the building: until this call the segment only drew a green outline
         # and a percentage, and the estimator never saw it.  `apply_sam_mask`
         # resizes to analysis-res and refits.
-        self.session.apply_sam_mask(ignore)
+        self.session.apply_sam_mask(ignore, box)
+        # The dragged box is the crop box (user, 2026-10-24: "SAM-Box sollte
+        # Crop-Box sein"): a new selection is a new framing, so it is applied
+        # even over a hand crop -- and said, with how to change it.
+        self.session.crop_is_auto = True
+        if box is not None and self.session.auto_crop():
+            self.session.crop_is_auto = True
+            if getattr(self, "v_autocrop", None) is not None:
+                self.v_autocrop.set(True)
+            self._notify("crop set to the SAM box -- drag its edges to widen it")
         self._sync_from_session()
         self._draw_sam_prompts()
         frac = self._sam_selection.mean() if self._sam_selection is not None else 0

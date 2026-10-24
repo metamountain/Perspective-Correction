@@ -1020,6 +1020,48 @@ def test_the_dinosaur_is_gone_and_sam_says_where_it_comes_from():
         app.destroy()
 
 
+def test_the_sam_box_becomes_the_crop_and_shift_adds_to_the_selection():
+    """User, 2026-10-24: "SAM-Box sollte Crop-Box sein" and "Shift-drag SAM add
+    to selection?" -- a finished selection sets the crop to its box (and says
+    so); a Shift+drag joins the new segment to the old one and the crop box
+    grows to cover both boxes."""
+    import numpy as np
+    app = _app()
+    try:
+        r = app.review
+        _loaded(app, 1600, 1000)
+        s = r.session
+        h, w = s.h, s.w
+
+        def seg(box):
+            ign = np.ones((h, w), bool)
+            x0, y0, x1, y1 = (int(v) for v in box)
+            ign[y0 + 10:y1 - 10, x0 + 10:x1 - 10] = False
+            return ign
+        b1 = (0.10 * w, 0.20 * h, 0.40 * w, 0.70 * h)
+        r._sam_adding = False
+        r._on_sam_done(seg(b1), b1)
+        _settle(app, 10)
+        assert s.sam_box == b1
+        c1 = s.crop_rect
+        assert c1 is not None and "SAM box" in getattr(r, "_notice", ""), (c1, r._notice)
+        b2 = (0.55 * w, 0.30 * h, 0.85 * w, 0.80 * h)
+        r._sam_adding = True
+        r._on_sam_done(seg(b2), b2)
+        _settle(app, 10)
+        assert s.sam_box == (b1[0], b1[1], b2[2], b2[3]), s.sam_box
+        kept = ~r._sam_ignore_full
+        assert kept[int(0.45 * h), int(0.25 * w)] and kept[int(0.55 * h), int(0.70 * w)],             "the first segment was dropped by the added one"
+        c2 = s.crop_rect
+        assert (c2[2] - c2[0]) > (c1[2] - c1[0]) + 0.1, ("the crop did not grow", c1, c2)
+        r._sam_adding = False
+        r._on_sam_done(seg(b2), b2)
+        _settle(app, 10)
+        assert s.sam_box == b2, "a plain drag must replace, not add"
+    finally:
+        app.destroy()
+
+
 def test_gdino_batch_uses_the_stored_birefnet_model_without_asking():
     """A gdino batch also needs BiRefNet weights for its matte. If the user already
     saved a path (prefs), _ensure_birefnet_model must accept it and never pop the
