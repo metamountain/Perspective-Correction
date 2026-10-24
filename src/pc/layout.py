@@ -301,6 +301,9 @@ LABEL_INSET_PX = 6
 NOTICE_MS = 4000   # ms a state-change prompt stays on screen
 TOOLTIP_DELAY_MS = 1000   # hover this long before help appears (user)
 TOOLTIP_GAP = 4           # px between a widget and its help
+# The pyramid-and-eye mark in the window's foot, beside the wordmark: as tall
+# as the foot's buttons allow (user, 2026-10-24: "setz es unten gross").
+FOOT_LOGO_PX = 26
 TOOLTIP_INSET = 12        # px the help starts right of the widget's left edge
 
 

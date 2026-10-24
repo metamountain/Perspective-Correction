@@ -2457,3 +2457,48 @@ def test_the_correction_values_sit_exactly_centred_in_the_foot_and_follow_the_sl
         assert "pitch +12.5" in lbl.cget("text"), lbl.cget("text")
     finally:
         app.destroy()
+
+
+def test_the_logo_sits_large_before_the_wordmark_in_its_true_proportions():
+    """User, 2026-10-24: the pyramid-and-eye mark replaces the old one, "skalier
+    korrekt", large in the window's foot in front of the wordmark. The mark
+    keeps its drawn width : height (839 : 727 in Logo_new.png) at any size,
+    and it follows the theme like the wordmark."""
+    import tempfile
+    import numpy as np
+    from PIL import Image
+    from pc import gui as G
+
+    def aspect(size):
+        a = np.array(G._logo_image(size, (255, 255, 255, 255)).getchannel("A"))
+        ys, xs = np.nonzero(a > 128)
+        return (xs.max() - xs.min() + 1) / (ys.max() - ys.min() + 1)
+    for size in (26, 64, 256):
+        assert abs(aspect(size) - 839 / 727) < 0.08, (size, aspect(size))
+    # a replacement file that is not square is fitted, not stretched
+    real = G.LOGO_FILE
+    with tempfile.TemporaryDirectory() as d:
+        wide = Image.new("RGBA", (300, 100), (0, 0, 0, 255))
+        G.LOGO_FILE = os.path.join(d, "wide.png")
+        wide.save(G.LOGO_FILE)
+        try:
+            assert abs(aspect(64) - 3.0) < 0.1, aspect(64)
+        finally:
+            G.LOGO_FILE = real
+    app = _app()
+    try:
+        _settle(app, 5)
+        sb = app._status_bar
+        order = [w for w in sb.pack_slaves() if w in (sb._logo_lbl, sb._wordmark_lbl)]
+        assert order == [sb._logo_lbl, sb._wordmark_lbl], order
+        assert int(sb._logo_lbl.image.height()) == layout.FOOT_LOGO_PX
+        before = sb._logo_lbl.image
+        saved = dict(G.INK)
+        try:
+            other = next(n for n in G.THEMES if G.THEMES[n]["text"] != G.INK["text"])
+            app._switch_theme(other)
+            assert sb._logo_lbl.image is not before, "the mark kept the old theme's tint"
+        finally:
+            G.INK.clear(); G.INK.update(saved)
+    finally:
+        app.destroy()

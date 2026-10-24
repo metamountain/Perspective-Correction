@@ -692,7 +692,9 @@ LOGO_FILE = os.path.normpath(os.path.join(os.path.dirname(os.path.abspath(__file
 def _logo_image(size, colour):
     """The shipped mark at ``size``, recoloured to ``colour``, or ``None``.
 
-    ``Logo_BPC.png`` is a black silhouette on transparency, and this window's
+    ``Logo_BPC.png`` (the pyramid and eye since 2026-10-24, cut from
+    ``Logo_new.png`` to its ink and squared) is a black silhouette on
+    transparency, and this window's
     ground is dark, so drawing it as it comes gives a black shape on a black
     panel.  What is used is its **alpha channel**; the colour comes from the
     palette, which also means the mark follows the theme instead of fighting it.
@@ -705,9 +707,15 @@ def _logo_image(size, colour):
         src = Image.open(LOGO_FILE).convert("RGBA")
     except Exception:
         return None
-    src = src.resize((size, size), Image.LANCZOS)
+    # Fit inside the square and centre, never stretch (user: "skalier
+    # korrekt") -- the shipped file is square, a replacement need not be.
+    k = size / float(max(src.size))
+    w, h = max(1, round(src.width * k)), max(1, round(src.height * k))
+    alpha = Image.new("L", (size, size), 0)
+    alpha.paste(src.getchannel("A").resize((w, h), Image.LANCZOS),
+                ((size - w) // 2, (size - h) // 2))
     tint = Image.new("RGBA", (size, size), colour)
-    tint.putalpha(src.getchannel("A"))
+    tint.putalpha(alpha)
     return tint
 
 
@@ -5593,6 +5601,16 @@ class App(_ROOT_CLASS):
         # The status-bar wordmark is a rendered image too, tinted INK["text"]
         # into its pixels at build time; a theme switch re-renders it.
         sb = getattr(self, "_status_bar", None)
+        llbl = getattr(sb, "_logo_lbl", None) if sb is not None else None
+        if llbl is not None:
+            logo = _logo_image(layout.FOOT_LOGO_PX, _hex_rgba(INK["text"]))
+            if logo is not None:
+                try:
+                    photo = ImageTk.PhotoImage(logo)
+                    llbl.configure(image=photo)
+                    llbl.image = photo
+                except tk.TclError:
+                    pass
         wlbl = getattr(sb, "_wordmark_lbl", None) if sb is not None else None
         if wlbl is not None:
             mark = _wordmark_image(14, _hex_rgba(INK["text"]))
@@ -5615,6 +5633,14 @@ class App(_ROOT_CLASS):
         bar.pack(side="bottom", fill="x", padx=8, pady=(0, 1))
         # Wordmark in the left corner: the v07 typography, tinted to the active
         # palette so it follows the theme like every other mark.
+        # The pyramid-and-eye mark sits large in front of it, tinted the same.
+        logo = _logo_image(layout.FOOT_LOGO_PX, _hex_rgba(INK["text"]))
+        if logo is not None:
+            photo = ImageTk.PhotoImage(logo)
+            lbl = ttk.Label(bar, image=photo)
+            lbl.image = photo
+            lbl.pack(side="left", padx=(2, 6))
+            bar._logo_lbl = lbl
         mark = _wordmark_image(14, _hex_rgba(INK["text"]))
         if mark is not None:
             photo = ImageTk.PhotoImage(mark)
