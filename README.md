@@ -1,6 +1,6 @@
 # Perspective Correction
 
-![The review window in Horizontal auto: the obliquely shot facade on the left with its detected lines and the tool palette, the corrected frontal view on the right with the source outline and the crop, controls below.](docs/screenshot.jpg)
+![The Barcelona Pavilion before and after a vertical correction: on the left the frame is tilted, the roofline sloping down to the right; on the right it is levelled and the building's verticals are plumb.](docs/vertical-correction.jpg)
 
 Straightens architectural photographs. Two modes:
 
@@ -25,12 +25,6 @@ around the facade rather than refused. On a corner view only one wall can come
 out frontal: drag the **facade strip** onto that wall. A drawn horizontal line
 overrules the detector.
 
-![A synthetic street of building-sized Rubik cubes seen from eye height, and two of their faces after Horizontal auto with the true square grid drawn over them in green: the cells come out square.](docs/synthetic-squares.jpg)
-
-<sup>Tested on rendered scenes with known geometry (`tools/render_cubes.py`): 20 m
-cubes from 1.6 m eye height. Cell width/height after the correction: 1.000 for
-the steep magenta face (its whole-frame warp folds), 1.002 for the yellow one.</sup>
-
 ## Detectors first, a few seconds of your hand second
 
 A line detector (**lsd**, or **mlsd**, which keeps only structural edges) finds
@@ -50,6 +44,9 @@ itself on hover (after a second).
 
 ## Install
 
+**Windows, double-click** `Install (Windows).bat` (`--lama` adds the lama fill,
+which needs torch). It installs into the Python on PATH.
+
 **macOS, one line in Terminal** (fetches the code into `~/Perspective-Correction`,
 offers to install Python if it is missing, then installs everything):
 
@@ -57,10 +54,8 @@ offers to install Python if it is missing, then installs everything):
 curl -fsSL https://raw.githubusercontent.com/metamountain/Perspective-Correction/main/tools/install_mac.sh | bash
 ```
 
-Or **double-click** `Install (Windows).bat` or `Install (macOS).command`
-(`--lama` adds the lama fill, which needs torch). Windows installs into the
-Python on PATH; macOS into `.venv` here, and `Perspective Correction.command`
-starts from it. On Linux, or by hand:
+Or **double-click** `Install (macOS).command`; it installs into `.venv` here,
+and `Perspective Correction.command` starts from it. On Linux, or by hand:
 
 ```
 pip install -r requirements.txt        run it from this folder
