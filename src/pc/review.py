@@ -1779,6 +1779,24 @@ class ReviewSession:
                 getattr(s, "correct_horizontal", None), getattr(s, "fill", None),
                 getattr(s, "keep_pixels", None), getattr(s, "mask_mode", None))
 
+    def values_text(self):
+        """The correction in numbers, one quiet line for the window's foot
+        (user, 2026-10-24: "show correction values ... decent, not too
+        flashy"): the angles the warp applies, the focal it rests on and
+        where that came from, and the confidence."""
+        roll, pitch, f, clamped = self.current_angles()
+        yaw = self.current_yaw()
+        f35 = M.focal_35mm_from_px(f, self.w, self.h) if f else 0.0
+        src = self.model.f_source if self.model else "-"
+        conf = self.model.confidence if self.model else 0.0
+        sep = "   ·   "
+        parts = [f"roll {math.degrees(roll):+.1f}°",
+                 f"pitch {math.degrees(pitch):+.1f}°",
+                 f"yaw {math.degrees(yaw):+.1f}°",
+                 f"f {f35:.0f} mm ({src})",
+                 f"conf {conf:.2f}"]
+        return sep.join(parts) + (sep + "at the limit" if clamped else "")
+
     def status_text(self):
         roll, pitch, f, clamped = self.current_angles()
         f35 = M.focal_35mm_from_px(f, self.w, self.h) if f else 0.0

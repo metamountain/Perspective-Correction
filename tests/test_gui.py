@@ -2432,3 +2432,28 @@ def test_clear_marks_removes_the_vertical_and_the_horizontal_lines():
         assert len(s.control_hlines) == 0, "the horizontal line was left behind"
     finally:
         app.destroy()
+
+
+def test_the_correction_values_sit_exactly_centred_in_the_foot_and_follow_the_sliders():
+    """User, 2026-10-24: "add info text in center of lowest field ... show
+    correction values ... decent, not too flashy" / "exakt mittig". One dim
+    line in the window's foot, centred on the window, kept up to date."""
+    app = _app()
+    try:
+        _loaded(app, 1400, 800)
+        _settle_until(app, lambda: app._values_lbl.cget("text"), n=150)
+        lbl = app._values_lbl
+        text = lbl.cget("text")
+        assert "roll" in text and "pitch" in text and "yaw" in text and " mm (" in text, text
+        assert str(lbl.cget("style")) == "Dim.TLabel"
+        app.update_idletasks()
+        mid = lbl.winfo_rootx() + lbl.winfo_width() / 2.0
+        win_mid = app.winfo_rootx() + app.winfo_width() / 2.0
+        assert abs(mid - win_mid) <= 1.0, (mid, win_mid)
+        r = app.review
+        r.v_pitch.set(12.5)
+        r._on_slider()
+        _settle_until(app, lambda: "pitch +12.5" in lbl.cget("text"), n=150)
+        assert "pitch +12.5" in lbl.cget("text"), lbl.cget("text")
+    finally:
+        app.destroy()

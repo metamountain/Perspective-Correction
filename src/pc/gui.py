@@ -5222,6 +5222,19 @@ class ReviewPanel(tk.Frame):
         # _draw_status_overlay).
         self._status_text = text or ""
         self._draw_status_overlay()
+        self._show_values()
+
+    def _show_values(self):
+        """Refresh the correction values in the window's foot (`App._values_lbl`).
+        Rides on `_set_status`, which every change of the correction calls."""
+        lbl = getattr(self.master, "_values_lbl", None)
+        if lbl is None:
+            return
+        try:
+            text = self.session.values_text() if self.session is not None else ""
+        except Exception:                        # a half-built session: say nothing
+            text = ""
+        lbl.configure(text=text)
 
     def _set_status_extra(self, text):
         self._set_status(text)
@@ -5614,6 +5627,12 @@ class App(_ROOT_CLASS):
         # the eye rests, out of the controls field.
         self._status_lbl = ttk.Label(bar, text="", style="Dim.TLabel", anchor="w")
         self._status_lbl.pack(side="left", fill="x", expand=True, padx=(8, 8))
+        # The correction in numbers, exactly centred on the window ("exakt
+        # mittig"): placed by fraction rather than packed, so the wordmark on
+        # the left and the buttons on the right cannot push it off centre.
+        # Dim, like the status word: read, not operated on.
+        self._values_lbl = ttk.Label(bar, text="", style="Dim.TLabel", anchor="center")
+        self._values_lbl.place(relx=0.5, rely=0.5, anchor="center")
         # Theme + update in the right corner, moved here from the killed brand row.
         self.btn_update = ttk.Button(bar, text="update", width=8)
         self.btn_update.pack(side="right", padx=(0, 4))
