@@ -59,7 +59,7 @@ from .imageio import READABLE
 from .pipeline import ERROR, OK, SKIPPED, process
 from .inpaint import join_url as _join_url, split_url as _split_url
 from . import sam2seg
-from .review import AUTO, ReviewSession, darken_outside_crop
+from .review import AUTO, MANUAL, ReviewSession, darken_outside_crop
 
 
 # Only the detectors that work and earn a place; must match cli.py's
@@ -1902,6 +1902,19 @@ class ReviewPanel(tk.Frame):
         same switch from re-triggering each other."""
         self._mode_top = self.v_corr_mode.get()
         self._mode_frames[self._mode_top].tkraise()
+        # Both faces are AUTOMATIC modes. After a slider was moved the session
+        # is manual, and the switch used to flip only the yaw flag: the
+        # slider's yaw stayed in force, so "Auto" still looked like horizontal
+        # auto, and "Horizontal auto" never engaged (user, 2026-10-24: "auto
+        # aktiver Schalter, dennoch haengt Programm im HA Modus"). Pressing it
+        # now goes back to the estimator's angles, and says so.
+        s = self.session
+        if s is not None and s.mode == MANUAL:
+            s.use_auto_angles()
+            self._notify(f"{'horizontal auto' if self._mode_top == 'horizontal' else 'auto'}"
+                         " -- back to the automatic angles; the slider changes are gone")
+            if self._mode_top == "auto" and not self.v_correct_horizontal.get():
+                self._sync_from_session()
         if self._mode_top == "horizontal" and not self.v_correct_horizontal.get():
             self._syncing_mode = True
             self.v_correct_horizontal.set(True)
@@ -2737,6 +2750,10 @@ class ReviewPanel(tk.Frame):
                 and self.v_correct_horizontal.get():
             self.v_correct_horizontal.set(False)
             s.settings = s.settings.replace(correct_horizontal=False)
+            # The mode switch is the other face of the flag; left on
+            # "Horizontal auto" it claimed a mode that was just switched off.
+            self.v_corr_mode.set("auto")
+            self._mode_frames["auto"].tkraise()
             gone.append("horizontal auto")
         if getattr(self, "v_strip", None) is not None and self.v_strip.get():
             self.v_strip.set(False)

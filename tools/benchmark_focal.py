@@ -12,7 +12,9 @@ that lies wholly in the frame the cell aspect (1.000 = squares) after PC
 Rectangle on the exact corners, and after horizontal auto with the facade
 strip on that face.
 
-    python tools/benchmark_focal.py [N] [--no-ha] [--csv out.csv]
+    python tools/benchmark_focal.py [N] [--no-ha] [--csv out.csv] [--seed S]
+
+With GeoCalib installed it is used; PC_LEARNED_FOCAL=0 compares without it.
 
 N scenes (default 48), seeded, so before/after runs see the same scenes.
 """
@@ -143,10 +145,12 @@ def main():
     ap.add_argument("n", nargs="?", type=int, default=48)
     ap.add_argument("--no-ha", action="store_true")
     ap.add_argument("--csv", default=None)
+    ap.add_argument("--seed", type=int, default=20261024,
+                    help="another seed gives scenes nothing was tuned on")
     a = ap.parse_args()
     rows = []
     t0 = time.time()
-    for sc in scenes(a.n):
+    for sc in scenes(a.n, seed=a.seed):
         r = run(sc, ha=not a.no_ha)
         rows.append(r)
         rect = " ".join(f"{x:.3f}" for _, x in r["rect"] if x)

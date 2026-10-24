@@ -2502,3 +2502,47 @@ def test_the_logo_sits_large_before_the_wordmark_in_its_true_proportions():
             G.INK.clear(); G.INK.update(saved)
     finally:
         app.destroy()
+
+
+def test_the_mode_switch_means_what_it_shows_even_after_a_slider_moved():
+    """User, 2026-10-24: "manchmal ist Auto aktiver Schalter, dennoch haengt
+    Programm im HA Modus". After a slider was moved the session is manual,
+    and the switch flipped only the yaw flag: the slider's yaw stayed, so
+    "Auto" still looked like horizontal auto, and "Horizontal auto" never
+    engaged. And a PC Rectangle switched horizontal auto off while the switch
+    went on showing it."""
+    import math
+    from pc.review import AUTO
+    asset = os.path.join(HERE, "assets", "Horizontal", "Platte_1.jpg")
+    app = _app()
+    try:
+        app.geometry("1400x800-4000+0")
+        _settle(app, 5)
+        app._add([asset])
+        _settle_until(app, lambda: app.review.session is not None, n=200)
+        r = app.review
+
+        def press(mode):
+            r.v_corr_mode.set(mode)
+            r._show_mode()
+            _settle(app, 5)
+
+        def nudge():
+            r.v_pitch.set(r.v_pitch.get() + 0.5)
+            r._on_slider()
+            _settle(app, 5)
+        press("horizontal")
+        assert abs(r.session.current_yaw()) > math.radians(5)
+        nudge()
+        press("auto")
+        s = r.session
+        assert s.mode == AUTO and abs(s.current_yaw()) < 1e-9, (s.mode, s.current_yaw())
+        nudge()
+        press("horizontal")
+        assert r.session.mode == AUTO and r.session._rectify_active()
+        # PC Rectangle takes horizontal auto away: the switch follows
+        r._planar_takes_over()
+        assert r.v_corr_mode.get() == "auto"
+        assert not r.session.settings.correct_horizontal
+    finally:
+        app.destroy()
