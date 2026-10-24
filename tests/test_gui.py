@@ -1681,8 +1681,9 @@ def test_a_missing_lama_is_said_and_never_switched_to_telea_silently():
 
 def test_the_deps_button_is_a_menu_that_installs_only_what_is_ticked():
     """User, 2026-10-24: "soll nicht blind installieren. torch lama telea geo".
-    The button opens a menu: nothing ticked, installed rows greyed out, telea
-    named as built in; ticking lama takes torch along while torch is missing;
+    The button opens a menu of what is MISSING ("dont ask for things that are
+    already there"): nothing ticked, installed ones only named, telea named as
+    built in; ticking lama takes torch along while torch is missing;
     only the ticked rows are installed, on a thread, with a summary after."""
     from pc import depinstall as DI
     from pc import gui as GUI
@@ -1712,11 +1713,12 @@ def test_the_deps_button_is_a_menu_that_installs_only_what_is_ticked():
         _settle(app, 3)
         v = app._deps_vars
         assert not any(x.get() for x in v.values()), "something was ticked unasked"
-        assert "disabled" in app._deps_boxes["mlsd"].state()
-        assert "disabled" not in app._deps_boxes["dnd"].state()
+        # installed: not offered, named once
+        assert "mlsd" not in app._deps_boxes and "dnd" in app._deps_boxes
         texts = [w.cget("text") for w in app._w_deps.winfo_children()[0].winfo_children()
                  if isinstance(w, GUI.ttk.Label)]
         assert any("telea" in t and "built in" in t for t in texts), texts
+        assert any(t.startswith("already installed") and "mlsd" in t for t in texts), texts
         # Nothing ticked: nothing installed, the menu stays.
         app._deps_go()
         _settle(app, 3)
@@ -1735,6 +1737,13 @@ def test_the_deps_button_is_a_menu_that_installs_only_what_is_ticked():
         assert shown and shown[0].startswith("ok: torch pkg"), shown
         assert "GeoCalib guesses the focal" in shown[0], shown
         assert app.btn_deps.cget("text") == "deps" and not app._deps_busy
+        # Everything there: says so, opens no menu, installs nothing.
+        for r in cat:
+            r["installed"] = True
+        shown.clear(); ran.clear(); app._w_deps = None
+        app._install_deps()
+        assert shown and shown[0].startswith("Everything optional is installed already")
+        assert app._w_deps is None and ran == []
     finally:
         (DI.catalogue, DI.install, GUI.messagebox.showinfo, GUI.messagebox.showwarning) = saved
         app.destroy()

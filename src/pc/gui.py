@@ -5928,9 +5928,10 @@ class App(_ROOT_CLASS):
 
         User, 2026-10-24: "soll nicht blind installieren. torch lama telea
         geo". It used to list what was missing and install all of it after one
-        yes. Now every package is a row -- installed ones greyed out and said
-        so, telea named as the built-in fill -- nothing is ticked, and only
-        what the user ticks is installed. Ticking lama or GeoCalib ticks torch
+        yes. Now every MISSING package is a row (what is installed is one line
+        and never offered: "dont ask for things that are already there"),
+        telea is named as the built-in fill, nothing is ticked, and only what
+        the user ticks is installed. Ticking lama or GeoCalib ticks torch
         too while torch is missing (both cannot run without it).
 
         The work runs as before: a daemon thread with the button label as the
@@ -5948,6 +5949,15 @@ class App(_ROOT_CLASS):
             except tk.TclError:
                 pass
         rows = DI.catalogue()
+        # Only what is missing is offered (user: "dont ask for things that
+        # are already there"); what is installed is one line, for reference.
+        have = [r for r in rows if r["installed"]]
+        rows = [r for r in rows if not r["installed"]]
+        if not rows:
+            messagebox.showinfo("Optional packages",
+                                "Everything optional is installed already:\n   "
+                                + "\n   ".join(r["label"] for r in have), parent=self)
+            return
         win = tk.Toplevel(self)
         win.configure(bg=INK["bg"])
         win.title("Optional packages")
@@ -5975,15 +5985,15 @@ class App(_ROOT_CLASS):
         for r in rows:
             v = tk.BooleanVar(value=False)
             self._deps_vars[r["key"]] = v
-            state = "installed" if r["installed"] else r["size"]
-            cb = ttk.Checkbutton(body, variable=v, text=f"{r['label']}  ({state})",
+            cb = ttk.Checkbutton(body, variable=v, text=f"{r['label']}  ({r['size']})",
                                  command=lambda k=r["key"]: ticked(k))
             cb.pack(anchor="w", pady=(6, 0))
-            if r["installed"]:
-                cb.state(["disabled"])
             ttk.Label(body, text="      " + r["purpose"], style="Dim.TLabel").pack(anchor="w")
             boxes[r["key"]] = cb
         self._deps_boxes = boxes
+        if have:
+            ttk.Label(body, text="already installed: " + ", ".join(r["key"] for r in have),
+                      style="Dim.TLabel").pack(anchor="w", pady=(6, 0))
         ttk.Label(body, text="telea fill  (built in, always there)").pack(anchor="w", pady=(6, 0))
         ttk.Label(body, text="      fills the corners when lama is missing",
                   style="Dim.TLabel").pack(anchor="w")
