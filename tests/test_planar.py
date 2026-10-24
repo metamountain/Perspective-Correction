@@ -555,6 +555,38 @@ def test_the_auto_crop_frames_where_the_lines_are_and_leaves_the_sky_out():
     assert sky1 < sky0 - 0.08, ("the sky stayed in", sky0, sky1)
 
 
+def test_a_soft_horizontal_auto_crops_around_the_middle_of_the_outline():
+    """User, 2026-10-24: "bei soften HA-Korrekturen will ich Auto-Crop auf
+    Mittelpunkt Outline (Trapez)". Up to SOFT_YAW_DEG the auto crop is the
+    largest rectangle centred on the area centroid of the warped outline
+    (clipped to the canvas); above it the centre-of-interest crop stays.
+    Auto (no yaw) is centred the same way ("bei Auto soll das auch so sein")."""
+    import math
+    from pc import warp as W
+    for yaw, soft, ha in ((10, True, True), (25, False, True), (25, True, False)):
+        img, _, _ = synth.rubik_street([(0, 60, 0), (-30, 70, 0)], 10, 28, yaw_deg=yaw,
+                                       w=1600, h=1067)
+        s = ReviewSession("street.png", Settings().replace(correct_horizontal=ha, fill="none"),
+                          image=img)
+        s.refit()
+        assert s.active_quad() is None
+        assert (math.degrees(abs(s.current_yaw())) <= s.SOFT_YAW_DEG) == soft
+        roll, pitch, f, _ = s.current_angles()
+        H = s._build_H(s.w, s.h, f, roll, pitch, s.current_yaw(),
+                       max_area=s.settings.max_area_ratio)
+        Ht, ow, oh, _, _ = W.plan(s.w, s.h, H, s.settings, line_segs=s._plan_segs(s.w),
+                                  yaw=s.current_yaw(), strip=None)
+        c = W.poly_centroid(W.clip_to_box(W.warped_quad(Ht, s.w, s.h), 0, 0, ow, oh))
+        assert s.auto_crop()
+        x0, y0, x1, y1 = s.crop_rect
+        mid = ((x0 + x1) / 2 * ow, (y0 + y1) / 2 * oh)
+        off = max(abs(mid[0] - c[0]) / ow, abs(mid[1] - c[1]) / oh)
+        if soft:
+            assert off < 0.005, ("soft crop not on the outline's middle", yaw, mid, c)
+        else:
+            assert off > 0.05, ("a strong correction lost its interest crop", yaw, mid, c)
+
+
 def test_the_plan_gets_its_line_segments_in_its_own_pixels():
     """W.plan(line_segs=...) reads segments in the plan's pixels; they were
     passed in analysis pixels, so on a photograph wider than detect_max_edge

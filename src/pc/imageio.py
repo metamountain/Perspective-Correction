@@ -60,6 +60,44 @@ def _focal_35mm(exif_dict):
     return None
 
 
+SRGB_TOLERANCE = 2
+"""Grey levels an embedded profile may move a test ramp before the pixels are
+converted. sRGB (and profiles that only rename it) stay untouched, byte for
+byte."""
+
+
+def _to_srgb(im, icc):
+    """``(image, icc)``: the pixels in sRGB when ``icc`` describes something else.
+
+    The pipeline and the window work on raw values, which are only right for
+    sRGB. A photograph tagged with another profile was shown wrong -- the
+    user's ``wajavill.jpg`` carries ``sRGB-elle-V2-g10`` (sRGB primaries,
+    gamma 1.0, i.e. linear light), whose raw values are far darker than what a
+    colour-managed viewer shows ("wird zu dunkel dargestellt", 2026-10-24).
+    Converted here once, every consumer (preview, detection, save) sees what the
+    photographer saw, and the save then embeds sRGB instead of the old profile,
+    which no longer describes the pixels. A profile that cannot be read leaves
+    the photograph as it was."""
+    if not icc or im.mode not in ("RGB", "L"):
+        return im, icc
+    try:
+        from PIL import ImageCms
+        src = ImageCms.ImageCmsProfile(io.BytesIO(icc))
+        dst = ImageCms.createProfile("sRGB")
+        mode = im.mode
+        ramp = np.zeros((1, 256 + 3, 3), np.uint8)
+        ramp[0, :256] = np.arange(256)[:, None]
+        ramp[0, 256:] = np.eye(3, dtype=np.uint8) * 255
+        test = Image.fromarray(ramp if mode == "RGB" else ramp[..., 0])
+        moved = np.asarray(ImageCms.profileToProfile(test, src, dst, outputMode=mode))
+        if np.abs(moved.astype(int) - np.asarray(test).astype(int)).max() <= SRGB_TOLERANCE:
+            return im, icc
+        out = ImageCms.profileToProfile(im, src, dst, outputMode=mode)
+        return out, ImageCms.ImageCmsProfile(dst).tobytes()
+    except Exception:
+        return im, icc
+
+
 def load(path: str) -> Loaded:
     im = Image.open(path)
     fmt = (im.format or "").upper()
@@ -81,6 +119,7 @@ def load(path: str) -> Loaded:
     im = ImageOps.exif_transpose(im)               # honour the orientation tag
     if im.mode not in ("RGB", "L"):
         im = im.convert("RGB")
+    im, icc = _to_srgb(im, icc)
     arr = np.asarray(im)
     if arr.ndim == 2:
         bgr = cv2.cvtColor(arr, cv2.COLOR_GRAY2BGR)

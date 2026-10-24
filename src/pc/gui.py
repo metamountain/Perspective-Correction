@@ -82,7 +82,7 @@ ICON_WHITE = "#ffffff"
 # own `colorchooser` is broken on Windows, which is why this grid exists.
 MASK_SWATCHES = (
     "#ff3030", "#ff7030", "#ffb030", "#ffff30",
-    "#30ff50", "#30ffd0", "#3090ff", "#3030ff",
+    "#39ff14", "#30ffd0", "#3090ff", "#3030ff",
     "#8030ff", "#d030ff", "#ff30c0", "#ff3060",
     "#ffffff", "#b0b0b0", "#606060", "#202020",
 )
@@ -149,7 +149,7 @@ OVERLAY = {
     "loupe":       "#000000",
     "loupe_alt":   "#00e5ff",
     # what the mask wash is tinted with until the user picks otherwise
-    "mask_default": "#dc4c3e",
+    "mask_default": "#39ff14",   # neon green (user, 2026-10-24)
 }
 
 CHECK_LINE_TOL_DEG = 1.5
@@ -871,7 +871,7 @@ def _glyph_pil(name, size, colour):
     cropped to its ink by ``_fit_ink`` so they share a footprint.
 
     Two deliberate exceptions, both recorded rather than quietly made:
-      * ``brush`` stays a filled disc (no longer inverted, 2026-10-24). It is the one key
+      * ``brush`` is a swatch: a filled square with a dark disc (2026-10-24). It is the one key
         that is a swatch rather than a diagram -- the mark stands for the paint
         it lays down (user, 2026-09-15).
       * the Grounding DINO key kept its dinosaur, a pun the user put there --
@@ -948,12 +948,12 @@ def _glyph_pil(name, size, colour):
         dr.polygon([P(0.44, 0.40), P(0.44, 0.96), P(0.60, 0.80), P(0.80, 0.80)],
                    fill=ink)
     elif name == "brush":
-        # A swatch, not a diagram -- see the docstring. Grey outside, dark
-        # inside (user, 2026-10-24: "Maskentool invertieren, aussen grau,
-        # innen schwarz"): a broad ring whose middle is cut back to clear, so
-        # the key's own dark shows through and the ring turns white when held.
-        dot(0.5, 0.5, 0.47)
-        r = 0.27 * d_size
+        # A swatch, not a diagram -- see the docstring. A grey square with a
+        # dark disc inside (user, 2026-10-24: "Quadrat hellgrau, schwarzer
+        # Kreis innen"): the disc is cut back to clear, so the key's own dark
+        # shows through, and the square turns white when held.
+        dr.rectangle([P(0.06, 0.06), P(0.94, 0.94)], fill=ink)
+        r = 0.30 * d_size
         x, y = P(0.5, 0.5)
         dr.ellipse([x - r, y - r, x + r, y + r], fill=(0, 0, 0, 0))
     # Stand-ins for the three load keys when fonts/ is missing. They came in
@@ -1473,7 +1473,7 @@ class ReviewPanel(tk.Frame):
             self.v_show_lines = tk.BooleanVar(value=True)
             self.v_show_mask = tk.BooleanVar(value=True)
             self.v_mask_color = tk.StringVar(value=OVERLAY["mask_default"])
-            self.v_mask_alpha = tk.DoubleVar(value=0.60)
+            self.v_mask_alpha = tk.DoubleVar(value=0.50)
         ovbar = tk.Frame(self.c_before, bg=INK["field"])
         self._ovbar = ovbar
         ttk.Checkbutton(ovbar, text="Lines", command=self._schedule_redraw,
@@ -3773,7 +3773,7 @@ class ReviewPanel(tk.Frame):
                              "counts, and the rest is ignored.\n"
                              "Applies to every source at once - brush, SAM "
                              "and the facade strip together.")
-        self.v_alpha = tk.DoubleVar(value=0.28)
+        self.v_alpha = tk.DoubleVar(value=0.50)
         op = put(ttk.Frame(g), 1, 3)
         ttk.Label(op, text="opacity").pack(side="left", padx=(4, 4))
         ttk.Scale(op, from_=0.0, to=1.0, variable=self.v_alpha, orient="horizontal",

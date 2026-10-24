@@ -688,6 +688,51 @@ def max_free_rect(poly, lo: float = 0.15, hi: float = 6.0, score=None):
     return (fine or got)[0]
 
 
+def poly_centroid(poly):
+    """Area centroid of a simple polygon (vertices in order); the mean of the
+    vertices when it has no area."""
+    p = np.asarray(poly, dtype=float)
+    x, y = p[:, 0], p[:, 1]
+    xn, yn = np.roll(x, -1), np.roll(y, -1)
+    cr = x * yn - xn * y
+    a = cr.sum() / 2.0
+    if abs(a) < 1e-9:
+        return p.mean(axis=0)
+    return np.array([((x + xn) * cr).sum(), ((y + yn) * cr).sum()]) / (6.0 * a)
+
+
+def centred_free_rect(poly, centre, lo: float = 0.15, hi: float = 6.0, score=None):
+    """Largest rectangle of ANY aspect inside a convex polygon, centred on ``centre``.
+
+    The anchored twin of :func:`max_free_rect`: per aspect
+    :func:`inscribed_rect` gives the largest rectangle around ``centre``, and
+    ``score`` (default: output area) picks the aspect. Used for a soft
+    horizontal-auto correction, where the user wants the crop to sit on the
+    middle of the warped outline rather than wherever it fits best.
+    """
+    c = np.asarray(centre, dtype=float)
+    if not _inside(np.asarray(poly, float), c[None, :]):
+        return None
+
+    def best_of(aspects):
+        best, val = None, 0.0
+        for a in aspects:
+            r = inscribed_rect(poly, float(a), c)
+            if r[2] - r[0] < 1e-6 or r[3] - r[1] < 1e-6:
+                continue
+            v = score(r) if score is not None else (r[2] - r[0]) * (r[3] - r[1])
+            if v > val:
+                best, val = (r, float(a)), v
+        return best
+    coarse = np.geomspace(lo, hi, 60)
+    got = best_of(coarse)
+    if got is None:
+        return None
+    step = coarse[1] / coarse[0]
+    fine = best_of(np.geomspace(got[1] / step, got[1] * step, 21))
+    return (fine or got)[0]
+
+
 def source_area(H_total, rect):
     """Area, in SOURCE pixels, of the photograph a warped-space rectangle shows."""
     x0, y0, x1, y1 = (float(v) for v in rect)

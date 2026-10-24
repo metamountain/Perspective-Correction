@@ -101,8 +101,8 @@ class ReviewSession:
 
         self.mode = AUTO
         self.show_mask = True
-        self.mask_alpha = 0.28
-        self.mask_color = (60, 60, 200)  # BGR; the GUI swatch overrides this
+        self.mask_alpha = 0.50
+        self.mask_color = (20, 255, 57)  # BGR neon green; the GUI swatch overrides this
         # Hand-painted ignore region, analysis-image resolution, or None until
         # the brush is first used.  `_paint_struck` remembers which lines this
         # paint struck out, so erasing part of it can hand exactly those back
@@ -583,8 +583,20 @@ class ReviewSession:
         # Free aspect once a yaw is in play: the output's proportions are not
         # the photograph's any more, and the source aspect on a steep
         # trapezoid parks the rectangle in its tallest corner.
-        rect = (W.max_free_rect(region, score=lambda r: W.source_area(H_total, r)) if yawed
-                else W.max_inscribed_rect(region, self.w / float(self.h)))
+        # A soft horizontal-auto correction (user, 2026-10-24: "bei soften
+        # HA-Korrekturen Auto-Crop auf Mittelpunkt Outline (Trapez)") keeps
+        # the crop on the middle of the warped outline instead of letting it
+        # slide to wherever it fits best or to the line-dense region.
+        soft = yawed and math.degrees(abs(yaw)) <= self.SOFT_YAW_DEG and self.strip is None
+        src_area = lambda r: W.source_area(H_total, r)
+        if soft:
+            rect = W.centred_free_rect(region, W.poly_centroid(region), score=src_area)
+        else:
+            # Auto (no yaw) is centred too ("bei Auto soll das auch so sein",
+            # 2026-10-24), in the photograph's own aspect.
+            rect = (W.max_free_rect(region, score=src_area) if yawed
+                    else W.inscribed_rect(region, self.w / float(self.h),
+                                          W.poly_centroid(region)))
         if rect is None:
             return False
         x0, y0, x1, y1 = (float(t) for t in rect)
@@ -637,7 +649,7 @@ class ReviewSession:
         # raus"): with a yaw in play and no strip, frame where the lines are.
         # With a fill the box is the crop; without one it only trims the
         # fill-free rectangle, which must stay free of invented pixels.
-        if self.CROP_TO_INTEREST and yawed and self.strip is None:
+        if self.CROP_TO_INTEREST and yawed and self.strip is None and not soft:
             k = self.w / float(self.gray.shape[1])
             parts = [np.asarray(x.seg, float)[:, :4] * k for x in (self.vert, self.horiz) if len(x)]
             box = W.interest_box(H_total, np.concatenate(parts), ow, oh) if parts else None
@@ -1285,6 +1297,7 @@ class ReviewSession:
     STRIP_HORIZ_GAP_DEG = 4.0
     FOLD_MAX_FORESHORTEN = 3.0
     CROP_TO_INTEREST = True   # auto crop frames the line-dense region (see auto_crop)
+    SOFT_YAW_DEG = 15.0       # up to this yaw the auto crop is centred on the outline's middle
     FOLD_FRAME_TOL = 0.05     # how far the facade may poke out of a plan before the quad path frames it
 
     def _plan_segs(self, width):
