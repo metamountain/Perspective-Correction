@@ -139,6 +139,9 @@ def _run_module(name):
 
 
 def main(argv):
+    # GeoCalib (an optional install) off for the whole run, workers included:
+    # see pc.geocal.available. The test that covers it fakes it instead.
+    os.environ.setdefault("PC_LEARNED_FOCAL", "0")
     verbose = "-v" in argv
     sequential = "-s" in argv
     stray = _unlisted()

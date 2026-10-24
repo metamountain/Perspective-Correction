@@ -4,7 +4,7 @@ Run by a double-click on ``Install (macOS).command`` / ``Install (Windows).bat``
 or by hand:
 
     python tools/install_deps.py            core + the small optional packages
-    python tools/install_deps.py --lama     also the lama fill (torch: ~1 GB)
+    python tools/install_deps.py --lama     also the lama fill and GeoCalib (torch: ~1 GB)
 
 Written 2026-10-23; the Windows path is tested, the macOS path has never run
 on a Mac. Linux users install from requirements.txt themselves (user).
@@ -57,8 +57,10 @@ def _load_depinstall():
 
 
 _DI = _load_depinstall()
-OPTIONAL = [(p["label"], p["pip"]) for p in _DI.PACKAGES if p["key"] != "lama"]
+OPTIONAL = [(p["label"], p["pip"]) for p in _DI.PACKAGES if p["key"] not in ("lama", "geocalib")]
 LAMA = next((p["label"], p["pip"]) for p in _DI.PACKAGES if p["key"] == "lama")
+# Needs torch too, so it rides with --lama; its weights come after the pip step.
+GEOCALIB = next((p["label"], p["pip"]) for p in _DI.PACKAGES if p["key"] == "geocalib")
 TORCH = (_DI.TORCH["label"], _DI.TORCH["pip"])
 
 
@@ -118,7 +120,8 @@ def pip(py, args):
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--lama", action="store_true",
-                    help="also install the lama fill, and torch if it is missing (large download)")
+                    help="also install the lama fill and GeoCalib (focal guess), and torch "
+                         "if it is missing (large download)")
     ap.add_argument("--venv", default=os.path.join(ROOT, ".venv") if MAC else None,
                     help="install into this venv (default: .venv on macOS, "
                          "the running Python on Windows)")
@@ -173,16 +176,23 @@ def main(argv=None):
         if not has_module(py, "torch"):
             steps.append(TORCH)
         steps.append(LAMA)
+        steps.append(GEOCALIB)
     done, missed = [], []
     for label, args in steps:
         say(f"\n== optional: {label}")
-        if args == LAMA[1] and TORCH[0] in missed:
+        if args in (LAMA[1], GEOCALIB[1]) and TORCH[0] in missed:
             # The in-app button skips it the same way: lama installs fine
             # with --no-deps and then cannot run, and the summary called it ok.
-            say("skipped: lama cannot run without torch")
+            say(f"skipped: {label} cannot run without torch")
             missed.append(label)
             continue
         if pip(py, args):
+            if args == GEOCALIB[1]:
+                ok, reason = _DI.fetch_geocalib_weights()
+                if not ok:
+                    say(f"!! {reason}")
+                    missed.append(label)
+                    continue
             done.append(label)
         else:
             missed.append(label)

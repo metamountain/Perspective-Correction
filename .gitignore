@@ -38,6 +38,7 @@ models/BiRefNet/
 models/GroundingDINO/
 models/sam2/
 models/sam3/
+models/geocalib/
 
 # model weights are fetched on demand, never committed
 models/*.pt

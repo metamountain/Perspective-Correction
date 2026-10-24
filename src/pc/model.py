@@ -390,7 +390,7 @@ def _cost_terms(params, vert, cx, cy, f_prior, f_sigma):
 
 
 def estimate(vert, horiz, w: int, h: int, settings, exif_focal_px=None,
-             single_facade: bool = False) -> Model:
+             single_facade: bool = False, learned_focal=None) -> Model:
     """Estimate ``(roll, pitch, f)`` and a confidence for one image.
 
     ``single_facade`` says the horizontal evidence has been restricted to ONE
@@ -398,6 +398,10 @@ def estimate(vert, horiz, w: int, h: int, settings, exif_focal_px=None,
     facade.  That licenses the two-vanishing-point rotation below, which is
     exact for a plane and wrong for a corner seen whole.  See
     `horizontalauto theorie.md`.
+
+    ``learned_focal`` is a callable giving a learned focal guess in these
+    pixels, or None (GeoCalib, `pc.geocal`). It is called only when no EXIF,
+    no hand-set focal and no geometric estimate decided -- see below.
     """
     cx, cy = w / 2.0, h / 2.0
     diag = {"n_vertical": len(vert), "n_horizontal": len(horiz)}
@@ -485,6 +489,17 @@ def estimate(vert, horiz, w: int, h: int, settings, exif_focal_px=None,
         if abs(math.log(f_tp / f_use)) > 0.02:
             diag["focal_blend"]["tilt_prior_35mm"] = round(focal_35mm_from_px(f_tp, w, h), 1)
             f_use, f_src = f_tp, "tilt prior"
+    # A learned guess joins only where the priors decided: measured
+    # 2026-10-24 (55 cases with a known focal) it is worse than the geometry
+    # where the vanishing points fix f (|log err| 0.27 vs 0.07) and the
+    # geometric mean with the priors' answer beats both where they do not
+    # (0.27 -> 0.18). It blends, never replaces.
+    if (f_source == "default" and learned_focal is not None
+            and f_src not in ("geometric", "horizon")):
+        f_l = learned_focal()
+        if f_l and f_l > 0.05 * max(w, h):
+            diag["focal_blend"]["learned_35mm"] = round(focal_35mm_from_px(f_l, w, h), 1)
+            f_use, f_src = math.sqrt(f_use * f_l), "GeoCalib"
     u = G.up_vector(hy.vp, G.intrinsics(f_use, cx, cy))
     roll, pitch = G.roll_pitch_from_up(u)
 
@@ -673,6 +688,9 @@ def _confidence(vert, hy, support, f_src, f_quality, roll, pitch, f, cx, cy,
                # review panel would_skip already exempts a hand-placed strip,
                # so this moves a displayed number there and not a decision.
                "orthogonal": 0.85,
+               # learned guess blended with the priors' (pc.geocal): better
+               # than a prior alone, still no measurement of this photo
+               "GeoCalib": 0.65,
                "default": 0.60, "none": 0.40}.get(f_src, 0.6)
     d["focal_source"] = f_src
 

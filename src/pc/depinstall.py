@@ -19,6 +19,18 @@ import importlib.util
 import os
 import subprocess
 import sys
+import time
+import urllib.request
+
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# GeoCalib (pc.geocal): one commit's GitHub archive, so pip needs no git, and
+# the weights it would otherwise fetch on the first photograph.
+GEOCALIB_URL = ("https://github.com/cvg/GeoCalib/archive/"
+                "1dedb29f94fc11b896c5f572005978aeebccd67f.tar.gz")
+GEOCALIB_WEIGHTS = os.path.join(ROOT, "models", "geocalib", "pinhole.tar")
+GEOCALIB_WEIGHTS_URL = ("https://github.com/cvg/GeoCalib/releases/download/v1.0/"
+                        "geocalib-pinhole.tar")
+GEOCALIB_WEIGHTS_SIZE = 116074121
 
 # key, label, import name, pip arguments, rough download size.
 PACKAGES = [
@@ -29,11 +41,18 @@ PACKAGES = [
      "module": "ai_edge_litert", "pip": ["--no-deps", "ai-edge-litert"], "size": "~10 MB"},
     {"key": "dnd", "label": "drag and drop (tkinterdnd2)",
      "module": "tkinterdnd2", "pip": ["tkinterdnd2>=0.4"], "size": "~1 MB"},
+    # Needs torch: ticking it in the menu takes torch along, and `install`
+    # skips it when pip finds no torch for this Python/OS (torch_installable),
+    # so it is only ever installed where it can run. It only sharpens a focal
+    # GUESS (no EXIF, lines that cannot fix it); see pc.geocal.
+    {"key": "geocalib", "label": "focal guess without EXIF (GeoCalib)",
+     "module": "geocalib", "pip": ["--no-deps", GEOCALIB_URL],
+     "size": "~140 MB, needs torch"},
 ]
 # lama imports torch and nothing else of its pins at run time. An installed
 # torch is never touched: on Windows it is often a CUDA build that a plain
 # `pip install torch` would replace with the CPU one.
-TORCH = {"key": "torch", "label": "torch (for lama)", "module": "torch",
+TORCH = {"key": "torch", "label": "torch (for lama and GeoCalib)", "module": "torch",
          "pip": ["torch"], "size": "~250 MB-2.5 GB"}
 
 
@@ -55,19 +74,84 @@ def present(module):
         return False
 
 
-def missing():
-    """The optional packages not installed, in install order (torch before lama)."""
-    out = []
-    for pkg in PACKAGES:
-        if pkg["key"] == "lama" and not present(TORCH["module"]):
-            # lama without torch cannot run on any OS -- the first Mac had
-            # exactly that (lama installed, no torch for Python 3.15), and this
-            # list used to call it complete because lama itself was present.
-            out.append(TORCH)
-        if present(pkg["module"]):
-            continue
-        out.append(pkg)
-    return out
+# What each one is for, in the deps menu.
+PURPOSE = {
+    "torch": "the engine lama and GeoCalib run on",
+    "lama": "the good fill for the empty corners (telea fills without it)",
+    "geocalib": "a better focal guess for photos without EXIF",
+    "mlsd": "a second line detector",
+    "dnd": "drag photos onto the window",
+}
+_ORDER = ("torch", "lama", "geocalib", "mlsd", "dnd")
+NEEDS_TORCH = ("lama", "geocalib")
+
+
+def catalogue():
+    """Every optional package for the deps menu, with ``installed`` and
+    ``purpose`` added, in install order (torch first).
+
+    User, 2026-10-24: "soll nicht blind installieren" -- the menu shows them
+    all and installs only what is ticked; this is its data."""
+    by_key = {p["key"]: p for p in PACKAGES}
+    by_key["torch"] = TORCH
+    rows = []
+    for key in _ORDER:
+        pkg = by_key[key]
+        inst = present(pkg["module"])
+        if key == "geocalib":
+            inst = inst and geocalib_weights_ok()
+        rows.append(dict(pkg, installed=inst, purpose=PURPOSE[key]))
+    return rows
+
+
+def in_order(items):
+    """``items`` sorted so torch comes before what needs it."""
+    return sorted(items, key=lambda i: _ORDER.index(i["key"]) if i["key"] in _ORDER else 99)
+
+
+def geocalib_weights_ok(path=None):
+    path = path or GEOCALIB_WEIGHTS
+    return os.path.isfile(path) and os.path.getsize(path) == GEOCALIB_WEIGHTS_SIZE
+
+
+def fetch_geocalib_weights(path=None, url=None, size=None):
+    """Download GeoCalib's weights; ``(ok, reason)``. Written to a temp name
+    and moved into place only at the right size, so a broken download never
+    looks installed."""
+    path, url = path or GEOCALIB_WEIGHTS, url or GEOCALIB_WEIGHTS_URL
+    size = GEOCALIB_WEIGHTS_SIZE if size is None else size
+    if os.path.isfile(path) and os.path.getsize(path) == size:
+        return True, ""
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".part"
+    try:
+        with urllib.request.urlopen(url, timeout=60) as r, open(tmp, "wb") as f:
+            while True:
+                chunk = r.read(1 << 20)
+                if not chunk:
+                    break
+                f.write(chunk)
+        got = os.path.getsize(tmp)
+        if got != size:
+            os.remove(tmp)
+            return False, f"weights download incomplete ({got} of {size} bytes)"
+        # A virus scanner holds a fresh 116 MB file for a moment (WinError 32,
+        # met on the first real install), so the move is retried.
+        for attempt in range(20):
+            try:
+                os.replace(tmp, path)
+                break
+            except PermissionError:
+                if attempt == 19:
+                    raise
+                time.sleep(0.5)
+        return True, ""
+    except Exception as exc:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        return False, f"weights download failed: {exc}"
 
 
 def pip_python(exe=None):
@@ -133,8 +217,18 @@ def install(items, py=None, on_step=None):
                 on_step(i, len(items), item["label"])
             except Exception:
                 pass
-        if item["key"] == "lama" and torch_failed:
+        if item["key"] in ("lama", "geocalib") and torch_failed:
             results.append((item, False, "skipped: torch is missing"))
+            continue
+        if item["key"] == "geocalib":
+            ok, reason = True, ""
+            if not present(item["module"]):
+                code, out = _run([py, "-m", "pip", "install", "--disable-pip-version-check",
+                                  *item["pip"]])
+                ok, reason = code == 0, ("" if code == 0 else explain(out))
+            if ok:
+                ok, reason = fetch_geocalib_weights()
+            results.append((item, ok, reason))
             continue
         if item["key"] == "torch" and not torch_installable(py):
             results.append((item, False, f"no torch for Python {_version()} yet{_hint_312()}"))

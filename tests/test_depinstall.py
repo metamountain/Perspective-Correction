@@ -75,22 +75,27 @@ def test_lama_is_skipped_when_torch_cannot_be_had_and_pip_is_not_asked_for_it():
     assert calls == [], f"pip was run although torch was unavailable: {calls}"
 
 
-def test_torch_comes_before_lama_and_only_when_it_is_missing():
-    real = DI.present
+def test_the_menu_lists_every_package_with_torch_first_and_says_what_is_installed():
+    """The deps menu's rows (user 2026-10-24: "soll nicht blind installieren").
+    torch comes before what needs it; GeoCalib counts as installed only with
+    its weights complete; every row says what it is for."""
+    real, real_w = DI.present, DI.geocalib_weights_ok
     try:
         DI.present = lambda m: False
-        keys = [i["key"] for i in DI.missing()]
-        assert keys.index("torch") == keys.index("lama") - 1, keys
-        DI.present = lambda m: m == "torch"
-        keys = [i["key"] for i in DI.missing()]
-        assert "torch" not in keys and "lama" in keys, keys
-        # lama there, torch not (the first Mac on Python 3.15): torch is missing
-        DI.present = lambda m: m != "torch"
-        assert [i["key"] for i in DI.missing()] == ["torch"]
+        rows = DI.catalogue()
+        keys = [r["key"] for r in rows]
+        assert keys.index("torch") < keys.index("lama") < keys.index("geocalib"), keys
+        assert not any(r["installed"] for r in rows) and all(r["purpose"] for r in rows)
         DI.present = lambda m: True
-        assert DI.missing() == []
+        DI.geocalib_weights_ok = lambda path=None: False
+        inst = {r["key"]: r["installed"] for r in DI.catalogue()}
+        assert inst["geocalib"] is False and inst["torch"] and inst["lama"], inst
+        DI.geocalib_weights_ok = lambda path=None: True
+        assert all(r["installed"] for r in DI.catalogue())
+        assert [i["key"] for i in DI.in_order([{"key": "dnd"}, {"key": "geocalib"},
+                                               {"key": "torch"}])] == ["torch", "geocalib", "dnd"]
     finally:
-        DI.present = real
+        DI.present, DI.geocalib_weights_ok = real, real_w
 
 
 def test_the_explanations_name_the_cause_a_user_can_act_on():
@@ -134,3 +139,32 @@ def test_the_installer_does_not_call_lama_ok_when_torch_failed():
     assert mod.LAMA[1] not in asked, "pip was asked for a lama that cannot run"
     assert f"optional ok:      {mod.LAMA[0]}" not in said
     assert any(mod.LAMA[0] in s and "MISSING" in s for s in said), said[-6:]
+
+
+def test_the_weights_count_only_when_complete_and_survive_a_scanner_lock():
+    """A short download must never look installed, and a virus scanner holding
+    the fresh file (WinError 32 on the first real install) must not fail it."""
+    import pathlib
+    with tempfile.TemporaryDirectory() as d:
+        src = os.path.join(d, "w.bin")
+        with open(src, "wb") as f:
+            f.write(b"x" * 1000)
+        url = pathlib.Path(src).as_uri()
+        dst = os.path.join(d, "models", "geocalib", "pinhole.tar")
+        ok, why = DI.fetch_geocalib_weights(dst, url, size=2000)
+        assert not ok and "incomplete" in why and not os.path.exists(dst), why
+        assert not os.path.exists(dst + ".part")
+        real, calls = os.replace, []
+
+        def locked(a, b):
+            calls.append(a)
+            if len(calls) < 3:
+                raise PermissionError(32, "used by another process")
+            return real(a, b)
+        DI.os.replace = locked
+        try:
+            ok, why = DI.fetch_geocalib_weights(dst, url, size=1000)
+        finally:
+            DI.os.replace = real
+        assert ok and os.path.getsize(dst) == 1000 and len(calls) == 3, (ok, why, calls)
+        assert DI.fetch_geocalib_weights(dst, url, size=1000) == (True, "")

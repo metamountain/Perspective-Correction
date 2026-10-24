@@ -28,6 +28,7 @@ from types import SimpleNamespace
 import cv2
 import numpy as np
 
+from . import geocal as GC
 from . import geometry as G
 from . import imageio as IO
 from . import lines as L
@@ -398,7 +399,8 @@ class ReviewSession:
         # for building the rotation from that facade's own two vanishing points.
         m = M.estimate(vert, horiz, gw, gh, settings,
                        exif_px * self.scale if exif_px else None,
-                       single_facade=self.strip is not None)
+                       single_facade=self.strip is not None,
+                       learned_focal=GC.provider(self.bgr, self.scale, settings))
         if m.f:
             m.f = m.f / self.scale
             # Sanity clamp: focal below 5% of frame width is unphysical

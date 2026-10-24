@@ -5633,6 +5633,9 @@ class App(_ROOT_CLASS):
                         "      (needs torch: a large download, minutes)\n"
                         "  mlsd -- a second line detector\n"
                         "  tkinterdnd2 -- drag photos onto the window\n"
+                        "  GeoCalib -- a better focal guess for photos\n"
+                        "      without EXIF (offered only once torch is\n"
+                        "      there; ~140 MB)\n"
                         "Lists what is missing and asks first. Without them\n"
                         "the program still works (telea fills instead).")
         # The whole batch, rudimentary: one button, which turns into its own
@@ -5921,32 +5924,97 @@ class App(_ROOT_CLASS):
         threading.Thread(target=look, daemon=True).start()
 
     def _install_deps(self):
-        """The `deps` button: pip-install the missing optional packages.
+        """The `deps` button: a menu of the optional packages.
 
-        Same shape as `_check_for_update`: look, ask with the list, then work
-        on a daemon thread with the label as the indicator. Back to Tk through
-        `self.queue` like the batch, not `after` from the thread: Tk refuses
-        that whenever no mainloop runs (found by the test, which pumps).
+        User, 2026-10-24: "soll nicht blind installieren. torch lama telea
+        geo". It used to list what was missing and install all of it after one
+        yes. Now every package is a row -- installed ones greyed out and said
+        so, telea named as the built-in fill -- nothing is ticked, and only
+        what the user ticks is installed. Ticking lama or GeoCalib ticks torch
+        too while torch is missing (both cannot run without it).
+
+        The work runs as before: a daemon thread with the button label as the
+        indicator, back to Tk through `self.queue` (Tk refuses `after` from a
+        thread whenever no mainloop runs -- found by the test, which pumps).
         Installs into the Python running the window.
         """
         if getattr(self, "_deps_busy", False):
             return
         from . import depinstall as DI
-        items = DI.missing()
-        if not items:
-            messagebox.showinfo("Optional packages",
-                                "Everything optional is installed already.", parent=self)
-            return
-        ask = ("These optional packages are missing:\n\n"
-               + "\n".join(f"   {i['label']}  ({i['size']})" for i in items)
-               + f"\n\nThey go into the Python running this window:\n   {DI.pip_python()}"
-               + "\n\nInstall them now? This can take several minutes.")
-        if not messagebox.askyesno("Optional packages", ask, parent=self):
-            return
+        old = getattr(self, "_w_deps", None)
+        if old is not None:
+            try:
+                old.destroy()
+            except tk.TclError:
+                pass
+        rows = DI.catalogue()
+        win = tk.Toplevel(self)
+        win.configure(bg=INK["bg"])
+        win.title("Optional packages")
+        win.transient(self)
+        self._w_deps = win
+        body = ttk.Frame(win, padding=(10, 8))
+        body.pack(fill="both", expand=True)
+        ttk.Label(body, text="Tick what to install. Nothing is installed unasked.").pack(anchor="w")
+        self._deps_vars = {}
+        boxes = {}
+        torch_there = any(r["key"] == "torch" and r["installed"] for r in rows)
+
+        def ticked(key):
+            # lama/GeoCalib without torch cannot run: take torch along, and
+            # keep it while anything that needs it is ticked.
+            v = self._deps_vars
+            if key in DI.NEEDS_TORCH and v[key].get() and not torch_there:
+                v["torch"].set(True)
+            if key == "torch" and not v["torch"].get():
+                for k in DI.NEEDS_TORCH:
+                    if k in v and not rows_by[k]["installed"]:
+                        v[k].set(False)
+
+        rows_by = {r["key"]: r for r in rows}
+        for r in rows:
+            v = tk.BooleanVar(value=False)
+            self._deps_vars[r["key"]] = v
+            state = "installed" if r["installed"] else r["size"]
+            cb = ttk.Checkbutton(body, variable=v, text=f"{r['label']}  ({state})",
+                                 command=lambda k=r["key"]: ticked(k))
+            cb.pack(anchor="w", pady=(6, 0))
+            if r["installed"]:
+                cb.state(["disabled"])
+            ttk.Label(body, text="      " + r["purpose"], style="Dim.TLabel").pack(anchor="w")
+            boxes[r["key"]] = cb
+        self._deps_boxes = boxes
+        ttk.Label(body, text="telea fill  (built in, always there)").pack(anchor="w", pady=(6, 0))
+        ttk.Label(body, text="      fills the corners when lama is missing",
+                  style="Dim.TLabel").pack(anchor="w")
+        ttk.Label(body, text=f"Into the Python running this window:\n   {DI.pip_python()}",
+                  style="Dim.TLabel").pack(anchor="w", pady=(8, 0))
+        bar = ttk.Frame(body)
+        bar.pack(fill="x", pady=(8, 0))
+
+        def go():
+            chosen = [dict(rows_by[k]) for k, v in self._deps_vars.items()
+                      if v.get() and not rows_by[k]["installed"]]
+            if not chosen:
+                self._notify("nothing ticked -- nothing installed")
+                return
+            win.destroy()
+            self._w_deps = None
+            self._deps_run(DI.in_order(chosen))
+        self._deps_go = go
+        ttk.Button(bar, text="Close", command=win.destroy).pack(side="right")
+        ttk.Button(bar, text="Install ticked", style="Accent.TButton",
+                   command=go).pack(side="right", padx=(0, 6))
+        _dark_titlebar(win)
+
+    def _deps_run(self, items):
+        """Install ``items`` (ticked in the deps menu) on a thread."""
+        from . import depinstall as DI
         self._deps_busy = True
         btn = self.btn_deps
         btn.configure(text="installing")
-        self._notify("installing optional packages -- the window stays usable")
+        self._notify("installing " + ", ".join(i["key"] for i in items)
+                     + " -- the window stays usable")
 
         def step(i, n, label):
             self.queue.put(("call", lambda: btn.configure(text=f"{i + 1}/{n}")))
@@ -5957,6 +6025,9 @@ class App(_ROOT_CLASS):
             ok, text = DI.summary(results)
             if any(item["key"] == "lama" and good for item, good, _r in results):
                 text += "\n\nlama fills from the next preview or save on."
+            if any(item["key"] == "geocalib" and good for item, good, _r in results):
+                text += ("\n\nGeoCalib guesses the focal length from the next photograph "
+                         "on, where neither EXIF nor the lines decide it.")
             (messagebox.showinfo if ok else messagebox.showwarning)(
                 "Optional packages", text, parent=self)
             self._notify("optional packages installed" if ok

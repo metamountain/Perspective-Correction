@@ -117,8 +117,10 @@ def analyse(bgr, settings, exif_focal_px=None, image_path="", strip=None):
     exif_small = exif_focal_px * scale if exif_focal_px else None
     # A strip means the caller has pointed at one facade, which is exactly the
     # precondition the two-vanishing-point rotation needs.
+    from . import geocal
     m = M.estimate(vert, horiz, gw, gh, settings, exif_small,
-                   single_facade=strip is not None)
+                   single_facade=strip is not None,
+                   learned_focal=geocal.provider(bgr, scale, settings))
     if m.f:
         m.f = m.f / scale                       # back to full resolution pixels
     m.detect_info = info

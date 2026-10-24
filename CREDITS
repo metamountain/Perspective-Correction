@@ -79,3 +79,12 @@ sits beside its font.
   icons.
 * **Noto Emoji** (Google, SIL Open Font License 1.1) — the dinosaur on the
   Grounding DINO key.
+
+## Optional: GeoCalib (installed by the `deps` menu, not shipped)
+
+* **GeoCalib** — Veicht, Sarlin, Lindenberger, Pollefeys, "GeoCalib:
+  Learning Single-image Calibration with Geometric Optimization", ECCV 2024,
+  https://github.com/cvg/GeoCalib. Code: Apache License 2.0. Pretrained
+  weights (`geocalib-pinhole.tar`, downloaded to `models/geocalib/`):
+  Creative Commons Attribution 4.0 International (CC BY 4.0). Used only for a
+  focal-length guess on photographs without EXIF (`src/pc/geocal.py`).

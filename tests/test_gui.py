@@ -1679,47 +1679,64 @@ def test_a_missing_lama_is_said_and_never_switched_to_telea_silently():
         GUI._lama_installed = real
 
 
-def test_the_deps_button_asks_installs_on_a_thread_and_reports():
-    """The button lists what is missing, installs only after a yes, keeps the
-    window answering while pip runs, and comes back with a summary."""
+def test_the_deps_button_is_a_menu_that_installs_only_what_is_ticked():
+    """User, 2026-10-24: "soll nicht blind installieren. torch lama telea geo".
+    The button opens a menu: nothing ticked, installed rows greyed out, telea
+    named as built in; ticking lama takes torch along while torch is missing;
+    only the ticked rows are installed, on a thread, with a summary after."""
     from pc import depinstall as DI
     from pc import gui as GUI
-    item = {"key": "dnd", "label": "drag and drop (tkinterdnd2)", "module": "x",
-            "pip": [], "size": "~1 MB"}
-    shown, asked, ran = [], [], []
-    saved = (DI.missing, DI.install, GUI.messagebox.askyesno, GUI.messagebox.showinfo,
-             GUI.messagebox.showwarning)
-    DI.missing = lambda: [item]
-    GUI.messagebox.askyesno = lambda title, text, **k: asked.append(text) or True
+
+    def row(key, installed):
+        return {"key": key, "label": key + " pkg", "module": "x", "pip": [],
+                "size": "~1 MB", "installed": installed, "purpose": key + " for"}
+    cat = [row("torch", False), row("lama", False), row("geocalib", False),
+           row("mlsd", True), row("dnd", False)]
+    shown, ran = [], []
+    saved = (DI.catalogue, DI.install, GUI.messagebox.showinfo, GUI.messagebox.showwarning)
+    DI.catalogue = lambda: [dict(r) for r in cat]
     GUI.messagebox.showinfo = lambda title, text, **k: shown.append(text)
     GUI.messagebox.showwarning = lambda title, text, **k: shown.append("WARN " + text)
 
     def fake_install(items, on_step=None, py=None):
         time.sleep(0.3)                        # the window must answer meanwhile
-        ran.append(items)
+        ran.append([i["key"] for i in items])
         if on_step:
-            on_step(0, 1, items[0]["label"])
-        return [(items[0], True, "")]
+            on_step(0, len(items), items[0]["label"])
+        return [(i, True, "") for i in items]
     DI.install = fake_install
     app = _app()
     try:
         _settle(app, 5)
-        assert app.btn_deps.cget("text") == "deps"
         app._install_deps()
-        assert asked and "drag and drop" in asked[0], asked
-        assert app.btn_deps.cget("text") in ("installing", "1/1")
+        _settle(app, 3)
+        v = app._deps_vars
+        assert not any(x.get() for x in v.values()), "something was ticked unasked"
+        assert "disabled" in app._deps_boxes["mlsd"].state()
+        assert "disabled" not in app._deps_boxes["dnd"].state()
+        texts = [w.cget("text") for w in app._w_deps.winfo_children()[0].winfo_children()
+                 if isinstance(w, GUI.ttk.Label)]
+        assert any("telea" in t and "built in" in t for t in texts), texts
+        # Nothing ticked: nothing installed, the menu stays.
+        app._deps_go()
+        _settle(app, 3)
+        assert ran == [] and app._w_deps is not None
+        # lama takes torch along; untick torch and lama goes with it.
+        app._deps_boxes["lama"].invoke()
+        assert v["lama"].get() and v["torch"].get()
+        app._deps_boxes["torch"].invoke()
+        assert not v["torch"].get() and not v["lama"].get()
+        app._deps_boxes["dnd"].invoke()
+        app._deps_boxes["geocalib"].invoke()
+        app._deps_go()
+        assert app.btn_deps.cget("text") in ("installing", "1/3")
         _settle_until(app, lambda: shown, n=150)
-        assert ran == [[item]], ran
-        assert shown and shown[0].startswith("ok: drag and drop"), shown
+        assert ran == [["torch", "geocalib", "dnd"]], ran
+        assert shown and shown[0].startswith("ok: torch pkg"), shown
+        assert "GeoCalib guesses the focal" in shown[0], shown
         assert app.btn_deps.cget("text") == "deps" and not app._deps_busy
-        # Nothing missing: says so, installs nothing.
-        DI.missing = lambda: []
-        shown.clear(); ran.clear()
-        app._install_deps()
-        assert shown == ["Everything optional is installed already."] and ran == []
     finally:
-        (DI.missing, DI.install, GUI.messagebox.askyesno, GUI.messagebox.showinfo,
-         GUI.messagebox.showwarning) = saved
+        (DI.catalogue, DI.install, GUI.messagebox.showinfo, GUI.messagebox.showwarning) = saved
         app.destroy()
 
 

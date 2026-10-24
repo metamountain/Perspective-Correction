@@ -219,3 +219,47 @@ def test_the_refinement_keeps_the_geometric_focal_instead_of_the_28mm_default():
         errs.append((mm, round(math.log(m.f / f_true), 3), m.f_source))
     assert all(src != "refined" for _, _, src in errs), errs
     assert all(abs(e) < (0.25 if mm > 40 else 0.05) for mm, e, _ in errs), errs
+
+
+def test_a_learned_focal_guess_is_asked_only_where_the_priors_decide():
+    """GeoCalib (pc.geocal) is worse than the vanishing points where they fix
+    the focal and helps where only the priors do (measured 2026-10-24). So the
+    estimator calls it only then, blends it (geometric mean, never a
+    replacement) and says so in f_source; with EXIF it is never asked."""
+    from pc.pipeline import analyse as _analyse
+    from pc import geocal
+    calls = []
+    real = geocal.provider
+
+    def fake(bgr, scale, settings):
+        if not settings.learned_focal:
+            return None
+
+        def get():
+            calls.append(1)
+            return fake.f * scale
+        return get
+    geocal.provider = fake
+    try:
+        # frontal, the priors decide (tilt prior / blend without it)
+        img_f, f_true_f, _ = synth.rubik_street(
+            [(-6.0, 60.0, 2.0)], 18.0, 60.0)
+        base = _analyse(img_f, Settings().replace(learned_focal=False))[0]
+        assert base.f_source not in ("geometric", "horizon"), base.f_source
+        fake.f = 2.0 * base.f
+        calls.clear()
+        m = _analyse(img_f, Settings())[0]
+        assert calls and m.f_source == "GeoCalib", (calls, m.f_source)
+        assert abs(m.f / base.f - math.sqrt(2.0)) < 0.05, m.f / base.f
+        # a corner view: the vanishing points decide, the guess is not asked
+        img_c, _, _ = synth.rubik_street([(-14.28, 41.55, -42.96), (11.17, 44.01, 52.59)],
+                                         9.72, 29.34)
+        calls.clear()
+        m = _analyse(img_c, Settings())[0]
+        assert m.f_source == "geometric" and not calls, (m.f_source, calls)
+        # EXIF: never asked
+        calls.clear()
+        m = _analyse(img_f, Settings(), exif_focal_px=f_true_f)[0]
+        assert not calls and m.f_source != "GeoCalib", (calls, m.f_source)
+    finally:
+        geocal.provider = real

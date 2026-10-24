@@ -76,6 +76,9 @@ class Settings:
     focal_35mm: float = 0.0             # >0 overrides EXIF
     default_focal_35mm: float = 28.0    # same generic default darktable uses
     use_exif_focal: bool = True
+    # GeoCalib's learned focal guess, used only when nothing geometric decided
+    # and only when it is installed (pc.geocal, the deps button).
+    learned_focal: bool = True
     focal_estimate: str = "vp"          # off | vp | horizon | both
     # 1.0 = off (2026-09-26, user-directed: "Dämpfungen sollen so weit wie
     # möglich weg"). Was 0.85, measured on the 40-scene benchmark to cut
