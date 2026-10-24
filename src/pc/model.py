@@ -492,45 +492,24 @@ def estimate(vert, horiz, w: int, h: int, settings, exif_focal_px=None,
     inl_set = vert.subset(hy.inliers) if hy.inliers.any() else vert
     hv = np.array([x.vp for x in horiz_hyps]) if horiz_hyps else np.zeros((0, 3))
     hw = np.array([x.score for x in horiz_hyps]) if horiz_hyps else np.zeros(0)
-    # Refine the focal length only when the geometry actually constrains it.
-    #
-    # A horizontal vanishing point near infinity says "this direction is
-    # perpendicular to up" -- a statement about roll, carrying no focal length
-    # information at all, since K^-1 v is independent of f when v[2] == 0.  Left
-    # in a three parameter fit it still moves the cost, because growing f tilts
-    # `up` out of the image plane and shrinks every residual by the unit-norm
-    # normalisation.  The optimiser duly ran the focal length up: a true 28 mm
-    # scene at 3 deg of tilt came back as 42.5 mm, tripling the pitch
-    # correction.  So when `sigma_geo` says the measurement is vague, f is held
-    # fixed at the blended value and only (roll, pitch) are fitted.
-    # Focal lower bound for the refinement: never allow f below 5% of frame.
-    # Without this, Nelder-Mead can drive f to unphysical values (e.g. 29px on
-    # a 1320px frame) where K·R·K⁻¹ produces wrong proportions instead of
-    # correcting them.  The bound is set BEFORE the optimiser so it never
-    # explores the fisheye regime.
-    f_floor = math.log(0.05 * max(w, h))
-    fit_focal = settings.refine and math.isfinite(sigma_geo) and sigma_geo < 0.35
+    # Only (roll, pitch) are refined; the focal length is never fitted here.
+    # Since the horizontal term left `_cost_terms` (2026-10-21) the cost holds
+    # the vertical lines and the focal prior alone, and lines through one
+    # vanishing point say nothing about f: for every f there is a (roll, pitch)
+    # whose up vector projects to the same point, so the vertical term is flat
+    # along the f : tilt curve and fitting f only walked it back to the prior.
+    # Measured 2026-10-24 over 48 rendered cube streets: every "refined" focal
+    # came out at exactly 28.0 mm whatever the truth, throwing away the
+    # geometric estimate (found by Fable, re-measured by the architect).
     if settings.refine and len(inl_set) >= 2:
-        if fit_focal:
-            def fn(p):
-                pf = max(p[2], f_floor)  # clamp inside the cost function
-                return _cost_terms([p[0], p[1], pf], inl_set, cx, cy, f_prior, f_sigma)
-            x0 = np.array([roll, pitch, math.log(f_use)])
-            step = [math.radians(0.6), math.radians(0.6), 0.05]
-        else:
-            lf = math.log(f_use)
-            fn = lambda p: _cost_terms([p[0], p[1], lf], inl_set, cx, cy,
-                                       f_prior, f_sigma)
-            x0 = np.array([roll, pitch])
-            step = [math.radians(0.6), math.radians(0.6)]
+        lf = math.log(f_use)
+        fn = lambda p: _cost_terms([p[0], p[1], lf], inl_set, cx, cy,
+                                   f_prior, f_sigma)
+        x0 = np.array([roll, pitch])
+        step = [math.radians(0.6), math.radians(0.6)]
         x, _, _ = nelder_mead(fn, x0, step, max_iter=250)
-        moved_f = abs(x[2] - math.log(f_use)) if fit_focal else 0.0
-        if abs(x[0] - roll) < math.radians(6) and abs(x[1] - pitch) < math.radians(10) \
-                and moved_f < 0.35:
+        if abs(x[0] - roll) < math.radians(6) and abs(x[1] - pitch) < math.radians(10):
             roll, pitch = float(x[0]), float(x[1])
-            if fit_focal:
-                f_use = max(float(math.exp(x[2])), 0.05 * max(w, h))
-                f_src = "refined"
         u = G.up_from_roll_pitch(roll, pitch)
     # Kept for the stability term below: that test refits roll/pitch on halves
     # of the VERTICAL inliers, so it has to be judged against the angles the

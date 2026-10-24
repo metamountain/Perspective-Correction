@@ -195,3 +195,27 @@ def test_a_shifted_frame_with_plumb_verticals_is_left_level():
             m, _, _, _, _ = analyse(sc.img[: int(sc.h * keep)], Settings())
             worst = max(worst, abs(math.degrees(m.pitch)))
     assert worst < 0.3, f"a level camera came back pitched {worst:.2f} deg"
+
+
+def test_the_refinement_keeps_the_geometric_focal_instead_of_the_28mm_default():
+    """Lines through one vanishing point say nothing about the focal length,
+    and since 2026-10-21 the refinement's cost holds nothing else -- so fitting
+    f there only walked it back to the 28 mm prior. Measured 2026-10-24 over
+    48 rendered cube streets: every focal the refinement touched came out at
+    exactly 28.0 mm. These four scenes, without EXIF, each have a geometric
+    estimate close to the truth that the refinement used to replace with 28."""
+    from pc.model import focal_px_from_35mm
+    scenes = (  # (truth mm, pitch, cubes) from tools/benchmark_focal.py
+        (24.08, 9.60, [(-13.11, 36.23, 6.82), (13.69, 42.99, 10.10)]),
+        (26.33, 20.22, [(-18.40, 35.38, 7.84), (-0.48, 36.18, 8.75),
+                        (16.56, 36.04, 8.66)]),
+        (29.34, 9.72, [(-14.28, 41.55, -42.96), (11.17, 44.01, 52.59)]),
+        (46.96, 4.80, [(-19.27, 87.43, -15.81), (13.46, 70.01, -4.28)]),
+    )
+    errs = []
+    for mm, pitch, cubes in scenes:
+        img, f_true, _faces = synth.rubik_street(cubes, pitch, mm)
+        m, _, _, _, _ = analyse(img, Settings())
+        errs.append((mm, round(math.log(m.f / f_true), 3), m.f_source))
+    assert all(src != "refined" for _, _, src in errs), errs
+    assert all(abs(e) < (0.25 if mm > 40 else 0.05) for mm, e, _ in errs), errs
