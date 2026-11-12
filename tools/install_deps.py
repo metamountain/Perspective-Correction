@@ -112,6 +112,19 @@ def has_module(py, name):
     return subprocess.call([py, "-c", probe]) == 0
 
 
+def build_launcher(py):
+    """Build ``Perspective Correction.exe`` with the logo (Windows only).
+
+    Runs after the core install because ``make_launcher.py`` renders the icon
+    from ``pc.gui``, which imports cv2/numpy/PIL. Never fails the install: the
+    .bat launcher still works, and the .exe is build output, not the program."""
+    say("\n== launcher: Perspective Correction.exe")
+    if subprocess.call([py, os.path.join(ROOT, "tools", "make_launcher.py")], cwd=ROOT) == 0:
+        return True
+    say("!! the launcher build failed; double-click 'Perspective Correction.bat' instead")
+    return False
+
+
 def pip(py, args):
     return subprocess.call([py, "-m", "pip", "install", "--disable-pip-version-check", *args],
                            cwd=ROOT) == 0
@@ -169,6 +182,8 @@ def main(argv=None):
         say("!! the core install failed -- read the pip output above.")
         return 1
 
+    launcher_ok = WIN and build_launcher(py)
+
     steps = list(OPTIONAL)
     if a.lama:
         # An installed torch is left alone: on Windows it is often a CUDA build
@@ -211,8 +226,11 @@ def main(argv=None):
         say(f"optional MISSING: {label} (the program runs without it)")
     if not a.lama:
         say("lama fill not asked for (telea is used without it); add it with --lama")
-    launcher = "Perspective Correction.command" if MAC else "Perspective Correction.bat"
-    say(f"\nStart: double-click '{launcher}', or")
+    if launcher_ok:
+        say("\nStart: double-click 'Perspective Correction.exe', or")
+    else:
+        launcher = "Perspective Correction.command" if MAC else "Perspective Correction.bat"
+        say(f"\nStart: double-click '{launcher}', or")
     say(f"       \"{py}\" perspective_correction.py --gui")
     return 0
 

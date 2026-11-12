@@ -43,7 +43,8 @@ itself on hover (after a second).
 ## Install
 
 **Windows, double-click** `Install (Windows).bat` (`--lama` adds the lama fill,
-which needs torch). It installs into the Python on PATH.
+which needs torch). It installs into the Python on PATH and builds the
+`Perspective Correction.exe` launcher with the logo.
 
 **macOS, one line in Terminal** (fetches the code into `~/Perspective-Correction`,
 offers to install Python if it is missing, then installs everything):
@@ -102,10 +103,10 @@ python perspective_correction.py "D:\Fotos" --horizontal        batch, Horizonta
 python perspective_correction.py --help                         every option
 ```
 
-or, on Windows, run `python tools/make_launcher.py` once: it builds
-`Perspective Correction.exe` with the logo, which starts the window without a
-console and opens photographs dropped onto it (`Perspective Correction.bat`
-still works). The biggest accuracy win is
+or, on Windows, `Perspective Correction.exe` with the logo: the installer
+builds it, or run `python tools/make_launcher.py` once. It starts the window
+without a console and opens photographs dropped onto it (`Perspective
+Correction.bat` still works). The biggest accuracy win is
 telling it the lens: `--focal-35mm 24`.
 
 More: [accuracy](docs/accuracy.md) · [algorithm](docs/algorithm.md) ·
