@@ -484,20 +484,6 @@ def glyph_stroke(glyph_px=None):
     return max(2, int(round(glyph_px / 12.0)))
 
 
-def glyph_box(glyph_px=None):
-    """The square a glyph is drawn into before it is cropped back to its ink.
-
-    Drawing happens at this size and the result is then cropped to the pixels
-    actually drawn and re-centred on them, which is what the icon font's path
-    already does. That step is the whole reason the sets did not match: a font
-    glyph fills its box because it was cropped to its ink, while a hand-drawn
-    one kept whatever margin its author left -- measured 2026-09-20, the two
-    drawn keys spanned 0.69 and 0.77 of the box against the font's 1.00, so
-    they simply looked smaller in an identical key.
-    """
-    return tool_glyph() if glyph_px is None else glyph_px
-
-
 def mark_line_width(short_edge):
     """Screen-pixel width of a hand-drawn control line for an image shown with
     ``short_edge`` px on its short side.

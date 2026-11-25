@@ -65,17 +65,16 @@ from .review import AUTO, MANUAL, ReviewSession, darken_outside_crop
 # from pc.gui for the callers (and the tests) that have always used them there.
 from .ui_theme import (
     INK, OVERLAY, THEMES,
-    ICON_WHITE, MASK_SWATCHES, INK_ON_ACCENT_DARK, INK_ON_ACCENT_LIGHT,
+    ICON_WHITE, MASK_SWATCHES,
     GUIDE_GREY, CHECK_LINE_TOL_DEG,
-    FONT_DIR, BUNDLED_FONTS, ICON_FONT, EMOJI_FONT, LOGO_FILE, WORDMARK_FILE,
+    FONT_DIR, ICON_FONT, LOGO_FILE,
     _DRAWN_GLYPHS,
-    _pick_family, _shorten_middle, _relative_luminance, contrast_ratio, on_accent,
+    _shorten_middle, _relative_luminance, contrast_ratio, on_accent,
     _clip_segment, ui_font,
-    _register_font_file, _register_bundled_fonts, _load_private_font,
     apply_theme, _retint_bg,
-    _rgb, _gradient_photo, _to_photo,
-    _beholder_points, _logo_image, _hex_rgba, _wordmark_image,
-    _icon_pil, _fit_ink, _load_key_icon, _glyph_pil, _beholder_pil,
+    _gradient_photo, _to_photo,
+    _logo_image, _hex_rgba, _wordmark_image,
+    _icon_pil, _load_key_icon, _glyph_pil, _beholder_pil,
     _set_window_icon, _dark_titlebar,
     _attach_tooltip,
 )
@@ -97,17 +96,16 @@ from .ui_brush import _BrushMaskMixin
 # imported from pc.gui; keeping them listed so a re-export is visible.
 __all__ = [
     "INK", "OVERLAY", "THEMES",
-    "ICON_WHITE", "MASK_SWATCHES", "INK_ON_ACCENT_DARK", "INK_ON_ACCENT_LIGHT",
+    "ICON_WHITE", "MASK_SWATCHES",
     "GUIDE_GREY", "CHECK_LINE_TOL_DEG",
-    "FONT_DIR", "BUNDLED_FONTS", "ICON_FONT", "EMOJI_FONT", "LOGO_FILE", "WORDMARK_FILE",
+    "FONT_DIR", "ICON_FONT", "LOGO_FILE",
     "_DRAWN_GLYPHS",
-    "_pick_family", "_shorten_middle", "_relative_luminance", "contrast_ratio", "on_accent",
+    "_shorten_middle", "_relative_luminance", "contrast_ratio", "on_accent",
     "_clip_segment", "ui_font",
-    "_register_font_file", "_register_bundled_fonts", "_load_private_font",
     "apply_theme", "_retint_bg",
-    "_rgb", "_gradient_photo", "_to_photo",
-    "_beholder_points", "_logo_image", "_hex_rgba", "_wordmark_image",
-    "_icon_pil", "_fit_ink", "_load_key_icon", "_glyph_pil", "_beholder_pil",
+    "_gradient_photo", "_to_photo",
+    "_logo_image", "_hex_rgba", "_wordmark_image",
+    "_icon_pil", "_load_key_icon", "_glyph_pil", "_beholder_pil",
     "_set_window_icon", "_dark_titlebar",
     "_attach_tooltip",
 ]
@@ -1239,20 +1237,6 @@ class ReviewPanel(tk.Frame, _AfterOwner, _SamMixin, _LoupeMixin, _CropGuidesMixi
             keep_pixels=float(self.v_keep_px.get()))
         if redraw:
             self._schedule_redraw()
-
-    def _slider(self, parent, row, label, var, lo, hi, unit, inc, fmt):
-        ttk.Label(parent, text=label, width=18).grid(row=row, column=0, sticky="w")
-        sc = ttk.Scale(parent, from_=lo, to=hi, variable=var, orient="horizontal",
-                       length=layout.SLIDER_MIN, command=lambda _v: self._on_slider())
-        sc.grid(row=row, column=1, sticky="ew", padx=6)
-        parent.columnconfigure(1, weight=1, minsize=layout.SLIDER_MIN)
-        # The scale reaches a region by eye; the spinbox is for the last fraction
-        # of a degree -- type an exact value or nudge one fine step at a time.
-        # Both drive the same variable, so moving either moves both.
-        sp = ttk.Spinbox(parent, textvariable=var, from_=lo, to=hi, increment=inc,
-                         format=fmt, width=7, command=self._on_slider)
-        sp.grid(row=row, column=2, sticky="e", padx=(6, 0))
-        sp.bind("<Return>", lambda _e: self._on_slider())
 
     # -- state -----------------------------------------------------------
     def _sync_from_session(self):
@@ -3733,11 +3717,6 @@ class App(_ROOT_CLASS, _AfterOwner, _SetupMixin, _ComfyMixin):
         # is any work to do.
         self._build_comfy_popup()
 
-    def _spin(self, parent, r, c, label, var, lo, hi, step):
-        ttk.Label(parent, text=label).grid(row=r, column=c, sticky="e", padx=4)
-        ttk.Spinbox(parent, textvariable=var, from_=lo, to=hi, increment=step,
-                    width=7).grid(row=r, column=c + 1, sticky="w")
-
     # -- settings --------------------------------------------------------
     def _settings(self):
         s = Settings()
@@ -3771,16 +3750,6 @@ class App(_ROOT_CLASS, _AfterOwner, _SetupMixin, _ComfyMixin):
             s.gdino_prompt = (rp.get() if rp is not None else "") or "building"
         return s
 
-    def _on_mask_mode(self, _e=None):
-        """The mode is setup, not a per-run decision: store it together with
-        its path, so a restart finds the same mask the user left behind.  The
-        path field keeps whichever path belongs to the newly chosen mode."""
-        prefs.save(mask_mode=self.v_mask.get())
-        key = "birefnet_model" if self.v_mask.get() in ("birefnet", "gdino") else "mask_file"
-        remembered = self._remembered.get(key, "")
-        if remembered:
-            self.v_maskpath.set(remembered)
-
     def _check_fill(self):
         """Report the fill backend now, not once per photograph.
 
@@ -3807,29 +3776,6 @@ class App(_ROOT_CLASS, _AfterOwner, _SetupMixin, _ComfyMixin):
             text = (f"{mode} unavailable, telea fills instead -- " + text
                     + ("  ('deps' installs it)" if mode == "lama" else ""))
         self.lbl_fill.configure(text=text)
-
-    def _pick_mask_source(self):
-        """One button for both, because the batch panel had a mask selector with
-        no way to say *which* mask -- so choosing 'file' made every image fail
-        with what looked like an internal error."""
-        mode = self.v_mask.get()
-        if mode == "birefnet":
-            p = filedialog.askopenfilename(
-                title="BiRefNet weights",
-                filetypes=[("BiRefNet weights", "*.safetensors *.pth *.pt"),
-                           ("all files", "*.*")])
-            if p:
-                from . import birefnet as BN
-                self.v_maskpath.set(p)
-                prefs.save(birefnet_model=p)
-                messagebox.showinfo("BiRefNet model", BN.describe(p))
-        elif mode == "file":
-            d = filedialog.askdirectory(title="folder of mask images (one per photo)")
-            if d:
-                self.v_maskpath.set(d)
-                prefs.save(mask_file=d)
-        else:
-            messagebox.showinfo("Mask", "set the mask selector to 'file' or 'birefnet' first")
 
     def _add(self, paths):
         added = 0
@@ -4161,9 +4107,6 @@ class App(_ROOT_CLASS, _AfterOwner, _SetupMixin, _ComfyMixin):
             except Exception as exc:              # never let one file kill the run
                 self.queue.put(("row", (i, ERROR, src, str(exc))))
         self.queue.put(("done", "finished"))
-
-    def _stop(self):
-        self.stop_flag.set()
 
     def _pump(self):
         if not self.winfo_exists():

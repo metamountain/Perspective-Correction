@@ -57,23 +57,6 @@ def limit(roll: float, pitch: float, settings, yaw: float = 0.0,
             float(np.clip(y, -ymax, ymax)), clamped)
 
 
-def _max_safe_yaw(w: int, h: int, f: float, roll: float, pitch: float,
-                  max_area: float = 4.0) -> float:
-    """Largest |yaw| (radians) whose warped quad stays under ``max_area``× source."""
-    lo, hi = 0.0, math.radians(85)
-    for _ in range(40):
-        mid = 0.5 * (lo + hi)
-        K = G.intrinsics(f, w / 2.0, h / 2.0)
-        R = G.correction_rotation(roll, pitch, mid)
-        H = G.homography(K, R)
-        q = warped_quad(H, w, h)
-        if quad_area(q) / float(w * h) <= max_area:
-            lo = mid
-        else:
-            hi = mid
-    return lo
-
-
 YAW_FORESHORTEN = 0.5
 """Exponent of the horizontal compression after a yaw correction.
 
@@ -395,48 +378,6 @@ def rectify_metric(vp_v, vp_h, w: int, h: int, f: float,
         return None
     k = metric_x_scale(H, vp_v, vp_h, w, h, f)
     return rectify(vp_v, vp_h, w, h, x_scale=k if k else 1.0, max_area=max_area)
-
-
-def _facade_perspective(w: int, h: int, vert_segs: np.ndarray,
-                        horiz_segs: np.ndarray) -> np.ndarray | None:
-    """Estimate 4 facade corners from line segments and build a perspective
-    transform that maps them to a fronto-parallel rectangle.
-
-    The left/right edges come from the extreme vertical lines; the top/bottom
-    from the extreme horizontal lines.  The target rectangle is sized so the
-    facade fills ~70% of the frame (margin handled by the caller's reframe).
-
-    Returns a 3×3 homography or None if the geometry is degenerate.
-    """
-    # Vertical lines: x-position at mid-height
-    v_mids_x = (vert_segs[:, 0] + vert_segs[:, 2]) / 2.0
-    h_mids_y = (horiz_segs[:, 1] + horiz_segs[:, 3]) / 2.0
-
-    # Use the 5th and 95th percentiles to be robust against outliers
-    x_left = float(np.percentile(v_mids_x, 5))
-    x_right = float(np.percentile(v_mids_x, 95))
-    y_top = float(np.percentile(h_mids_y, 5))
-    y_bot = float(np.percentile(h_mids_y, 95))
-
-    # Sanity: the facade must be a reasonable fraction of the frame
-    fw = x_right - x_left
-    fh = y_bot - y_top
-    if fw < w * 0.1 or fh < h * 0.1 or fw > w * 1.2 or fh > h * 1.2:
-        return None
-
-    # Source 4 corners (top-left, top-right, bottom-right, bottom-left)
-    src = np.float32([[x_left, y_top], [x_right, y_top],
-                      [x_right, y_bot], [x_left, y_bot]])
-
-    # Target: centred rectangle, facade fills 70% of the frame
-    fill = 0.70
-    tw, th = w * fill, h * fill
-    tx, ty = (w - tw) / 2.0, (h - th) / 2.0
-    dst = np.float32([[tx, ty], [tx + tw, ty],
-                      [tx + tw, ty + th], [tx, ty + th]])
-
-    H = cv2.getPerspectiveTransform(src, dst)
-    return H
 
 
 def warped_quad(H: np.ndarray, w: int, h: int) -> np.ndarray:

@@ -323,29 +323,6 @@ def canvas_for(quad, src_w, src_h, center=None, focal=None, long_edge=None,
 # Automatic facade corner detection (GLNet-style)
 # ---------------------------------------------------------------------------
 
-def _line_intercept_y(seg):
-    """Y-intercept of a line segment [x0,y0,x1,y1]. None if vertical."""
-    x0, y0, x1, y1 = float(seg[0]), float(seg[1]), float(seg[2]), float(seg[3])
-    dx = x1 - x0
-    if abs(dx) < 1e-9:
-        return None
-    m = (y1 - y0) / dx
-    return y0 - m * x0
-
-
-def _line_intercept_x(seg):
-    """X-intercept of a line segment [x0,y0,x1,y1]. None if horizontal or vertical."""
-    x0, y0, x1, y1 = float(seg[0]), float(seg[1]), float(seg[2]), float(seg[3])
-    dx = x1 - x0
-    dy = y1 - y0
-    if abs(dx) < 1e-9:
-        return None  # vertical line: no x-intercept in the usual sense
-    m = dy / dx
-    if abs(m) < 1e-9:
-        return None  # horizontal line: parallel to x-axis
-    return -(y0 - m * x0) / m
-
-
 def _intersect(l1, l2):
     """Intersection of two line segments treated as infinite lines. Returns (x,y) or None."""
     x1, y1, x2, y2 = float(l1[0]), float(l1[1]), float(l1[2]), float(l1[3])
