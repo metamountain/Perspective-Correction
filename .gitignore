@@ -161,3 +161,10 @@ docs/detection.jpg
 
 # written by the update button in a copy without git (selfupdate.INSTALL_MARK)
 .pc_install.json
+
+# local scratch, agent reports, and pasted screenshots at the root
+tmp/
+.code-review-graph/
+codex_*.md
+/screenshot_*.jpg
+/Screenshot_*.png
