@@ -30,6 +30,8 @@ import os
 import cv2
 import numpy as np
 
+from . import imageio
+
 
 def resolve(mask_file: str, image_path: str) -> str:
     """Accept either one PNG or a folder holding one mask per image.
@@ -51,32 +53,13 @@ def resolve(mask_file: str, image_path: str) -> str:
     raise ValueError(f"no mask for {stem} in {mask_file}")
 
 
-def _imread(path: str, flags: int):
-    """``cv2.imread`` that also opens non-ASCII paths.
-
-    ``cv2.imread`` goes through the C runtime and mangles non-ASCII characters on
-    Windows, so a mask whose name carries an umlaut -- the stem of its own
-    photograph -- reads as None and ``--mask file`` dies on exactly the photos a
-    segmenter was pointed at.  ``np.fromfile`` opens through Python (Unicode-safe)
-    and ``cv2.imdecode`` decodes the same bytes; ASCII names take the fast path.
-    """
-    img = cv2.imread(path, flags)
-    if img is not None:
-        return img
-    try:
-        buf = np.fromfile(path, dtype=np.uint8)
-    except OSError:
-        return None                     # missing/unreadable -> caller reports it
-    return cv2.imdecode(buf, flags) if buf.size else None
-
-
 def load(path: str, shape, invert: bool = False) -> np.ndarray:
     """A painted PNG.  White means "ignore this region" unless ``invert``.
 
     ``invert`` exists because a segmenter naturally outputs the *subject* --
     SAM hands back the building in white -- which is the opposite convention.
     """
-    img = _imread(path, cv2.IMREAD_GRAYSCALE)
+    img = imageio.imread_unicode(path, cv2.IMREAD_GRAYSCALE)
     if img is None:
         raise ValueError(f"cannot read mask {path}")
     # ultralytics replaces cv2.imread with its own wrapper on import -- to

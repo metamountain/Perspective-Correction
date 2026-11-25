@@ -2604,11 +2604,10 @@ class ReviewSession:
             from . import correction_log as CLOG
             from .pipeline import measure_horizontals
             from . import __version__
-            from .masks import _imread
             before = measure_horizontals(self.bgr, settings, f)
-            # _imread, not cv2.imread: the latter returns None for a path
-            # with an umlaut, and German street names are ordinary stems.
-            out_bgr = _imread(dst_path, cv2.IMREAD_COLOR)
+            # imread_unicode, not cv2.imread: the latter returns None for a
+            # path with an umlaut, and German street names are ordinary stems.
+            out_bgr = IO.imread_unicode(dst_path, cv2.IMREAD_COLOR)
             after = (measure_horizontals(out_bgr, settings, f) if out_bgr is not None
                      else {"n_lines": 0, "yaw_deg": None, "support": 0.0})
             # M-LSD segments of both images, user-directed 2026-09-26: the

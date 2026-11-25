@@ -426,8 +426,7 @@ def _hpc_save(results, settings, log):
             before = {"n_lines": 0, "yaw_deg": None, "support": 0.0}
         # after: re-measure on the output
         try:
-            from .masks import _imread      # umlaut-safe, unlike cv2.imread
-            out_bgr = _imread(r.dst, cv2.IMREAD_COLOR)
+            out_bgr = io.imread_unicode(r.dst, cv2.IMREAD_COLOR)
             if out_bgr is None:
                 raise ValueError("unreadable")
             after = measure_horizontals(out_bgr, settings, _focal_px(r, out_bgr.shape))

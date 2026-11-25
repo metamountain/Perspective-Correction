@@ -593,6 +593,33 @@ def clip_to_box(poly, x0, y0, x1, y1):
     return np.asarray(p)[:, ::-1] if len(p) else p
 
 
+def _search_best_aspect(rect_for_aspect, lo: float, hi: float, score=None):
+    """Coarse-to-fine aspect sweep over ``[lo, hi]``.
+
+    A 60-step geometric sweep finds the best aspect; a 21-step sweep around
+    it sharpens the result.  ``rect_for_aspect(a)`` is the exact solver for
+    one aspect -- a rectangle, or None to skip that aspect -- and ``score``
+    (default: the rectangle's output area) ranks the candidates.
+    """
+    def best_of(aspects):
+        best, val = None, 0.0
+        for a in aspects:
+            r = rect_for_aspect(a)
+            if r is None:
+                continue
+            v = score(r) if score is not None else (r[2] - r[0]) * (r[3] - r[1])
+            if v > val:
+                best, val = (r, float(a)), v
+        return best
+    coarse = np.geomspace(lo, hi, 60)
+    got = best_of(coarse)
+    if got is None:
+        return None
+    step = coarse[1] / coarse[0]
+    fine = best_of(np.geomspace(got[1] / step, got[1] * step, 21))
+    return (fine or got)[0]
+
+
 def max_free_rect(poly, lo: float = 0.15, hi: float = 6.0, score=None):
     """Largest axis-aligned rectangle of ANY aspect inside a convex polygon.
 
@@ -610,23 +637,8 @@ def max_free_rect(poly, lo: float = 0.15, hi: float = 6.0, score=None):
     stretched region are mostly interpolation, and counting them picked the
     sky over the building on the Antibes facade (2026-09-26).
     """
-    def best_of(aspects):
-        best, area = None, 0.0
-        for a in aspects:
-            r = max_inscribed_rect(poly, float(a))
-            if r is None:
-                continue
-            ar = score(r) if score is not None else (r[2] - r[0]) * (r[3] - r[1])
-            if ar > area:
-                best, area = (r, float(a)), ar
-        return best
-    coarse = np.geomspace(lo, hi, 60)
-    got = best_of(coarse)
-    if got is None:
-        return None
-    step = coarse[1] / coarse[0]
-    fine = best_of(np.geomspace(got[1] / step, got[1] * step, 21))
-    return (fine or got)[0]
+    return _search_best_aspect(lambda a: max_inscribed_rect(poly, float(a)),
+                               lo, hi, score)
 
 
 def poly_centroid(poly):
@@ -655,23 +667,11 @@ def centred_free_rect(poly, centre, lo: float = 0.15, hi: float = 6.0, score=Non
     if not _inside(np.asarray(poly, float), c[None, :]):
         return None
 
-    def best_of(aspects):
-        best, val = None, 0.0
-        for a in aspects:
-            r = inscribed_rect(poly, float(a), c)
-            if r[2] - r[0] < 1e-6 or r[3] - r[1] < 1e-6:
-                continue
-            v = score(r) if score is not None else (r[2] - r[0]) * (r[3] - r[1])
-            if v > val:
-                best, val = (r, float(a)), v
-        return best
-    coarse = np.geomspace(lo, hi, 60)
-    got = best_of(coarse)
-    if got is None:
-        return None
-    step = coarse[1] / coarse[0]
-    fine = best_of(np.geomspace(got[1] / step, got[1] * step, 21))
-    return (fine or got)[0]
+    def rect_for_aspect(a):
+        r = inscribed_rect(poly, float(a), c)
+        # a zero-sized rectangle is a degenerate aspect, not a candidate
+        return r if (r[2] - r[0] >= 1e-6 and r[3] - r[1] >= 1e-6) else None
+    return _search_best_aspect(rect_for_aspect, lo, hi, score)
 
 
 def source_area(H_total, rect):

@@ -35,6 +35,26 @@ except Exception:                                    # pragma: no cover
 READABLE = {".jpg", ".jpeg", ".jpe", ".png", ".tif", ".tiff", ".bmp", ".webp"}
 
 
+def imread_unicode(path: str, flags: int = cv2.IMREAD_UNCHANGED):
+    """``cv2.imread`` that also opens non-ASCII paths.
+
+    ``cv2.imread`` goes through the C runtime and mangles non-ASCII characters
+    on Windows, so a file whose name carries an umlaut reads as None while
+    Python's own file IO opens it fine.  ``np.fromfile`` reads the same bytes
+    through Python (Unicode-safe) and ``cv2.imdecode`` decodes them; ASCII
+    names take the fast ``cv2.imread`` path, and a missing or unreadable file
+    still comes back as None for the caller to report.
+    """
+    img = cv2.imread(path, flags)
+    if img is not None:
+        return img
+    try:
+        buf = np.fromfile(path, dtype=np.uint8)
+    except OSError:
+        return None                     # missing/unreadable -> caller reports it
+    return cv2.imdecode(buf, flags) if buf.size else None
+
+
 class Loaded:
     __slots__ = ("bgr", "exif_bytes", "icc", "focal_35mm", "orientation", "fmt", "path")
 

@@ -12,11 +12,16 @@ from __future__ import annotations
 
 import numpy as np
 
+try:
+    import piexif
+except Exception:
+    piexif = None
+
 
 def available() -> bool:
     try:
-        import lensfunpy  # noqa: F401
-        return True
+        import lensfunpy
+        return lensfunpy is not None
     except Exception:
         return False
 
@@ -46,22 +51,28 @@ def _exif_make_model(exif_bytes: bytes | None):
         return None, None
 
 
-def _exif_focal_mm(exif_bytes: bytes | None):
-    """Extract the actual focal length in mm (not 35mm-equivalent)."""
-    if not exif_bytes:
+def _exif_float(exif_bytes: bytes | None, tag, lo: float, hi: float):
+    """One numeric EXIF value as a float, or None when it is absent, unreadable,
+    or outside ``lo < v < hi``.  ``tag`` is a ``piexif.ExifIFD`` key; every
+    failure is swallowed, like all the EXIF readers in this file do."""
+    if not exif_bytes or piexif is None:
         return None
     try:
-        import piexif
-        d = piexif.load(exif_bytes)
-        ex = d.get("Exif", {})
-        v = ex.get(piexif.ExifIFD.FocalLength)
+        v = piexif.load(exif_bytes).get("Exif", {}).get(tag)
         if v:
             f = float(v)
-            if 2.0 < f < 500.0:
+            if lo < f < hi:
                 return f
     except Exception:
         pass
     return None
+
+
+def _exif_focal_mm(exif_bytes: bytes | None):
+    """Extract the actual focal length in mm (not 35mm-equivalent)."""
+    if piexif is None:
+        return None
+    return _exif_float(exif_bytes, piexif.ExifIFD.FocalLength, 2.0, 500.0)
 
 
 def _exif_aperture(exif_bytes: bytes | None):
@@ -70,20 +81,9 @@ def _exif_aperture(exif_bytes: bytes | None):
     Not "the lens's widest", as this said: nothing here has seen a lens yet.
     The caller substitutes a fixed mid-range 2.8, which is a different claim.
     """
-    if not exif_bytes:
+    if piexif is None:
         return None
-    try:
-        import piexif
-        d = piexif.load(exif_bytes)
-        ex = d.get("Exif", {})
-        num = ex.get(piexif.ExifIFD.ApertureValue)
-        if num:
-            f = float(num)
-            if 0.5 < f < 64.0:
-                return f
-    except Exception:
-        pass
-    return None
+    return _exif_float(exif_bytes, piexif.ExifIFD.ApertureValue, 0.5, 64.0)
 
 
 def _exif_lens_model(exif_bytes: bytes | None):

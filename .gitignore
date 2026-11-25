@@ -92,7 +92,7 @@ tests/assets/Synthetic/
 # It is: every file a test or tool opens BY NAME, the two `_ALWAYS`
 # patterns `test_assets._sample` refuses to drop, four more so the pool
 # sweeps still see a cross-section of real photographs (four container
-# formats and one non-ASCII filename, which is the `_imread_unicode`
+# formats and one non-ASCII filename, which is the `imread_unicode`
 # path), and the cached mask beside each one.
 #
 # Checked by running the whole suite against a stripped clone, not by

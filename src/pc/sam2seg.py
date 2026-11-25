@@ -32,6 +32,8 @@ from typing import List, Optional, Tuple
 import cv2
 import numpy as np
 
+from . import imageio
+
 # A prompt box smaller than this is a stray click, not a selection; SAM2 would
 # happily segment a 3-pixel box and the result reads as "it masked everything".
 #
@@ -294,22 +296,6 @@ def segment_local(bgr: np.ndarray, box: Tuple[int, int, int, int]) -> np.ndarray
     return ~(up[0, 0].numpy() > 0)
 
 
-def _imread_unicode(path: str, flags: int):
-    """``cv2.imread`` that also opens non-ASCII paths.
-
-    The mask's filename is the photograph's stem, and a German street name is a
-    perfectly good stem; ``cv2.imread`` mangles it on Windows and returns None.
-    """
-    img = cv2.imread(path, flags)
-    if img is not None:
-        return img
-    try:
-        buf = np.fromfile(path, dtype=np.uint8)
-    except OSError:
-        return None
-    return cv2.imdecode(buf, flags) if buf.size else None
-
-
 def mask_png_path(stem: str, out_dir: str) -> str:
     """Where the child writes its mask: ``<out_dir>/<stem>.png``.
 
@@ -331,7 +317,7 @@ def load_mask_png(path: str, shape) -> np.ndarray:
     the fit runs on, so a stale PNG from an earlier analysis size still lines
     up instead of crashing the indexing.
     """
-    img = _imread_unicode(path, cv2.IMREAD_GRAYSCALE)
+    img = imageio.imread_unicode(path, cv2.IMREAD_GRAYSCALE)
     if img is None:
         raise ValueError("cannot read mask " + path)
     while img.ndim > 2:

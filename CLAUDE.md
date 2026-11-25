@@ -1582,7 +1582,7 @@ detector removed · M-LSD unblocked in the GUI interpreter.
   trusting it.
 - Caches key on the **full** argument tuple; hit-check is `key in cache`, never
   truthiness (`None` is a real result).
-- `cv2.imread` mangles non-ASCII paths on Windows — use `masks._imread`
+- `cv2.imread` mangles non-ASCII paths on Windows — use `imageio.imread_unicode`
   (`np.fromfile` + `imdecode`).
 - Synthetic scenes are right for geometric questions with ground truth, wrong for
   statistical ones about real texture.
