@@ -79,7 +79,7 @@ def test_the_menu_lists_every_package_with_torch_first_and_says_what_is_installe
     """The deps menu's rows (user 2026-10-24: "soll nicht blind installieren").
     torch comes before what needs it; GeoCalib counts as installed only with
     its weights complete; every row says what it is for."""
-    real, real_w = DI.present, DI.geocalib_weights_ok
+    real, real_w, real_s = DI.present, DI.geocalib_weights_ok, DI.sam2_weights_ok
     try:
         DI.present = lambda m: False
         rows = DI.catalogue()
@@ -88,14 +88,17 @@ def test_the_menu_lists_every_package_with_torch_first_and_says_what_is_installe
         assert not any(r["installed"] for r in rows) and all(r["purpose"] for r in rows)
         DI.present = lambda m: True
         DI.geocalib_weights_ok = lambda path=None: False
+        DI.sam2_weights_ok = lambda folder=None: False
         inst = {r["key"]: r["installed"] for r in DI.catalogue()}
         assert inst["geocalib"] is False and inst["torch"] and inst["lama"], inst
         DI.geocalib_weights_ok = lambda path=None: True
-        assert all(r["installed"] for r in DI.catalogue())
+        DI.sam2_weights_ok = lambda folder=None: True
+        not_inst = [r["key"] for r in DI.catalogue() if not r["installed"]]
+        assert not not_inst, f"rows not counted as installed: {not_inst}"
         assert [i["key"] for i in DI.in_order([{"key": "dnd"}, {"key": "geocalib"},
                                                {"key": "torch"}])] == ["torch", "geocalib", "dnd"]
     finally:
-        DI.present, DI.geocalib_weights_ok = real, real_w
+        DI.present, DI.geocalib_weights_ok, DI.sam2_weights_ok = real, real_w, real_s
 
 
 def test_the_explanations_name_the_cause_a_user_can_act_on():

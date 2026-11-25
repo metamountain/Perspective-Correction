@@ -1175,8 +1175,7 @@ def test_a_hand_placed_facade_strip_stands_the_review_gate_down_but_not_the_batc
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     src = os.path.join(root, "tests", "assets", "Alte_Scheune.jpg")
     if not os.path.exists(src):
-        import pytest
-        pytest.skip("Alte_Scheune.jpg not in the pool")
+        raise SkipTest("Alte_Scheune.jpg not in the pool")
 
     st = Settings(correct_horizontal=True)
     st.min_confidence = 0.95          # engage the gate, whatever this asset scores
@@ -1225,8 +1224,7 @@ def test_a_canvas_much_bigger_than_the_source_says_so_before_the_save():
     here = os.path.dirname(os.path.abspath(__file__))
     img = os.path.join(here, "assets", "Horizontal", "Platte_1.jpg")
     if not os.path.isfile(img):
-        import pytest
-        pytest.skip("Platte_1.jpg not available")
+        raise SkipTest("Platte_1.jpg not available")
 
     st = Settings(correct_horizontal=True)
     s = ReviewSession(img, st)

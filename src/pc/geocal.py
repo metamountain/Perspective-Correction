@@ -28,8 +28,7 @@ import os
 import sys
 import types
 
-from .depinstall import (GEOCALIB_URL as PACKAGE_URL, GEOCALIB_WEIGHTS as WEIGHTS,
-                         GEOCALIB_WEIGHTS_SIZE as WEIGHTS_SIZE, geocalib_weights_ok)
+from .depinstall import GEOCALIB_WEIGHTS as WEIGHTS, geocalib_weights_ok
 
 _model = None
 _cache = {}

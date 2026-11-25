@@ -5,22 +5,17 @@ import cv2
 import numpy as np
 
 from . import geometry as G
+from .lineoverlay import LINE, infinite_line_points
 
-GREEN = (80, 220, 90)      # vertical inliers -- these drove the fit
-YELLOW = (60, 210, 240)    # vertical candidates rejected as outliers
-BLUE = (235, 170, 60)      # horizontal lines
-MAGENTA = (200, 80, 220)   # the implied horizon
-GREY = (130, 130, 130)     # struck out by hand
-RED = (70, 70, 235)        # removed by the region mask
-VP_MARK = (0, 128, 255)    # a vanishing point itself, as a ring
-
-# These names are the single source for every rendering of "what the estimator
-# saw", including `scheme.ArchitectureScheme.draw_preview`, which used to write
-# its own (0, 200, 0) and (96, 96, 96) inline. Same meaning, different colour:
-# two views of one thing that did not look like one thing -- and the open
-# research goal about a found-geometry overlay is precisely a choice between
-# those two renderings, which is hard to make when they disagree on what green
-# means. BGR, because OpenCV.
+# Aliases kept for the callers that read them by name (e.g.
+# `scheme.ArchitectureScheme.draw_preview`).  The values live in
+# `lineoverlay.LINE`, the one table for every line overlay: the before pane's
+# detection colours and the after pane's check-line colours, read by both
+# renderers from one place instead of each keeping its own set.
+GREEN = LINE["v_inlier"]
+MAGENTA = LINE["horizon"]
+GREY = LINE["struck"]
+VP_MARK = LINE["vp_mark"]
 
 
 def draw_lines(canvas, seg, colour, thickness=2):
@@ -37,15 +32,30 @@ def draw_lines(canvas, seg, colour, thickness=2):
                  colour, thickness, cv2.LINE_AA)
 
 
+def draw_detected(canvas, inv, dropped, horiz, vert_out, vert_in):
+    """The detected lines on a BGR canvas: what the mask removed, the
+    horizontals, and the verticals split into the two classes -- inliers
+    thicker than the rest, so the fit's evidence reads as the fit's evidence.
+
+    Segments are in their own pixel space and ``inv`` maps them onto the
+    canvas (1.0 when they are already canvas-sized).  One block for every
+    baked rendering: `overlay` and `review.render_before` each used to carry
+    a copy of it.
+    """
+    thin = max(1, int(round(inv)))
+    if dropped is not None and len(dropped):
+        draw_lines(canvas, dropped * inv, LINE["masked"], thin)
+    if horiz is not None and len(horiz):
+        draw_lines(canvas, horiz * inv, LINE["h_line"], thin)
+    if vert_out is not None and len(vert_out):
+        draw_lines(canvas, vert_out * inv, LINE["v_outlier"], thin)
+    if vert_in is not None and len(vert_in):
+        draw_lines(canvas, vert_in * inv, LINE["v_inlier"], max(2, int(round(inv * 2))))
+
+
 def _draw_infinite_line(canvas, line, colour, thickness=2):
     h, w = canvas.shape[:2]
-    a, b, c = line
-    pts = []
-    if abs(b) > 1e-9:
-        pts += [(0.0, -c / b), (float(w), -(a * w + c) / b)]
-    if abs(a) > 1e-9:
-        pts += [(-c / a, 0.0), (-(b * h + c) / a, float(h))]
-    pts = [p for p in pts if -1e5 < p[0] < 1e5 and -1e5 < p[1] < 1e5]
+    pts = infinite_line_points(line, w, h)
     if len(pts) >= 2:
         cv2.line(canvas, (int(pts[0][0]), int(pts[0][1])), (int(pts[1][0]), int(pts[1][1])),
                  colour, thickness, cv2.LINE_AA)
@@ -86,20 +96,15 @@ def overlay(bgr, vert, horiz, model, scale=1.0, result_text="", info=None):
     inv = 1.0 / scale if scale else 1.0
     info = info or {}
     tint_mask(canvas, info.get("mask"))
-    dropped = info.get("masked_out")
-    if dropped is not None and len(dropped):
-        draw_lines(canvas, dropped * inv, RED, max(1, int(round(inv))))
-
-    if len(horiz):
-        draw_lines(canvas, horiz.seg * inv, BLUE, max(1, int(round(inv))))
-    if len(vert):
-        inl = model.vert_inliers if model is not None and model.vert_inliers is not None \
-            else np.zeros(len(vert), bool)
-        if len(inl) == len(vert):
-            draw_lines(canvas, vert.seg[~inl] * inv, YELLOW, max(1, int(round(inv))))
-            draw_lines(canvas, vert.seg[inl] * inv, GREEN, max(2, int(round(inv * 2))))
-        else:
-            draw_lines(canvas, vert.seg * inv, GREEN, max(2, int(round(inv * 2))))
+    # No model: every vertical is drawn as a rejected candidate, the same as
+    # before this block moved into `draw_detected`.
+    inl = model.vert_inliers if model is not None and model.vert_inliers is not None \
+        else np.zeros(len(vert), bool)
+    if len(inl) == len(vert):
+        v_out, v_in = vert.seg[~inl], vert.seg[inl]
+    else:
+        v_out, v_in = np.empty((0, 4)), vert.seg
+    draw_detected(canvas, inv, info.get("masked_out"), horiz.seg, v_out, v_in)
 
     if model is not None and model.f:
         h, w = canvas.shape[:2]

@@ -99,7 +99,7 @@ def run(sc, ha=True, settings=None):
         try:
             H, _cw, _ch = s.planar_homography()
             row["rect"].append((name, round(synth.cell_aspect(H, grid), 4)))
-        except Exception as e:      # a degenerate quad is a result, not a crash
+        except Exception:           # a degenerate quad is a result, not a crash
             row["rect"].append((name, None))
         s.planar_quad = []
     if ha:

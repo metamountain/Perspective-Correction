@@ -421,30 +421,22 @@ features ahead of everything else.*
    read the log before touching the job: a red that says the display cannot
    place the window is a different answer from a red that says a GUI test
    genuinely fails, and only one of them is about this project's code.
-8. **CI Linux is failing** (ubuntu-latest, 3.9 and 3.12; Windows passing) —
-   recorded 2026-09-19. **`gh` is not installed on this box and the Actions logs
-   cannot be read from here**, so this is diagnosed only by elimination:
-   - **Python version is ruled out, definitively.** The repo parses clean against
-     the 3.9 grammar with no runtime-evaluated unions (64 files) — and the job
-     fails on 3.9 *and* 3.12 anyway, so a syntax floor was never a candidate.
-     Pinned by `test_the_source_parses_on_the_oldest_python_pyproject_promises`.
-   - **Ranked by a read of every reachable path** (subagent, all claims cited):
-     **(1)** `requirements.txt:2-3` is the *only* line in the whole reachable
-     path where Linux and Windows install genuinely different packages -
-     `opencv-python-headless` vs `opencv-python` - and `cv2` is the one import
-     marked `hard=True` (`deps.py:45`), the only kind that makes
-     `perspective_correction.py --doctor` exit 2 at CI step 2. Version-independent and
-     OS-specific: it fits the failure exactly. **(2)** the `ProcessPoolExecutor`
-     start method, now pinned to `spawn` (see Done) - one variable removed.
-   - **Ruled out with evidence**, so nobody repeats them: no fast-run module
-     imports tkinter or `pc.gui` (only `test_gui`/`test_assets` do, and both are
-     SLOW); no `cv2.imshow`/`namedWindow`/`waitKey` anywhere; no case-sensitivity
-     mismatch in any reachable import or path; the one non-ASCII asset lives
-     under `Horizontal/` and is read only by `test_assets`, which CI never runs;
-     every optional backend reports `[no]` without raising.
-   **Whoever picks this up: read the log first.** Every hypothesis above is an
-   inference from the repo, and this project's own rule is that a document
-   claiming something is not evidence of it.
+8. **CI red — root cause found 2026-11-24, fix committed, first green run pending.**
+   The earlier elimination list (opencv headless, spawn start method) was wrong;
+   the logs showed three test-environment faults, none in product code:
+   - `tests/test_sam2seg.py:164` did `import pytest` to skip — CI installs only
+     `requirements.txt`, no pytest. Fixed by `raise SkipTest(...)` (the runner
+     puts `SkipTest` in builtins, `run_tests.py:66`); same in test_assets,
+     test_horizontal, test_review, test_gui.
+   - `tests/test_depinstall.py` patched `present`/`geocalib_weights_ok` but not
+     `sam2_weights_ok` (`depinstall.py:117-118`), so the sam row was
+     "not installed" on CI. Now patched; the assert names the rows.
+   - `test_gui` key/tool tests: `_on_sam_toggle` (`gui.py:5019`) turns v_sam
+     back off without SAM2. Tests now patch `sam2seg.local_available`.
+   Verified with a CI simulation (pytest blocked, SAM/weights forced absent).
+   **Open:** `test_a_new_photo_after_horizontal_auto_opens_in_auto_and_applies_auto`
+   (`test_gui.py` ~2611, `"Auto" in r._notice`) fails intermittently locally,
+   also on HEAD before this fix — suspected timing, unverified.
 
 7. ~~**Two agent passes cut off by a rate limit.**~~ **Both finished; closed
    2026-09-20.** Kept as a title so the next session does not re-open it:

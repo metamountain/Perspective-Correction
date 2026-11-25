@@ -8,7 +8,7 @@ fresh clone has to be able to run.
 
 Ends "FAILURES: none" with pc_errors.log clean, or names what broke.
 """
-import os, sys, time, glob, types, traceback
+import os, sys, time, glob, traceback
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "src"))
 from pc.gui import App
 

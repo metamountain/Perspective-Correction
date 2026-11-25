@@ -834,9 +834,7 @@ def _whole_frame(H, quad, img_w, img_h, settings, area_ratio,
             fw, fh = fx1 - fx0, fy1 - fy0
 
             # No downscale: the warped facade keeps its full pixel count.
-            # s_scale=1.0 means "what the warp produced is what you get."
             # The output grows (never shrinks) to fit the inflated quad.
-            s_scale = 1.0
 
             # Margin: 20% of facade size on each side for context
             margin_frac = getattr(settings, "reframe_margin", 0.20)

@@ -237,8 +237,7 @@ def test_a_corrected_facade_actually_comes_out_square():
     here = os.path.dirname(os.path.abspath(__file__))
     img = os.path.join(here, "assets", "Horizontal", "Platte_1.jpg")
     if not os.path.isfile(img):
-        import pytest
-        pytest.skip("Platte_1.jpg not available")
+        raise SkipTest("Platte_1.jpg not available")
 
     st = _settings(min_horizontal_support=0.15)
     dst = os.path.join(os.environ.get("TEMP", "."), "_test_facade_square.jpg")

@@ -273,3 +273,49 @@ def test_the_source_parses_on_the_oldest_python_pyproject_promises():
         f"pyproject promises {floor}, and `X | Y` is evaluated at import time "
         f"before 3.10. Add `from __future__ import annotations` to:\n  "
         + "\n  ".join(runtime_union))
+
+
+def test_no_public_module_constant_sits_in_src_without_a_reader():
+    """Every public top-level constant assigned in src/pc must have a reader in Python code."""
+    import ast
+    import os
+    import re
+
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    texts = {}
+    for sub in ("src", "tests", "tools"):
+        dirpath = os.path.join(root, sub)
+        for cur, dirnames, filenames in os.walk(dirpath):
+            dirnames[:] = [d for d in dirnames if d not in ("__pycache__", "DeepLSD")]
+            for f in filenames:
+                if f.endswith(".py"):
+                    path = os.path.join(cur, f)
+                    texts[path] = open(path, encoding="utf-8").read()
+
+    dead = []
+    for path, src in texts.items():
+        if not path.replace(os.sep, "/").startswith(root.replace(os.sep, "/") + "/src/"):
+            continue
+        tree = ast.parse(src)
+        for node in tree.body:
+            names = []
+            if isinstance(node, ast.Assign):
+                names = [t.id for t in node.targets if isinstance(t, ast.Name)]
+            elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
+                names = [node.target.id]
+            for name in names:
+                if name.startswith("_"):
+                    continue
+                rx = re.compile(r"\b" + re.escape(name) + r"\b")
+                uses = 0
+                for other, text in texts.items():
+                    for i, line in enumerate(text.splitlines()):
+                        if other == path and i + 1 == node.lineno:
+                            continue
+                        uses += len(rx.findall(line))
+                if uses == 0:
+                    dead.append(f"{os.path.relpath(path, root)}:{node.lineno}: {name}")
+
+    assert not dead, (
+        "module-level constants with no reader anywhere in the repository:\n  "
+        + "\n  ".join(dead))

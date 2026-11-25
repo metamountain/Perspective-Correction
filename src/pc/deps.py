@@ -200,7 +200,6 @@ def doctor() -> int:
         for mode in ("telea", "lama", "comfyui"):
             ok = FILL.available(mode, st)
             lines.append(f"  [{'yes' if ok else 'no ':>3}]  fill {mode:<8} {FILL.describe(mode, st)}")
-        b = BN.backends()
         weights = BN.find_weights()
         # torch is not enough. BiRefNet's architecture is loaded through
         # `transformers`, so an interpreter with torch and the weights and no

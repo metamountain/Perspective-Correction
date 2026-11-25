@@ -19,6 +19,7 @@ import os
 import sys
 import queue
 import threading
+import time
 import traceback
 
 log = logging.getLogger("pc.gui")
@@ -51,9 +52,8 @@ from PIL import Image, ImageTk
 
 from . import __version__
 from . import layout
+from . import lineoverlay as LO
 from . import masks as MK
-from . import model as M
-from . import warp as W
 from . import prefs
 from .config import Settings
 from .imageio import READABLE
@@ -133,18 +133,11 @@ OVERLAY = {
     "strip":       "#9fd8ff",
     # what the mask brush lays down
     "paint":       "#8b0f14",
-    # "Check lines" re-runs the detector on the RESULT: green where a line
-    # came out truly straight, red/amber where it still leans.
-    "check_ok":    "#39ff7a",
     # "Outline": where the photograph's own border landed after the warp
     "outline":     "#ffe14d",
-    "check_v_off": "#ff5a5a",
-    "check_h_off": "#ffb03a",
-    # the second M-LSD pass, drawn beside the primary detector's colours and
-    # therefore in a different hue family so the two can be told apart
-    "mlsd_ok":     "#00e5ff",
-    "mlsd_v_off":  "#76ff03",
-    "mlsd_h_off":  "#ffff00",
+    # the line overlays -- the detected lines on the before pane and the
+    # "Check lines" re-run on the after pane, in two palettes -- live in
+    # lineoverlay.LINE, the one table both panes read.
     # the loupe crosshair; cyan while Alt damps the tracking, so the damping
     # is visible rather than only felt
     "loupe":       "#000000",
@@ -152,6 +145,14 @@ OVERLAY = {
     # what the mask wash is tinted with until the user picks otherwise
     "mask_default": "#39ff14",   # neon green (user, 2026-10-24)
 }
+
+# A fast double-click on the Before pane is a LOAD gesture, not two edits:
+# Tk delivers the two <Button-1> presses first and only then the
+# <Double-Button-1>, so the panel must remember the state from before the
+# FIRST press and restore it when the double arrives. This window covers the
+# OS double-click time (Windows default 500 ms) with margin; a snapshot older
+# than this is stale and is dropped rather than restored.
+_DBL_WINDOW_MS = 700
 
 CHECK_LINE_TOL_DEG = 1.5
 """"Check lines" straightness tolerance, in DEGREES from the nearest axis.
@@ -166,19 +167,6 @@ the line it belongs to visibly climbs across the whole frame. An angle is
 the only version of this check that means the same thing regardless of how
 long a piece the detector happened to find.
 """
-
-
-def _off_angle_deg(x0, y0, x1, y1):
-    """Degrees the segment leans from its nearest axis (horizontal or vertical).
-
-    ``atan2(min(|dx|,|dy|), max(|dx|,|dy|))`` gives that in one formula: the
-    smaller of the two extents IS the offset from whichever axis the larger
-    one is closest to, so there is no separate branch for "vertical-ish" vs
-    "horizontal-ish" -- classifying the segment for colour purposes (see
-    callers) is a different question from measuring how far off it is.
-    """
-    dx, dy = abs(x1 - x0), abs(y1 - y0)
-    return math.degrees(math.atan2(min(dx, dy), max(dx, dy, 1e-9)))
 
 
 # --------------------------------------------------------------------------
@@ -773,7 +761,6 @@ def _icon_pil(codepoint, size, colour, emoji=False, mono=False):
     plain text glyph rather than showing nothing.
     """
     from PIL import ImageDraw, ImageFont
-    import os
     ch = chr(int(codepoint, 16))
     # Colour emoji live in their own font and carry their own palette, so
     # they are drawn with embedded_color and no tint.  The icon fonts have
@@ -1418,7 +1405,6 @@ class ReviewPanel(tk.Frame):
         # action; the cross keeps its one colour of emphasis elsewhere.  The frame
         # is re-created on every `load` (the canvas is rebuilt), so the buttons
         # track the panel's lifecycle for free.
-        app = self._app()
         addbar = tk.Frame(self.c_before, bg=INK["field"])
         self._addbar = addbar
         # Stacked downwards, not across (2026-09-13, user-directed): this corner
@@ -1523,6 +1509,8 @@ class ReviewPanel(tk.Frame):
                              "green = truly vertical or level, red = still leans.")
         gridbar.place(relx=1.0, x=-8, y=8, anchor="ne")
         self._pending_mark = None
+        self._pair_snap = None        # pre-first-press state of a fast double pair
+        self._pair_snap_t = 0.0       # event time of that first press
         self._after_off = (0, 0)
         self._crop_drag_start = None
         self._strip_drag = None         # which ROI ruler is grabbed: 0=left, 1=right
@@ -1540,6 +1528,9 @@ class ReviewPanel(tk.Frame):
         if getattr(self, "v_mark", None) is not None and self.v_mark.get():
             pass  # nothing to restore: the loupe now lives only during a drag
         self.c_before.bind("<Button-1>", self._on_click_before)
+        # A fast double-click on the Before pane opens the load dialog and
+        # undoes the two clicks it is made of -- see `_on_before_double_click`.
+        self.c_before.bind("<Double-Button-1>", self._on_before_double_click)
         self.c_before.bind("<Motion>", self._on_before_motion)
         self.c_before.bind("<B1-Motion>", self._on_before_b1motion)
         self.c_before.bind("<ButtonRelease-1>", self._on_before_b1release)
@@ -3531,6 +3522,15 @@ class ReviewPanel(tk.Frame):
             return "break"
         x = event.x - self._before_off[0]
         y = event.y - self._before_off[1]
+        # Remember the state BEFORE this press: if this turns out to be the
+        # first press of a fast pair, `_on_before_double_click` restores it so
+        # neither click of the double leaves an edit behind.  A second press
+        # inside `_DBL_WINDOW_MS` keeps the first press's snapshot untouched.
+        now = getattr(event, "time", 0) or int(time.monotonic() * 1000)
+        if not (self._pair_snap is not None
+                and 0 <= now - self._pair_snap_t <= _DBL_WINDOW_MS):
+            self._pair_snap = self._snap_before_clicks()
+            self._pair_snap_t = now
         # A press right on a visible ROI ruler grabs it for dragging rather than
         # falling through to line-picking: the strip is set by hand, so its edges
         # must be reachable wherever they land.  Checked first -- it is the most
@@ -3557,6 +3557,103 @@ class ReviewPanel(tk.Frame):
             return
         self.session.toggle_line(idx)
         if self.session.mode == AUTO:
+            self._sync_from_session()
+        else:
+            self._redraw()
+
+    def _on_before_double_click(self, event):
+        """A fast left double-click on the Before pane opens the load dialog.
+
+        The two presses that make up the double have already run through
+        `_on_click_before`, so a control mark, a pending mark point, quad
+        corners, paint or a line toggle may be on the table.  None of it is an
+        edit the user asked for, so the state from before the FIRST press is
+        restored, the half-open gesture state is cleared, and only then the
+        same dialog as the "add files" button opens.  Modifier doubles keep
+        their own meaning (Shift sizes the pen, Alt erases), and with no
+        session the first press already opened the dialog, so the double adds
+        nothing.
+        """
+        if self.session is None:
+            return "break"
+        if getattr(event, "state", 0) & (SHIFT_MASK | ALT_MASK):
+            return "break"
+        now = getattr(event, "time", 0) or int(time.monotonic() * 1000)
+        if (self._pair_snap is not None
+                and 0 <= now - self._pair_snap_t <= _DBL_WINDOW_MS):
+            self._restore_before_clicks(self._pair_snap)
+        self._pair_snap = None
+        self._on_add_files()
+        return "break"
+
+    def _snap_before_clicks(self):
+        """The click-editable state, before the next press of a potential pair.
+
+        Every left-click path on the Before pane touches one of these: the
+        control lines (mark mode), the candidate `enabled` flags (line
+        toggle), the paint mask (brush), the planar quad (rectangle), the
+        facade strip and the crop (both cleared by a quad start), the settings
+        and the two switches `_planar_takes_over` may turn off.  A restore
+        that misses one leaves exactly the edit the double was supposed to
+        take back."""
+        s = self.session
+        v_corr = getattr(self, "v_correct_horizontal", None)
+        v_strip = getattr(self, "v_strip", None)
+        v_mode = getattr(self, "v_corr_mode", None)
+        return {
+            "control_lines": s.control_lines.copy(),
+            "control_hlines": s.control_hlines.copy(),
+            "enabled": s.enabled.copy(),
+            "paint": None if s.paint is None else s.paint.copy(),
+            "_paint_struck": getattr(
+                s, "_paint_struck", np.zeros(0, dtype=bool)).copy(),
+            "planar_quad": list(s.planar_quad),
+            "strip": s.strip,
+            "crop_edges": dict(s._crop_edges),
+            "crop_is_auto": s.crop_is_auto,
+            "settings": s.settings,
+            "corr_h": v_corr.get() if v_corr is not None else None,
+            "strip_on": v_strip.get() if v_strip is not None else None,
+            "mode": v_mode.get() if v_mode is not None else None,
+        }
+
+    def _restore_before_clicks(self, snap):
+        """Put back the state `_snap_before_clicks` took, and close every
+        gesture the two presses may have left half-open (a pending mark point,
+        an in-flight stroke, a grabbed corner or ruler)."""
+        s = self.session
+        s.control_lines = snap["control_lines"]
+        s.control_hlines = snap["control_hlines"]
+        s.enabled = snap["enabled"]
+        s.paint = snap["paint"]
+        s._paint_struck = snap["_paint_struck"]
+        s.planar_quad = snap["planar_quad"]
+        s.strip = snap["strip"]
+        s._crop_edges = snap["crop_edges"]
+        s.crop_is_auto = snap["crop_is_auto"]
+        s.settings = snap["settings"]
+        s.refit()
+        if snap["corr_h"] is not None and getattr(self, "v_correct_horizontal", None) is not None:
+            self.v_correct_horizontal.set(snap["corr_h"])
+        if snap["strip_on"] is not None and getattr(self, "v_strip", None) is not None:
+            self.v_strip.set(snap["strip_on"])
+        if snap["mode"] is not None and getattr(self, "v_corr_mode", None) is not None:
+            self.v_corr_mode.set(snap["mode"])
+            # A quad start may have raised the "auto" frame over the active
+            # one; the restored mode owns the top again.
+            self._mode_frames[snap["mode"]].tkraise()
+        # Half-open gestures the two presses may have left behind:
+        self._pending_mark = None
+        self._mark_moved = False
+        self._mark_drag = None
+        self._rect_drag = None
+        self._strip_drag = None
+        self._stroke_pts = []
+        if hasattr(self, "_sam_drag_start"):
+            del self._sam_drag_start
+        for tag in ("mark_rubber", "stroke_preview"):
+            self.c_before.delete(tag)
+        if s.mode == AUTO:
             self._sync_from_session()
         else:
             self._redraw()
@@ -4417,8 +4514,11 @@ class ReviewPanel(tk.Frame):
             if self._img_box is None:
                 self._img_box = (box_b, box_a)
             lock_b, lock_a = self._img_box
-            before = self.session.render_before(max_edge=max(lock_b),
-                                                show_lines=self.v_show_lines.get())
+            # show_lines=False on purpose: the detected lines are drawn on the
+            # canvas (`_draw_before_lines`), 1 px at the displayed size like
+            # the after pane's check lines.  Baked into the image they scaled
+            # with it and read thicker.  The mask wash stays in the image.
+            before = self.session.render_before(max_edge=max(lock_b), show_lines=False)
             # Un-cropped on purpose: `_show_after` bakes a veil over what the crop
             # discards, so the picture keeps one size and one scale for the whole
             # session instead of leaping every time a corner moves.
@@ -4456,6 +4556,7 @@ class ReviewPanel(tk.Frame):
             self.c_before.create_image(self._before_off[0], self._before_off[1],
                                        anchor="nw", image=ph_b)
             self._ph_b = ph_b
+            self._draw_before_lines()
             # No grid on this pane (2026-09-13, user-directed).  The grid is a
             # ruler for judging the *corrected* frame -- a true vertical should
             # run along a grid line -- so it belongs on the after pane only.  On
@@ -4611,18 +4712,18 @@ class ReviewPanel(tk.Frame):
             self._palette_btns.append(b)
             return b
 
-        _mk_btn = tool("mark", self.v_mark, self._on_mark_toggle,
-                       "Mark (M): click two points on a straight edge.\n"
-                       "It comes out exactly vertical or horizontal --\n"
-                       "the way it leans decides which. Click a line to\n"
-                       "remove it. 2 lines of a direction override the\n"
-                       "detector. Hold Alt for a slow, fine loupe.",
-                       lead=True)
-        _pr_btn = tool("rect", self.v_rect, self._on_rect_toggle,
-                        "PC Rectangle: click the 4 corners of one wall,\n"
-                        "in any order -- it comes out front-on in its real\n"
-                        "proportions, with 20 % kept around it to crop by hand.\n"
-                        "Drag a corner to adjust; right-click clears.")
+        tool("mark", self.v_mark, self._on_mark_toggle,
+             "Mark (M): click two points on a straight edge.\n"
+             "It comes out exactly vertical or horizontal --\n"
+             "the way it leans decides which. Click a line to\n"
+             "remove it. 2 lines of a direction override the\n"
+             "detector. Hold Alt for a slow, fine loupe.",
+             lead=True)
+        tool("rect", self.v_rect, self._on_rect_toggle,
+             "PC Rectangle: click the 4 corners of one wall,\n"
+             "in any order -- it comes out front-on in its real\n"
+             "proportions, with 20 % kept around it to crop by hand.\n"
+             "Drag a corner to adjust; right-click clears.")
         # Brush and box-select joined Mark here (2026-09-15, user: "either the
         # toolbar or the marker, I would prefer only the tool").  They were
         # text controls in the lower-left field while Mark was in both places,
@@ -4667,15 +4768,47 @@ class ReviewPanel(tk.Frame):
         # It was three solid bars, light-dark-light, which read as a barcode
         # and said nothing about measuring. Two rulers with the span between
         # them is the actual idea, and it is now in the same pen as the rest.
-        _strip_btn = tool("strip", self.v_strip, self._on_strip_icon_click,
-                        "Facade strip: restrict horizontal evidence\n"
-                        "to one facade on corner views.\n"
-                        "Drag the two rulers on the before picture.")
+        tool("strip", self.v_strip, self._on_strip_icon_click,
+             "Facade strip: restrict horizontal evidence\n"
+             "to one facade on corner views.\n"
+             "Drag the two rulers on the before picture.")
         # NOTE: this used to say the quad had left the palette and that
         # nothing in the window pointed at it -- sitting directly above
         # `tool("rect", ...)`. The quad came back and the comment stayed, which
         # is the exact shape of defect this project keeps paying for: a reader
         # trusts the prose over the line of code beside it.
+
+    def _draw_before_lines(self):
+        """The detected lines on the before pane, as Tk canvas lines.
+
+        One thing with the after pane's check lines: both go through
+        `lineoverlay`, width 1 at the displayed size, colours from the one
+        table in `lineoverlay.LINE`.  Baked into the photo they scaled with
+        it and read thicker than the after pane; on the canvas both panes
+        are 1 px.  `render_before` no longer draws them (show_lines=False);
+        it still bakes the mask wash, which belongs to the image.
+        """
+        if self.session is None or not self.v_show_lines.get():
+            return
+        ox, oy = self._before_off
+        s = self._before_scale
+        lo = self.session.line_overlay()
+        # Inliers last, so the fit's evidence sits on top, like the bake did.
+        for role, key in (("masked", "masked"), ("horiz", "h_line"),
+                          ("v_outlier", "v_outlier"), ("v_inlier", "v_inlier")):
+            segs = lo[role]
+            if segs is not None and len(segs):
+                LO.draw(self.c_before, segs, ox, oy, LO.LINE[key], scale=s,
+                        tags="before_lines")
+        hline = self.session.horizon_line()
+        if hline is not None:
+            pts = LO.infinite_line_points(hline, self.session.w, self.session.h)
+            if len(pts) >= 2:
+                (x0, y0), (x1, y1) = pts[0], pts[1]
+                self.c_before.create_line(ox + x0 * s, oy + y0 * s,
+                                          ox + x1 * s, oy + y1 * s,
+                                          fill=LO.hex_(LO.LINE["horizon"]),
+                                          width=1, tags="before_lines")
 
     def _draw_after_lines(self, arr, iw, ih):
         """Re-detect lines on the *corrected* frame, as a check on the correction.
@@ -4707,13 +4840,11 @@ class ReviewPanel(tk.Frame):
             return                     # a diagnostic must never break the pane
         if seg is None or not len(seg):
             return
-        ox, oy = self._after_off
-        for x0, y0, x1, y1 in seg:
-            colour = (OVERLAY["check_ok"] if _off_angle_deg(x0, y0, x1, y1) <= CHECK_LINE_TOL_DEG
-                     else (OVERLAY["check_v_off"] if abs(y1 - y0) >= abs(x1 - x0)
-                           else OVERLAY["check_h_off"]))
-            self.c_after.create_line(ox + x0, oy + y0, ox + x1, oy + y1,
-                                     fill=colour, width=1, tags="after_lines")
+        # Both passes draw through `lineoverlay.draw_check`: one colour rule,
+        # 1 px at the displayed size, colours from the one table.
+        LO.draw_check(self.c_after, seg, *self._after_off,
+                      LO.LINE["check_ok"], LO.LINE["check_v_off"],
+                      LO.LINE["check_h_off"], CHECK_LINE_TOL_DEG, tags="after_lines")
         # Second pass: M-LSD in a distinct colour (cyan) so both detectors
         # are visible for comparison.  Only when the primary is not already mlsd.
         if self.session.settings.detector != "mlsd":
@@ -4723,12 +4854,9 @@ class ReviewPanel(tk.Frame):
             except Exception:
                 seg_m = None
             if seg_m is not None and len(seg_m):
-                for x0, y0, x1, y1 in seg_m:
-                    colour = (OVERLAY["mlsd_ok"] if _off_angle_deg(x0, y0, x1, y1) <= CHECK_LINE_TOL_DEG
-                             else (OVERLAY["mlsd_v_off"] if abs(y1 - y0) >= abs(x1 - x0)
-                                   else OVERLAY["mlsd_h_off"]))
-                    self.c_after.create_line(ox + x0, oy + y0, ox + x1, oy + y1,
-                                             fill=colour, width=1, tags="after_lines")
+                LO.draw_check(self.c_after, seg_m, *self._after_off,
+                              LO.LINE["mlsd_ok"], LO.LINE["mlsd_v_off"],
+                              LO.LINE["mlsd_h_off"], CHECK_LINE_TOL_DEG, tags="after_lines")
 
     def _cross_orientation(self, event):
         """Guide kind from pointer position: 'h' or 'v'.
@@ -4835,7 +4963,6 @@ class ReviewPanel(tk.Frame):
             return
         kind, idx = self._guide_drag
         aox, aoy = self._after_off
-        iw, ih = self._ph_a.width(), self._ph_a.height()
         if kind == "v":
             pos = event.x - aox
         else:
@@ -5694,7 +5821,6 @@ class App(_ROOT_CLASS):
         return bar
 
     def _build(self):
-        pad = dict(padx=6, pady=2)
         # The window is the cross and a slim status bar at the foot -- nothing
         # else. The brand row is gone: the mark lives only in the OS title bar
         # (`_set_window_icon`), the wordmark in the status bar's left corner, and
@@ -6118,7 +6244,7 @@ class App(_ROOT_CLASS):
                              + (f" / {t >> 20} MB" if t else ""))))
                 self.after(0, lambda: finish("DeepLSD weights ready in models/", False))
             except Exception as exc:
-                self.after(0, lambda: finish(str(exc), True))
+                self.after(0, lambda msg=str(exc): finish(msg, True))
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -6541,7 +6667,7 @@ class App(_ROOT_CLASS):
 
         Saved as a JPG in the output directory so the existing ``_add`` /
         review path handles it without any special-casing."""
-        from PIL import Image, ImageGrab
+        from PIL import ImageGrab
         img = ImageGrab.grabclipboard()
         # Files copied in Explorer arrive as a list of paths, not an image.
         if isinstance(img, list):

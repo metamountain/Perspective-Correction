@@ -1582,36 +1582,59 @@ class ReviewSession:
         return None
 
     # -- rendering -------------------------------------------------------
+    def line_overlay(self):
+        """The detected lines in FULL-resolution pixels, one array per role.
+
+        The shared input for the two renderings of the before lines: the baked
+        preview (`render_before`, where they scale with the image) and the Tk
+        canvas in the review window, where they are 1 px at the displayed
+        size.  A struck line is gone from both, not recoloured: the user
+        excluded it on purpose (stroke, strike-slanted or a click), so drawing
+        it in grey only argues for putting it back.  It stays out of the fit --
+        `enabled` decides that -- and simply stops being shown.
+        """
+        inv = 1.0 / self.scale
+        used = self.vert.subset(self.enabled)
+        m = self.model
+        if (m is not None and m.vert_inliers is not None
+                and len(m.vert_inliers) == len(self.enabled)):
+            inl = m.vert_inliers[self.enabled]
+        else:
+            inl = np.zeros(len(used), bool)
+        info = getattr(self, "detect_info", None) or {}
+        dropped = info.get("masked_out")
+        return {
+            "masked": dropped * inv if dropped is not None and len(dropped) else None,
+            "horiz": self.horiz.seg * inv if len(self.horiz) else None,
+            "v_outlier": used.seg[~inl] * inv,
+            "v_inlier": used.seg[inl] * inv,
+        }
+
+    def horizon_line(self):
+        """The implied horizon as (a, b, c) in full-resolution pixels, or None."""
+        m = self.model
+        if m is None or not m.f:
+            return None
+        K = G.intrinsics(m.f, self.w / 2.0, self.h / 2.0)
+        return G.horizon_line(m.up, K)
+
     def render_before(self, max_edge=900, show_lines=True):
         canvas = self.bgr.copy()
-        inv = 1.0 / self.scale
-        info = getattr(self, "detect_info", None) or {}
         # The mask wash is independent of the line overlay: a region you excluded
         # stays worth seeing -- and its opacity adjustable -- whether or not the
         # detected lines are on screen.  Coupling it to show_lines made the whole
         # opacity control dead the moment "Lines" was switched off.
         if self.show_mask and self.mask_alpha > 0.001:
             mc = getattr(self, "mask_color", None) or (60, 60, 200)
+            info = getattr(self, "detect_info", None) or {}
             PV.tint_mask(canvas, info.get("mask"), colour=mc, alpha=self.mask_alpha)
         if show_lines:
-            # A struck line is gone from view, not recoloured: the user excluded
-            # it on purpose (stroke, strike-slanted or a click), so drawing it in
-            # grey only argues for putting it back.  It stays out of the fit --
-            # `enabled` decides that -- and simply stops being shown.
-            used = self.vert.subset(self.enabled)
-            m = self.model
-            dropped = info.get("masked_out")
-            if dropped is not None and len(dropped):
-                PV.draw_lines(canvas, dropped * inv, PV.RED, 1)
-            if len(self.horiz):
-                PV.draw_lines(canvas, self.horiz.seg * inv, PV.BLUE, 1)
-            if len(used):
-                inl = m.vert_inliers[self.enabled] if m is not None else np.zeros(len(used), bool)
-                PV.draw_lines(canvas, used.seg[~inl] * inv, PV.YELLOW, 1)
-                PV.draw_lines(canvas, used.seg[inl] * inv, PV.GREEN, 2)
-            if m is not None and m.f:
-                K = G.intrinsics(m.f, self.w / 2.0, self.h / 2.0)
-                PV._draw_infinite_line(canvas, G.horizon_line(m.up, K), PV.MAGENTA, 2)
+            lo = self.line_overlay()
+            PV.draw_detected(canvas, 1.0, lo["masked"], lo["horiz"],
+                             lo["v_outlier"], lo["v_inlier"])
+            hline = self.horizon_line()
+            if hline is not None:
+                PV._draw_infinite_line(canvas, hline, PV.MAGENTA, 2)
         return _fit(canvas, max_edge)
 
     def render_after(self, max_edge=900, apply_crop=True, fill="full"):

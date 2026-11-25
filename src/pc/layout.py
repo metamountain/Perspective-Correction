@@ -49,12 +49,6 @@ ADJUST_ROWS_H = 150
 # review pane that is never collapsible, measured as (pane - canvas) with the
 # control block shut.
 PANEL_FIXED_H = 200
-# Physical size of a correction/mask Scale. The track already fills its row
-# (sticky="ew"), so grabbability comes from thickness and thumb length, not from
-# the track's length. A default ttk.Scale is a few pixels thick -- easy to miss
-# at any zoom; these make it a chunk you can hit by eye.
-SLIDER_WIDTH = 28      # px, trough thickness (perpendicular to the track)
-SLIDER_THUMB = 30      # px, thumb length along the track (~circular with width)
 # Grid floor for the track column. The scale fills its column (sticky="ew"), but
 # on a narrow window the label + spinbox can squeeze it to a useless sliver; a
 # grid `minsize` is a hard floor the weighted column cannot shrink past (unlike
@@ -71,13 +65,7 @@ SLIDER_MIN = 60        # px, minimum track-column width
 # any of them.  The whole point is that the strip stays short so the two
 # pictures on top take every spare pixel.
 CTRL_FONT_PT = 8          # pt, the strip's face (labels, readouts, buttons)
-CTRL_LINE_HEIGHT = 1.5    # row pitch ceiling, as a multiple of the font line height
-CTRL_ROW_GAP_PX = 0       # px between rows: none (user: "keine Luft zwischen Zeilen")
-CTRL_GROUP_PAD_PX = 4     # px between groups (around a group title)
 CTRL_COL_GAP_PX = 8       # px between the General and Correction columns
-SLIDER_TRACK_H_PX = 4     # px, slim correction-slider trough thickness
-CTRL_FIELD_H_PX = 20      # px, a single control row's height (field/button)
-MODE_SWITCH_H_PX = 24     # px, the segmented Auto / Horizontal auto / Manual bar
 CTRL_STRIP_MAX_H_PX = 140 # px, the strip's height budget at 1080p; the pictures
                           #   get everything above it
 
@@ -191,8 +179,6 @@ def adjustments_start_open(review_h, adj_h=ADJUST_ROWS_H,
 PREVIEW_ASPECT = 4.0 / 3.0
 # Gap between the two preview boxes, and the frame's own padding.
 PREVIEW_GAP = 12
-# Below this a preview is not worth showing whatever the arithmetic says.
-MIN_PREVIEW_H = 150
 
 
 def preview_box(pane_w, gap=PREVIEW_GAP):
@@ -241,23 +227,6 @@ def fill_fraction(box_w, box_h, img_w, img_h):
 # `perfect_cross_field`) still compute the equal-field arithmetic, because that
 # is what the flat-20-px cross/border directive is stated in; the live grid in
 # gui.py no longer asks them for the row split.
-
-# The lower field's need is not one number, because the control block collapses
-# (`adjustments_start_open`, wired to the review pane's <Configure>). Two
-# figures, and the distinction is what keeps a 1366x768 laptop working:
-#
-#   hard floor  -- the action row. Save / Keep / Close must be reachable at
-#                  every size; this is the one thing that may never be traded.
-#   preferred   -- action row plus the control block, i.e. the controls open.
-#
-# A window that cannot afford the preferred height does not get an uneven cross;
-# it gets an equal cross with the controls collapsed, which is the same layout
-# with one block folded away. Only a window too short even for the hard floor
-# plus a minimum preview falls back to an uneven split.
-ACTION_ROW_H = 48
-UI_HARD_MIN_H = ACTION_ROW_H
-MIN_UI_QUADRANT_H = ADJUST_ROWS_H + ACTION_ROW_H
-
 
 def quadrant(pane_w, pane_h, gap=PREVIEW_GAP):
     """``(w, h)`` of each of the four fields -- exactly half the pane, both ways.

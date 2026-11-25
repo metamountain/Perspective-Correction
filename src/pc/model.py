@@ -452,10 +452,10 @@ def estimate(vert, horiz, w: int, h: int, settings, exif_focal_px=None,
         else:
             f_vp, sigma_vp, f_quality = None, float("inf"), 0.0
         if mode in ("horizon", "both"):
-            f_hz, sigma_hz, hz_support = focal_from_horizon(
+            f_hz, sigma_hz, _ = focal_from_horizon(
                 hy.vp, horiz, cx, cy, w, h, settings, horiz_seq)
         else:
-            f_hz, sigma_hz, hz_support = None, float("inf"), 0.0
+            f_hz, sigma_hz = None, float("inf")
         # the horizon estimate is the primary one; the two-vanishing-point value
         # is a second opinion, and both are weighed against the prior by their
         # own uncertainty rather than by a hand-set precedence order

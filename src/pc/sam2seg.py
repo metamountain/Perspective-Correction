@@ -26,7 +26,6 @@ from __future__ import annotations
 
 import os
 import subprocess
-import sys
 import time
 from typing import List, Optional, Tuple
 
@@ -67,7 +66,6 @@ def default_comfy_python() -> str:
     return _COMFY_CANDIDATES[0]
 
 
-DEFAULT_COMFY_PYTHON = default_comfy_python()
 DEFAULT_CKPT = os.path.join("models", "sam2", "sam2.1_hiera_base_plus.pt")
 DEFAULT_CFGDIR = os.path.join("models", "sam2", "configs")
 

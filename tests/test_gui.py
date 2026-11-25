@@ -15,7 +15,6 @@ import types
 from unittest import SkipTest
 
 import numpy as np
-import pytest
 from pc import layout
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -340,7 +339,7 @@ def test_strip_control_restricts_horizontal_evidence_and_defaults_off():
         assert s is not None and s.strip is None, "no strip by default"
         # Facade strip removed from Q4 (2026-09-17): v_strip no longer exists.
         if getattr(r, "v_strip", None) is None:
-            raise pytest.skip("facade strip removed from Q4")
+            raise SkipTest("facade strip removed from Q4")
         assert not r.v_strip.get(), "facade strip must start off"
 
         aw = s.gray.shape[1]
@@ -384,7 +383,7 @@ def test_enabling_a_strip_turns_on_horizontal_correction():
         s = r.session
         assert not s.settings.correct_horizontal, "horizontal is off by default"
         if getattr(r, "v_strip", None) is None:
-            raise pytest.skip("facade strip removed from Q4")
+            raise SkipTest("facade strip removed from Q4")
 
         r.v_strip.set(True)
         r.v_strip_x0.set(10.0)
@@ -416,7 +415,7 @@ def test_strip_draws_two_draggable_rulers_defaulting_to_20_and_80():
         _loaded(app, 1280, 800)
         r = app.review
         if getattr(r, "v_strip", None) is None:
-            raise pytest.skip("facade strip removed from Q4")
+            raise SkipTest("facade strip removed from Q4")
         # The spinboxes default to a real strip, not the whole frame.
         assert r.v_strip_x0.get() == 20.0 and r.v_strip_x1.get() == 80.0, \
             "the default must restrict something, not cover the whole frame"
@@ -1303,6 +1302,141 @@ def test_a_mark_is_dragged_out_in_one_gesture_and_a_still_click_still_removes():
         app.destroy()
 
 
+def test_a_fast_double_click_on_before_opens_the_load_dialog_and_leaves_no_mark_edit():
+    """A fast left double-click on the Before pane opens the same file dialog
+    as the "add files" button, and the two clicks of it leave no control mark,
+    no pending mark point and no other edit behind.
+
+    Tk delivers both `<Button-1>` presses before the `<Double-Button-1>`, so
+    in mark mode the second press of the pair completes the control line the
+    first one started -- exactly the edit nobody asked for.  The double
+    handler restores the state from before the FIRST press; this asserts the
+    pair really placed a line first (red without the restore), then that the
+    dialog opened and nothing of the pair is left on the table.
+    """
+    app = _app()
+    try:
+        _loaded(app, 1280, 800)
+        r = app.review
+        s = r.session
+        r.v_mark.set(True)
+        ox, oy = r._before_off
+
+        def ev(dx, dy, t):
+            return types.SimpleNamespace(x=dx + ox, y=dy + oy, time=t)
+
+        # Far enough apart in display pixels that the second press really
+        # adds a control line (the session's own minimum), derived rather than
+        # guessed so the test survives window-size changes.
+        inv = s.scale / max(r._before_scale, 1e-9)
+        need = s.MIN_CONTROL_LENGTH_FRAC * min(s.gray.shape[:2]) / inv
+        span = int(need * 1.5)
+
+        r._on_click_before(ev(60, 40, 1000))           # press 1: starts the mark
+        r._on_before_b1release(ev(60, 40, 1000))
+        assert r._pending_mark is not None, "the press should start a mark"
+        r._on_click_before(ev(60 + span, 40 + span, 1150))   # press 2: completes it
+        assert len(s.control_lines) + len(s.control_hlines) == 1, (
+            "the second press of the double placed a control line")
+
+        opened = []
+        app._add_files = lambda: opened.append(1)
+        try:
+            r._on_before_double_click(ev(60 + span, 40 + span, 1150))
+        finally:
+            del app._add_files
+        assert opened == [1], "the double-click must open the load dialog"
+        assert r._pending_mark is None, "no pending mark point may remain"
+        assert len(s.control_lines) == 0 and len(s.control_hlines) == 0, (
+            "the control mark the pair placed must be taken back")
+    finally:
+        app.destroy()
+
+
+def test_a_fast_double_click_in_rectangle_mode_leaves_no_corners_behind():
+    """Two presses of the pair place two planar quad corners (and the first
+    one takes the modes over); the double takes all of it back."""
+    app = _app()
+    try:
+        _loaded(app, 1280, 800)
+        r = app.review
+        s = r.session
+        r.v_rect.set(True)
+        ox, oy = r._before_off
+
+        def ev(dx, dy, t):
+            return types.SimpleNamespace(x=dx + ox, y=dy + oy, time=t)
+
+        r._on_click_before(ev(100, 60, 2000))
+        r._on_before_b1release(ev(100, 60, 2000))
+        r._on_click_before(ev(220, 60, 2100))
+        assert len(s.planar_quad) == 2, "the two presses placed two corners"
+
+        opened = []
+        app._add_files = lambda: opened.append(1)
+        try:
+            r._on_before_double_click(ev(220, 60, 2100))
+        finally:
+            del app._add_files
+        assert opened == [1], "the double-click must open the load dialog"
+        assert s.planar_quad == [], "no quad corner may remain"
+    finally:
+        app.destroy()
+
+
+def test_a_fast_double_click_in_brush_mode_leaves_no_paint_behind():
+    """Each press-release of the pair paints a dab; the double takes both back."""
+    app = _app()
+    try:
+        _loaded(app, 1280, 800)
+        r = app.review
+        s = r.session
+        r.v_stroke.set(True)
+        ox, oy = r._before_off
+
+        def ev(dx, dy, t):
+            return types.SimpleNamespace(x=dx + ox, y=dy + oy, time=t)
+
+        assert s.paint is None
+        r._on_click_before(ev(100, 100, 3000))
+        r._on_before_b1release(ev(100, 100, 3000))
+        assert s.paint is not None, "a still brush click paints a dab"
+        r._on_click_before(ev(105, 105, 3100))
+        r._on_before_b1release(ev(105, 105, 3100))
+
+        opened = []
+        app._add_files = lambda: opened.append(1)
+        try:
+            r._on_before_double_click(ev(105, 105, 3100))
+        finally:
+            del app._add_files
+        assert opened == [1], "the double-click must open the load dialog"
+        assert s.paint is None, "the pair's paint must be taken back"
+    finally:
+        app.destroy()
+
+
+def test_a_double_click_on_the_empty_cross_opens_the_dialog_only_once():
+    """With no photograph open, the FIRST press already opens the load dialog
+    (the empty cross doubles as the pick target); the double that follows must
+    not open a second one."""
+    app = _app()
+    try:
+        r = app.review
+        assert r.session is None, "start with the empty cross"
+        opened = []
+        app._add_files = lambda: opened.append(1)
+        try:
+            ev = types.SimpleNamespace(x=10, y=10, time=5000)
+            r._on_click_before(ev)
+            r._on_before_double_click(ev)
+        finally:
+            del app._add_files
+        assert opened == [1], "one dialog for the pair, not one per press"
+    finally:
+        app.destroy()
+
+
 def test_each_tool_mode_has_a_key_and_the_keys_do_not_replace_each_other():
     """m / b / s reach the three tool modes, and SAM is not flipped twice.
 
@@ -1314,7 +1448,14 @@ def test_each_tool_mode_has_a_key_and_the_keys_do_not_replace_each_other():
     caller's -- the contract the palette buttons rely on too. `_on_sam_toggle`
     used to flip its own; a second flip anywhere cancels the first and the tool
     looks dead, which is what this asserts against.
+
+    The availability gate is patched, not worked around: without SAM2 the
+    handler flips v_sam back off, which is the product behaviour on a machine
+    without it -- but this test is about the key and the flip count.
     """
+    from pc import sam2seg
+    real_avail = sam2seg.local_available
+    sam2seg.local_available = lambda: True
     app = _app()
     try:
         _loaded(app, 1280, 800)
@@ -1333,6 +1474,7 @@ def test_each_tool_mode_has_a_key_and_the_keys_do_not_replace_each_other():
             app._tool_key(var, handler)          # and back, so modes do not stack
             assert getattr(r, var).get() == before, f"{seq} twice must return"
     finally:
+        sam2seg.local_available = real_avail
         app.destroy()
 
 
@@ -1408,7 +1550,7 @@ def test_the_facade_strip_still_works_after_a_second_photograph_loads():
         _loaded(app, 1280, 800)
         r = app.review
         if getattr(r, "v_strip", None) is None:
-            raise pytest.skip("facade strip not present")
+            raise SkipTest("facade strip not present")
         first = (r.v_strip, r.v_strip_x0, r.v_strip_x1)
         r.load(r.session.path, r.settings, r.dest_path)   # a second photograph
         _settle(app)
@@ -1442,7 +1584,13 @@ def test_only_one_tool_can_be_in_your_hand_at_a_time():
     Pressing through `_tool_key` rather than setting the variables, because the
     flip and the handler together are the contract; setting a variable by hand
     would test a path no user can take.
+
+    SAM2 availability patched like in the key-count test above: the flip and
+    the exclusivity are what is under test, not the install state.
     """
+    from pc import sam2seg
+    real_avail = sam2seg.local_available
+    sam2seg.local_available = lambda: True
     app = _app()
     try:
         _loaded(app, 1280, 800)
@@ -1467,6 +1615,7 @@ def test_only_one_tool_can_be_in_your_hand_at_a_time():
         assert not any(getattr(r, v).get() for v, _ in modes), (
             "switching the last tool off must leave no tool active")
     finally:
+        sam2seg.local_available = real_avail
         app.destroy()
 
 
@@ -2639,5 +2788,73 @@ def test_the_mode_switch_means_what_it_shows_even_after_a_slider_moved():
         r._planar_takes_over()
         assert r.v_corr_mode.get() == "auto"
         assert not r.session.settings.correct_horizontal
+    finally:
+        app.destroy()
+
+
+def test_the_before_lines_are_canvas_lines_thin_like_the_after_check_lines():
+    """The detected lines are Tk canvas lines in the BEFORE pane too, through
+    `lineoverlay`: 1 px at the displayed size, colours from the one table in
+    `lineoverlay.LINE` -- the same path as the after pane's check lines.
+    Baked into the before photo they scaled with it and read thicker than
+    the after pane; the "Lines" switch now removes canvas items, not a
+    re-bake of the image.
+    """
+    app = _app()
+    try:
+        _loaded(app, 1280, 800)
+        r = app.review
+        s = r.session
+        if s is None or len(s.vert) == 0:
+            raise SkipTest("no session or no verticals")
+        from pc import lineoverlay as LO
+        ids = r.c_before.find_withtag("before_lines")
+        assert len(ids) > 0, "the detected lines are drawn on the before canvas"
+        fills = {LO.hex_(c) for c in LO.LINE.values()}
+        for i in ids:
+            assert float(r.c_before.itemcget(i, "width")) == 1.0, (
+                "the before lines are 1 px at the displayed size")
+            assert r.c_before.itemcget(i, "fill") in fills, (
+                "the line colour comes from the one table in lineoverlay.LINE")
+        # Off: the switch removes the lines, on: they come back.
+        r.v_show_lines.set(False)
+        r._schedule_redraw()
+        _settle(app)
+        assert len(r.c_before.find_withtag("before_lines")) == 0, (
+            "the Lines switch removes the canvas lines")
+        r.v_show_lines.set(True)
+        r._schedule_redraw()
+        _settle(app)
+        assert len(r.c_before.find_withtag("before_lines")) > 0
+    finally:
+        app.destroy()
+
+
+def test_the_check_lines_share_the_line_overlay_colour_table():
+    """The after pane's check lines (both passes) draw through
+    `lineoverlay.draw_check`: 1 px at the displayed size, colours from the
+    one table -- nothing else colours a line anymore.
+    """
+    app = _app()
+    try:
+        _loaded(app, 1280, 800)
+        r = app.review
+        if r.session is None:
+            raise SkipTest("no session")
+        r.v_after_lines.set(True)
+        r._schedule_redraw()
+        _settle(app)
+        ids = r.c_after.find_withtag("after_lines")
+        if not ids:
+            raise SkipTest("the detector found no lines on the preview")
+        from pc import lineoverlay as LO
+        allowed = {LO.hex_(LO.LINE[k]) for k in
+                   ("check_ok", "check_v_off", "check_h_off",
+                    "mlsd_ok", "mlsd_v_off", "mlsd_h_off")}
+        for i in ids:
+            assert float(r.c_after.itemcget(i, "width")) == 1.0, (
+                "the check lines are 1 px at the displayed size")
+            assert r.c_after.itemcget(i, "fill") in allowed, (
+                "the check colour comes from the one table in lineoverlay.LINE")
     finally:
         app.destroy()
