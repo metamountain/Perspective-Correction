@@ -1135,7 +1135,42 @@ def _attach_tooltip(widget, text):
 # ==========================================================================
 # review window
 # ==========================================================================
-class ReviewPanel(tk.Frame):
+class _AfterOwner:
+    """Mixin: auto-pruning Tk ``after()`` scheduler and cancellation.
+
+    Both ``ReviewPanel`` and ``App`` need identical after-job tracking so
+    scheduled callbacks are cancelled on destroy instead of firing against
+    dead widgets.  Shared here as a mixin so the logic lives in exactly one
+    place.  The host class initialises ``self._after_jobs`` as a ``set``
+    before any ``_schedule_after`` call.
+    """
+
+    def _schedule_after(self, ms, fn):
+        """Schedule an after() callback, auto-pruning its ID once it fires."""
+        box = []
+
+        def _run():
+            if box:
+                self._after_jobs.discard(box[0])
+            if self.winfo_exists():
+                fn()
+
+        job = self.after(ms, _run)
+        box.append(job)
+        self._after_jobs.add(job)
+        return job
+
+    def _cancel_after_jobs(self):
+        """Cancel every tracked after() ID; safe to call repeatedly."""
+        for job in list(self._after_jobs):
+            try:
+                self.after_cancel(job)
+            except tk.TclError:
+                pass  # already fired or cancelled
+        self._after_jobs.clear()
+
+
+class ReviewPanel(tk.Frame, _AfterOwner):
     # The review UI, embedded in the batch window.  One frame for the whole
     # task: a second window split one photograph across two frames and stole
     # focus on every double-click.  Built once; `load` swaps the photograph
@@ -1217,30 +1252,6 @@ class ReviewPanel(tk.Frame):
         # Cancelled in destroy() to avoid "invalid command name" on teardown.
         self._after_jobs = set()
         self._show_hint()
-
-    def _schedule_after(self, ms, fn):
-        """Schedule an after() callback, auto-pruning its ID once it fires."""
-        box = []
-
-        def _run():
-            if box:
-                self._after_jobs.discard(box[0])
-            if self.winfo_exists():
-                fn()
-
-        job = self.after(ms, _run)
-        box.append(job)
-        self._after_jobs.add(job)
-        return job
-
-    def _cancel_after_jobs(self):
-        """Cancel every tracked after() ID; safe to call repeatedly."""
-        for job in list(self._after_jobs):
-            try:
-                self.after_cancel(job)
-            except tk.TclError:
-                pass  # already fired or cancelled
-        self._after_jobs.clear()
 
     def _show_hint(self):
         # The cross is shown from the first frame, not after the first load:
@@ -1555,7 +1566,7 @@ class ReviewPanel(tk.Frame):
         self._fill_q = queue.Queue()
         # A rebuild (new image loaded) kills the glass; it is raised again on
         # the next mark press rather than kept up while the mode is on.
-        if getattr(self, "v_mark", None) is not None and self.v_mark.get():
+        if self._tool_active("v_mark"):
             pass  # nothing to restore: the loupe now lives only during a drag
         self.c_before.bind("<Button-1>", self._on_click_before)
         # A fast double-click on the Before pane opens the load dialog and
@@ -2012,7 +2023,7 @@ class ReviewPanel(tk.Frame):
         """Put the facade strip away and say so, if one was up."""
         s = self.session
         had = s is not None and s.strip is not None
-        if getattr(self, "v_strip", None) is not None and self.v_strip.get():
+        if self._tool_active("v_strip"):
             self.v_strip.set(False)
         if s is not None and s.strip is not None:
             s.clear_strip()
@@ -2756,7 +2767,7 @@ class ReviewPanel(tk.Frame):
             self.v_corr_mode.set("auto")
             self._mode_frames["auto"].tkraise()
             gone.append("horizontal auto")
-        if getattr(self, "v_strip", None) is not None and self.v_strip.get():
+        if self._tool_active("v_strip"):
             self.v_strip.set(False)
             s.strip = None
             gone.append("facade strip")
@@ -2929,7 +2940,7 @@ class ReviewPanel(tk.Frame):
         if getattr(self, "_loupe", None) is not None:
             self._loupe_move(event)
         self._rect_rubber(event)
-        if getattr(self, "v_strip", None) is not None and self.v_strip.get() \
+        if self._tool_active("v_strip") \
                 and getattr(self, "_ph_b", None) is not None:
             oy = self._before_off[1]
             ih = self._ph_b.height()
@@ -3543,6 +3554,11 @@ class ReviewPanel(tk.Frame):
                                           fill=OVERLAY["crop"], outline=OVERLAY["crop_edge"],
                                           width=1, tags=tag)
 
+    def _tool_active(self, var_name):
+        """True if the named tool toggle variable exists and is active."""
+        v = getattr(self, var_name, None)
+        return v is not None and v.get()
+
     def _on_click_before(self, event):
         # Empty cross: the before slot doubles as the pick target.  Returning
         # "break" stops this handler chain -- with no session there is nothing
@@ -3563,27 +3579,22 @@ class ReviewPanel(tk.Frame):
                 and 0 <= now - self._pair_snap_t <= _DBL_WINDOW_MS):
             self._pair_snap = self._snap_before_clicks()
             self._pair_snap_t = now
-        # A press right on a visible ROI ruler grabs it for dragging rather than
-        # falling through to line-picking: the strip is set by hand, so its edges
-        # must be reachable wherever they land.  Checked first -- it is the most
-        # specific gesture (a click on a drawn line).
-        if getattr(self, "v_strip", None) is not None and self.v_strip.get():
+        # Priority dispatch: ruler grab (most specific), then each active tool
+        # in order, falling through to line toggle (no tool active) as default.
+        if self._tool_active("v_strip"):
             hit = self._strip_ruler_at(event.x, event.y)
             if hit is not None:
                 self._on_strip_drag_start(hit)
                 return
-        if getattr(self, "v_sam", None) is not None and self.v_sam.get():
-            self._on_sam_press(event)
-            return
-        if getattr(self, "v_stroke", None) is not None and self.v_stroke.get():
-            self._stroke_start(x, y)
-            return
-        if getattr(self, "v_mark", None) is not None and self.v_mark.get():
-            self._click_mark(x, y, event)
-            return
-        if getattr(self, "v_rect", None) is not None and self.v_rect.get():
-            self._click_rect(x, y, event)
-            return
+        for var, handler, args in (
+            ("v_sam", self._on_sam_press, (event,)),
+            ("v_stroke", self._stroke_start, (x, y)),
+            ("v_mark", self._click_mark, (x, y, event)),
+            ("v_rect", self._click_rect, (x, y, event)),
+        ):
+            if self._tool_active(var):
+                handler(*args)
+                return
         idx = self.session.pick_line(x, y, display_scale=self._before_scale)
         if idx is None:
             return
@@ -3903,7 +3914,7 @@ class ReviewPanel(tk.Frame):
     def _on_before_b1motion(self, event):
         if getattr(self, "_loupe", None) is not None:
             self._loupe_move(event)
-        if getattr(self, "v_sam", None) is not None and self.v_sam.get():
+        if self._tool_active("v_sam"):
             self._on_sam_drag(event)
             return
         if getattr(self, "_rect_drag", None) is not None:
@@ -3918,7 +3929,7 @@ class ReviewPanel(tk.Frame):
         if getattr(self, "_pending_mark", None) is not None:
             self._mark_rubber(event)
             return
-        if getattr(self, "v_stroke", None) is not None and self.v_stroke.get():
+        if self._tool_active("v_stroke"):
             self._on_stroke_drag(event)
 
     def _on_before_b1release(self, event):
@@ -3927,7 +3938,7 @@ class ReviewPanel(tk.Frame):
         # next right-drag erase (OpenCode review, 2026-10-24).
         if getattr(self, "_pen_anchor", None) is not None:
             return self._on_pen_size_end(event)
-        if getattr(self, "v_sam", None) is not None and self.v_sam.get():
+        if self._tool_active("v_sam"):
             self._on_sam_release(event)
             return
         if getattr(self, "_rect_drag", None) is not None:
@@ -3947,7 +3958,7 @@ class ReviewPanel(tk.Frame):
             self.session.refit()
             self._sync_from_session()
             return
-        if getattr(self, "v_stroke", None) is not None and self.v_stroke.get():
+        if self._tool_active("v_stroke"):
             self._on_stroke_release(event)
 
     # -- facade strip rulers ----------------------------------------------------
@@ -4189,13 +4200,13 @@ class ReviewPanel(tk.Frame):
 
     def _on_right_press(self, event):
         """Right-click: SAM prompt reset when SAM is on, erase stroke otherwise."""
-        if getattr(self, "v_sam", None) is not None and self.v_sam.get():
+        if self._tool_active("v_sam"):
             self._on_sam_right_click(event)
             return "break"
         # Rectangle: right-click clears the quad. A LEFT click no longer does,
         # because wiping four placed corners because somebody missed a handle is
         # a destructive answer to a miss; clearing is now a gesture of its own.
-        if getattr(self, "v_rect", None) is not None and self.v_rect.get():
+        if self._tool_active("v_rect"):
             if self.session is not None and self.session.planar_quad:
                 self.session.clear_planar()
                 self.c_before.delete("rect_rubber")
@@ -5547,7 +5558,7 @@ class ReviewPanel(tk.Frame):
 # ==========================================================================
 # batch window
 # ==========================================================================
-class App(_ROOT_CLASS):
+class App(_ROOT_CLASS, _AfterOwner):
     def __init__(self, initial=None, start_maximized=True, start_fullscreen=False,
                  in_taskbar=True):
         super().__init__()
@@ -5626,30 +5637,6 @@ class App(_ROOT_CLASS):
             self._schedule_after(50, self._enter_fullscreen)
         elif start_maximized:
             self._schedule_after(50, self._maximize)
-
-    def _schedule_after(self, ms, fn):
-        """Schedule an after() callback, auto-pruning its ID once it fires."""
-        box = []
-
-        def _run():
-            if box:
-                self._after_jobs.discard(box[0])
-            if self.winfo_exists():
-                fn()
-
-        job = self.after(ms, _run)
-        box.append(job)
-        self._after_jobs.add(job)
-        return job
-
-    def _cancel_after_jobs(self):
-        """Cancel every tracked after() ID; safe to call repeatedly."""
-        for job in list(self._after_jobs):
-            try:
-                self.after_cancel(job)
-            except tk.TclError:
-                pass  # already fired or cancelled
-        self._after_jobs.clear()
 
     def destroy(self):
         """Stop the queue timer before destroying the application window."""
