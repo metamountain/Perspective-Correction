@@ -362,6 +362,18 @@ def archive_check(root=None, api=API) -> dict:
                         f"are not touched.")}
 
 
+def _refuse_unsafe(rel, name):
+    """The one containment rule for a path an archive hands over.
+
+    It must stay inside the install folder it is joined to: an absolute path,
+    a drive or URL colon, or a ``..`` step would land outside it, and the
+    answer to all three is the same refusal of the whole archive rather than
+    of one file.
+    """
+    if rel.startswith("/") or ":" in rel or ".." in rel.split("/"):
+        raise ValueError(f"unsafe path in the archive: {name}")
+
+
 def _safe_members(tar):
     """``(relative path, member)`` for every regular file under the archive's
     one top folder, that folder stripped. A path that would land outside the
@@ -372,9 +384,7 @@ def _safe_members(tar):
         if len(parts) < 2 or not parts[1] or m.isdir():
             continue
         rel = parts[1].rstrip("/")
-        if (rel.startswith("/") or ":" in rel
-                or ".." in rel.split("/")):
-            raise ValueError(f"unsafe path in the archive: {m.name}")
+        _refuse_unsafe(rel, m.name)
         if m.isfile():
             out.append((rel, m))
         elif not (m.issym() or m.islnk()):

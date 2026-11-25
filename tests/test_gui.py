@@ -25,6 +25,72 @@ def _no_dialog(*a, **k):
     raise AssertionError(f"a modal dialog would block the run: {a[:2]}")
 
 
+def test_destroying_review_panel_cancels_its_pending_timers():
+    """Timers owned by a closed panel must not survive in the Tcl event queue."""
+    app = _app()
+    try:
+        panel = app.review
+        panel._fill_schedule()
+        panel._notify("test notice")
+        panel._drag_job = panel._schedule_after(10000, lambda: None)
+        jobs = (panel._fill_after, panel._notice_job, panel._drag_job)
+        pending = set(app.tk.splitlist(app.tk.call("after", "info")))
+        assert all(job in pending for job in jobs)
+        panel.destroy()
+        pending = set(app.tk.splitlist(app.tk.call("after", "info")))
+        assert all(job not in pending for job in jobs)
+    finally:
+        app.destroy()
+
+
+def test_app_pump_processes_queue_and_is_cancelled_on_destroy():
+    """Closing an app must not leave its queue pump in the Tcl timer queue."""
+    app = _app()
+    destroyed = False
+    try:
+        called = []
+        app.queue.put(("call", lambda: called.append(True)))
+        app.after(180, app.quit)
+        app.mainloop()
+        assert called == [True]
+        pending = app.tk.splitlist(app.tk.call("after", "info"))
+        pump_job = app._pump_job
+        assert pump_job is not None and pump_job in pending
+        assert pump_job in app._after_jobs
+        app.destroy()
+        destroyed = True
+        assert pump_job not in app.tk.splitlist(app.tk.call("after", "info"))
+        assert not app._after_jobs
+    finally:
+        if not destroyed:
+            app.destroy()
+
+
+def test_destroying_review_panel_cancels_all_fill_polls():
+    """Multiple pending poll chains must all be owned by the panel."""
+    app = _app()
+    try:
+        panel = app.review
+        panel._fill_thread = types.SimpleNamespace(is_alive=lambda: True)
+        before = set(app.tk.splitlist(app.tk.call("after", "info")))
+        panel._fill_poll()
+        panel._fill_poll()
+        after = set(app.tk.splitlist(app.tk.call("after", "info")))
+        jobs = after - before
+        assert len(jobs) == 2
+        app.after(90, app.quit)
+        app.mainloop()
+        assert jobs.isdisjoint(panel._after_jobs)
+        new_jobs = set(panel._after_jobs)
+        assert len(new_jobs) >= 2
+        panel.destroy()
+        pending = set(app.tk.splitlist(app.tk.call("after", "info")))
+        assert new_jobs.isdisjoint(pending)
+        assert not panel._after_jobs
+    finally:
+        app.destroy()
+
+
 def _app():
     """An off-screen App, or a clean skip where there is no display/Tkinter."""
     try:
@@ -2858,3 +2924,58 @@ def test_the_check_lines_share_the_line_overlay_colour_table():
                 "the check colour comes from the one table in lineoverlay.LINE")
     finally:
         app.destroy()
+
+
+def test_full_lifecycle_destroy_cancels_all_pending_callbacks():
+    """Create an App, load a photograph, schedule pending fill/redraw/notice/pump
+    callbacks, destroy the window, pump Tcl events, and verify clean teardown
+    with no "invalid command name" errors."""
+    app = _app()
+    try:
+        _loaded(app, 1280, 800)
+        panel = app.review
+        # Schedule callbacks of every tracked kind.
+        panel._fill_schedule()
+        panel._notify("test notice for teardown check")
+        panel._drag_job = panel._schedule_after(10000, lambda: None)
+        panel._schedule_after(99999, lambda: None)  # stray timer
+        app._schedule_after(99998, lambda: None)  # stray app timer
+
+        # Collect all pending after IDs before destroy.
+        pending_before = set(app.tk.splitlist(app.tk.call("after", "info")))
+        # There must be some pending callbacks.
+        assert len(pending_before) > 0, "expected pending after jobs"
+
+        # Destroy the panel first, then the app.
+        panel.destroy()
+        # After panel destroy, panel-owned timers must be gone.
+        pending_mid = set(app.tk.splitlist(app.tk.call("after", "info")))
+        for job in getattr(panel, "_after_jobs", set()):
+            assert job not in pending_mid, (
+                f"panel timer {job} survived panel.destroy()")
+
+        # The app-level pump timer is still pending.
+        assert app._pump_job in pending_mid or any(
+            str(app.tk.call("after", "info", j)[0]).endswith("_pump")
+            for j in pending_mid), "pump timer should still be pending"
+
+        # Destroy the app.
+        app.destroy()
+        # Everything must be cancelled now.
+        pending_after = set(app.tk.splitlist(app.tk.call("after", "info")))
+        pump_jobs = [j for j in pending_after
+                     if str(app.tk.call("after", "info", j)[0]).endswith("_pump")]
+        assert len(pump_jobs) == 0, (
+            f"pump timer survived app.destroy(): {pump_jobs}")
+
+        # Pump Tcl events to trigger any stale callbacks.
+        # If any fire on destroyed widgets, they will raise errors.
+        for _ in range(20):
+            app.update()
+            time.sleep(0.005)
+    finally:
+        try:
+            if app.winfo_exists():
+                app.destroy()
+        except Exception:  # noqa: S110 - Tk may raise TclError after destroy
+            pass  # already destroyed

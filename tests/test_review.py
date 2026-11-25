@@ -1386,3 +1386,104 @@ def test_the_size_note_names_the_size_the_save_writes():
     s.settings = s.settings.replace(correct_horizontal=True)
     s.refit()
     assert s.planned_size() == s.output_size()
+
+
+def test_snapshot_and_restore_round_trip_the_click_editable_state():
+    """The session side of the double-click undo: what `snapshot` captured
+    comes back after `restore`, and the capture itself does not move with the
+    session that is edited (or restored) afterwards.  A second restore after
+    further mutations proves the snapshot stays alias-free."""
+    s, _ = _session()
+    i = int(np.argmax(s.vert.length))
+    s.control_lines = np.array([[10.0, 20.0, 10.0, 90.0], [30.0, 20.0, 30.0, 90.0]])
+    s.control_hlines = np.array([[10.0, 50.0, 90.0, 50.0]])
+    s.enabled[i] = False
+    s.paint = np.zeros(s.gray.shape[:2], dtype=bool)
+    s.paint[10:20, 10:20] = True
+    s._paint_struck = np.zeros(len(s.vert), dtype=bool)
+    s._paint_struck[i] = True
+    s.planar_quad = [(1.0, 2.0), (3.0, 4.0)]
+    s.strip = (0.2, 0.8)
+    s._crop_edges["top"] = (True, 0.05)
+    s.crop_is_auto = False
+    s.settings = s.settings.replace(min_vertical_lines=3)
+
+    snap = s.snapshot()
+    exp_lines = snap["control_lines"].copy()
+    exp_hlines = snap["control_hlines"].copy()
+    exp_enabled = snap["enabled"].copy()
+    exp_paint = snap["paint"].copy()
+    exp_struck = snap["_paint_struck"].copy()
+    exp_quad = list(snap["planar_quad"])
+    exp_strip = snap["strip"]     # tuple in snapshot
+    exp_crop = {k: tuple(v) for k, v in snap["crop_edges"].items()}
+    exp_settings = snap["settings"]  # dict from asdict()
+
+    # Move everything the snapshot covers, then put it back.
+    s.control_lines = np.zeros((0, 4))
+    s.control_hlines = np.zeros((0, 4))
+    s.enabled[:] = True
+    s.paint = None
+    s._paint_struck = np.zeros(len(s.vert), dtype=bool)
+    s.planar_quad = []
+    s.strip = None
+    s._crop_edges = {k: (False, 0.0) for k in s._crop_edges}
+    s.crop_is_auto = True
+    s.settings = s.settings.replace(min_vertical_lines=2)
+
+    s.restore(snap)
+    assert np.array_equal(s.control_lines, exp_lines)
+    assert np.array_equal(s.control_hlines, exp_hlines)
+    assert np.array_equal(s.enabled, exp_enabled)
+    assert s.paint is not None and np.array_equal(s.paint, exp_paint)
+    assert np.array_equal(s._paint_struck, exp_struck)
+    assert s.planar_quad == exp_quad
+    assert s.strip == exp_strip
+    assert s._crop_edges == exp_crop
+    assert s.crop_is_auto is False
+    assert s.settings.min_vertical_lines == exp_settings["min_vertical_lines"]
+    # The capture itself is untouched by the edits and the restore.
+    assert np.array_equal(snap["control_lines"], exp_lines)
+    assert np.array_equal(snap["enabled"], exp_enabled)
+    assert np.array_equal(snap["paint"], exp_paint)
+    assert snap["planar_quad"] == exp_quad
+    assert snap["crop_edges"] == exp_crop
+
+    # Restoring must not make later edits mutate the reusable snapshot.
+    s.control_lines[0, 0] = -1
+    s.control_hlines[0, 0] = -1
+    s.enabled[i] = not s.enabled[i]
+    s.paint[10, 10] = False
+    s._paint_struck[i] = False
+    s.planar_quad.append((5.0, 6.0))
+    s._crop_edges["top"] = (False, 0.0)
+    # strip is a list after restore — mutate it too
+    if isinstance(s.strip, list):
+        s.strip[0] = -99
+    assert np.array_equal(snap["control_lines"], exp_lines)
+    assert np.array_equal(snap["control_hlines"], exp_hlines)
+    assert np.array_equal(snap["enabled"], exp_enabled)
+    assert np.array_equal(snap["paint"], exp_paint)
+    assert np.array_equal(snap["_paint_struck"], exp_struck)
+    assert snap["planar_quad"] == exp_quad
+    assert snap["crop_edges"] == exp_crop
+    assert snap["strip"] == exp_strip  # snapshot strip is list, must survive
+    assert snap["settings"] == exp_settings  # snapshot settings dict survives
+
+    # Second restore: the session must return to the expected state again.
+    s.restore(snap)
+    assert np.array_equal(s.control_lines, exp_lines)
+    assert np.array_equal(s.control_hlines, exp_hlines)
+    assert np.array_equal(s.enabled, exp_enabled)
+    assert s.paint is not None and np.array_equal(s.paint, exp_paint)
+    assert np.array_equal(s._paint_struck, exp_struck)
+    assert s.planar_quad == exp_quad
+    assert s.strip == exp_strip
+    assert s._crop_edges == exp_crop
+    assert s.crop_is_auto is False
+    assert s.settings.min_vertical_lines == exp_settings["min_vertical_lines"]
+    # Snapshot still intact after second restore + mutation.
+    assert np.array_equal(snap["control_lines"], exp_lines)
+    assert np.array_equal(snap["paint"], exp_paint)
+    assert snap["strip"] == exp_strip
+    assert snap["settings"] == exp_settings

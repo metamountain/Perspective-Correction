@@ -627,6 +627,19 @@ features ahead of everything else.*
 
 ### Done — rely on these
 
+- **[2026-11-25, Tk timer ownership]** The review panel cancels its pending
+  deferred-fill, fill-poll, notice and drag timers on destruction; the
+  application tracks and cancels its queue-pump timer. Focused tests verify
+  panel timer removal, concurrent poll chains, queue processing and pump
+  removal. Other callbacks still need separate lifecycle work; this is not a
+  claim of clean Tk teardown.
+
+- **[2026-11-25, snapshot ownership]** `ReviewSession.restore()` copies the
+  saved mutable arrays and containers before assigning them, so later session
+  edits cannot change a reusable click snapshot. The focused round-trip test
+  first reproduced the aliasing and now checks a second restore. The review
+  module passed 66 tests with no failures.
+
 **2026-10-24**
 
 - **[docs, user-directed] README leads with a simple vertical correction; Windows installs first** ("fix readme. windows installation before apple and linux!"; "too many ha examples... need a simple vertical correction instead"). Install section reordered Windows → macOS → Linux. The README carries two in-app review-window screenshots with the outline overlay on, converted from the user's PNGs to JPG: `docs/example_auto.jpg` (Auto mode, Barcelona Pavilion, roll +6.8°/pitch −6.9°) first, then `docs/example_ha.jpg` (Horizontal auto, Bauhaus Dessau) — the user wanted in-app screenshots with the outline, not before/after composites ("kein idiotische vorher nachge bild"; "erst auto dann HA"). Removed: `docs/screenshot.jpg`, `docs/synthetic-squares.jpg`, `docs/horizontal-auto.jpg`, and the abandoned before/after `docs/vertical-correction.jpg`.

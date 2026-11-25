@@ -666,7 +666,7 @@ def status(settings) -> tuple:
 
 
 def _fill_comfy(bgr: np.ndarray, hole: np.ndarray, settings) -> np.ndarray:
-    base = getattr(settings, "comfy_url", "http://127.0.0.1:8188").rstrip("/")
+    base = _comfy_base(settings)
     wf = load_workflow(workflow_path(settings)[0])
     # Chosen names first, then a guess for anything still absent.  Both happen
     # before the uploads, so nothing can rewrite the filename PC just posted.
@@ -827,19 +827,32 @@ def fill(bgr: np.ndarray, hole: np.ndarray, settings, on_step=None) -> tuple:
     return out, f"{mode} filled {share:.1%} in {time.time() - t0:.1f}s"
 
 
+def _lama_probe() -> tuple:
+    """``(available, error)``: the one import that decides whether LaMa runs.
+
+    The probe `available` and `describe` share, so the import lives in one
+    place and the two cannot drift apart about what "installed" means.
+    """
+    try:
+        import simple_lama_inpainting  # noqa: F401
+        return True, None
+    except Exception as exc:
+        return False, exc
+
+
+def _comfy_base(settings) -> str:
+    """The ComfyUI the settings point at, ready for URL joins."""
+    return getattr(settings, "comfy_url", DEFAULT_COMFY_URL).rstrip("/")
+
+
 def available(mode: str, settings=None) -> bool:
-    if mode in ("", "none"):
-        return True
-    if mode == "telea":
+    if mode in ("", "none", "telea"):
         return True
     if mode == "lama":
-        try:
-            import simple_lama_inpainting  # noqa: F401
-            return True
-        except Exception:
-            return False
+        ok, _exc = _lama_probe()
+        return ok
     if mode == "comfyui":
-        base = getattr(settings, "comfy_url", "http://127.0.0.1:8188").rstrip("/")
+        base = _comfy_base(settings)
         try:
             _http(base + "/system_stats", timeout=3.0)
             load_workflow(workflow_path(settings)[0])
@@ -856,12 +869,11 @@ def describe(mode: str, settings=None) -> str:
     if mode == "telea":
         return "telea: cv2.inpaint pixel propagation (no model, no download)"
     if mode == "lama":
-        try:
-            import simple_lama_inpainting  # noqa: F401
+        ok, exc = _lama_probe()
+        if ok:
             return "lama: simple-lama-inpainting importable (weights download on first use)"
-        except Exception as exc:
-            return f"lama: unavailable ({exc})"
-    base = getattr(settings, "comfy_url", "http://127.0.0.1:8188").rstrip("/")
+        return f"lama: unavailable ({exc})"
+    base = _comfy_base(settings)
     parts = []
     try:
         stats = json.loads(_http(base + "/system_stats", timeout=3.0).decode())

@@ -23,11 +23,13 @@ from __future__ import annotations
 
 import math
 import os
+from dataclasses import asdict
 from types import SimpleNamespace
 
 import cv2
 import numpy as np
 
+from . import config
 from . import geocal as GC
 from . import geometry as G
 from . import imageio as IO
@@ -426,6 +428,45 @@ class ReviewSession:
             self.manual_roll, self.manual_pitch, self.manual_yaw = m.roll, m.pitch, m.yaw
             self.manual_focal_35mm = M.focal_35mm_from_px(m.f, self.w, self.h) if m.f else 0.0
         return m
+
+    # -- restore points ----------------------------------------------------
+    def snapshot(self):
+        """The click-editable state, copied so later edits cannot move it.
+
+        A fast double-click on the Before pane is a load gesture, not two
+        edits, so the window takes one of these before the first press and
+        restores it when the second arrives.  Everything the session side of
+        that restore needs is captured here -- the GUI keeps only its own Tk
+        state -- and every array is copied rather than aliased, so a restore
+        that misses one field would leave exactly the edit the double was
+        supposed to take back.
+        """
+        return {
+            "control_lines": self.control_lines.copy(),
+            "control_hlines": self.control_hlines.copy(),
+            "enabled": self.enabled.copy(),
+            "paint": None if self.paint is None else self.paint.copy(),
+            "_paint_struck": self._paint_struck.copy(),
+            "planar_quad": list(self.planar_quad),
+            "strip": tuple(self.strip) if isinstance(self.strip, (list, tuple)) else self.strip,
+            "crop_edges": {k: tuple(v) for k, v in self._crop_edges.items()},
+            "crop_is_auto": getattr(self, "crop_is_auto", False),
+            "settings": asdict(self.settings),
+        }
+
+    def restore(self, snap):
+        """Put back the session state ``snapshot`` captured, and re-fit for it."""
+        self.control_lines = snap["control_lines"].copy()
+        self.control_hlines = snap["control_hlines"].copy()
+        self.enabled = snap["enabled"].copy()
+        self.paint = None if snap["paint"] is None else snap["paint"].copy()
+        self._paint_struck = snap["_paint_struck"].copy()
+        self.planar_quad = list(snap["planar_quad"])
+        self.strip = tuple(snap["strip"]) if isinstance(snap["strip"], (list, tuple)) else snap["strip"]
+        self._crop_edges = {k: tuple(v) for k, v in snap["crop_edges"].items()}
+        self.crop_is_auto = snap["crop_is_auto"]
+        self.settings = config.Settings(**snap["settings"])
+        self.refit()
 
     # -- manual controls -------------------------------------------------
     def set_manual(self, roll_deg=None, pitch_deg=None, yaw_deg=None,

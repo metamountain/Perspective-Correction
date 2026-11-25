@@ -1213,7 +1213,34 @@ class ReviewPanel(tk.Frame):
         self._guide_drag = None
         self._guide_new = None
         self._crop_drag_start = None
+        # Tracking set for all after() IDs scheduled by this panel.
+        # Cancelled in destroy() to avoid "invalid command name" on teardown.
+        self._after_jobs = set()
         self._show_hint()
+
+    def _schedule_after(self, ms, fn):
+        """Schedule an after() callback, auto-pruning its ID once it fires."""
+        box = []
+
+        def _run():
+            if box:
+                self._after_jobs.discard(box[0])
+            if self.winfo_exists():
+                fn()
+
+        job = self.after(ms, _run)
+        box.append(job)
+        self._after_jobs.add(job)
+        return job
+
+    def _cancel_after_jobs(self):
+        """Cancel every tracked after() ID; safe to call repeatedly."""
+        for job in list(self._after_jobs):
+            try:
+                self.after_cancel(job)
+            except tk.TclError:
+                pass  # already fired or cancelled
+        self._after_jobs.clear()
 
     def _show_hint(self):
         # The cross is shown from the first frame, not after the first load:
@@ -1281,7 +1308,7 @@ class ReviewPanel(tk.Frame):
         self._build()
         self._mode_frames[self.v_corr_mode.get()].tkraise()
         if was == "horizontal" and self.v_corr_mode.get() == "auto":
-            self.after(300, lambda: self._notify(
+            self._schedule_after(300, lambda: self._notify(
                 "new photo opens in Auto -- horizontal auto was on for the last one"))
         self.v_overwrite.set(bool(overwrite))
         self._refresh_file_names()
@@ -1303,20 +1330,22 @@ class ReviewPanel(tk.Frame):
             # deliberate choice, not an auto-applied one. We still point at the
             # divergence so the user can pick a facade if they want to.
             self._set_status("multiple main directions detected -- pick a facade with the Facade strip if you want to")
-        self.after(60, self._sync_from_session)
+        self._schedule_after(60, self._sync_from_session)
         # "Unchanged" is the state once opening has settled -- the automatic
         # crop and the widget sync above are the program's, not the user's.
         self._mark_clean()
-        self.after(120, self._mark_clean)
+        self._schedule_after(120, self._mark_clean)
         # Once per run, not per photograph: the first one is where it matters.
         if not getattr(self, "_lama_told", False):
             self._lama_told = True
-            self.after(400, self._fill_fallback_notice)
+            self._schedule_after(400, self._fill_fallback_notice)
 
     def _fill_fallback_notice(self, note=""):
         """lama chosen and not installed: say telea fills instead, and how to
         get lama (user, 2026-10-23: on the first Mac it fell back silently).
         ``note`` is a save's fill note, which names the fallback when it ran."""
+        if not self.winfo_exists():
+            return
         if note:
             if "unavailable" not in note:
                 return False
@@ -1345,6 +1374,7 @@ class ReviewPanel(tk.Frame):
         listener anyway -- but that net is for the unexpected, not for the
         normal path.
         """
+        self._cancel_after_jobs()
         self._unregister_comfy()
         super().destroy()
 
@@ -2390,6 +2420,8 @@ class ReviewPanel(tk.Frame):
 
     # -- state -----------------------------------------------------------
     def _sync_from_session(self):
+        if not self.winfo_exists():
+            return
         roll, pitch, f, _ = self.session.current_angles()
         yaw = self.session.current_yaw()
         from .model import focal_35mm_from_px
@@ -3589,29 +3621,18 @@ class ReviewPanel(tk.Frame):
     def _snap_before_clicks(self):
         """The click-editable state, before the next press of a potential pair.
 
-        Every left-click path on the Before pane touches one of these: the
-        control lines (mark mode), the candidate `enabled` flags (line
-        toggle), the paint mask (brush), the planar quad (rectangle), the
-        facade strip and the crop (both cleared by a quad start), the settings
-        and the two switches `_planar_takes_over` may turn off.  A restore
-        that misses one leaves exactly the edit the double was supposed to
-        take back."""
-        s = self.session
+        The session side is the session's: `snapshot()` owns the control lines,
+        the candidate `enabled` flags, the paint mask, the planar quad, the
+        facade strip and the crop (both cleared by a quad start), and the
+        settings.  What the panel adds here is Tk state only -- the switches
+        `_planar_takes_over` may turn and the active mode frame -- and a
+        restore that misses one of those leaves the window disagreeing with
+        the session it just put back."""
         v_corr = getattr(self, "v_correct_horizontal", None)
         v_strip = getattr(self, "v_strip", None)
         v_mode = getattr(self, "v_corr_mode", None)
         return {
-            "control_lines": s.control_lines.copy(),
-            "control_hlines": s.control_hlines.copy(),
-            "enabled": s.enabled.copy(),
-            "paint": None if s.paint is None else s.paint.copy(),
-            "_paint_struck": getattr(
-                s, "_paint_struck", np.zeros(0, dtype=bool)).copy(),
-            "planar_quad": list(s.planar_quad),
-            "strip": s.strip,
-            "crop_edges": dict(s._crop_edges),
-            "crop_is_auto": s.crop_is_auto,
-            "settings": s.settings,
+            "session": self.session.snapshot(),
             "corr_h": v_corr.get() if v_corr is not None else None,
             "strip_on": v_strip.get() if v_strip is not None else None,
             "mode": v_mode.get() if v_mode is not None else None,
@@ -3622,17 +3643,7 @@ class ReviewPanel(tk.Frame):
         gesture the two presses may have left half-open (a pending mark point,
         an in-flight stroke, a grabbed corner or ruler)."""
         s = self.session
-        s.control_lines = snap["control_lines"]
-        s.control_hlines = snap["control_hlines"]
-        s.enabled = snap["enabled"]
-        s.paint = snap["paint"]
-        s._paint_struck = snap["_paint_struck"]
-        s.planar_quad = snap["planar_quad"]
-        s.strip = snap["strip"]
-        s._crop_edges = snap["crop_edges"]
-        s.crop_is_auto = snap["crop_is_auto"]
-        s.settings = snap["settings"]
-        s.refit()
+        s.restore(snap["session"])
         if snap["corr_h"] is not None and getattr(self, "v_correct_horizontal", None) is not None:
             self.v_correct_horizontal.set(snap["corr_h"])
         if snap["strip_on"] is not None and getattr(self, "v_strip", None) is not None:
@@ -4306,13 +4317,15 @@ class ReviewPanel(tk.Frame):
                                    "without fill; the full preview follows on release")
 
         def tick():
+            if not self.winfo_exists():
+                return
             self._drag_job = None
             if self.session is None:
                 return
             if getattr(self, "_mark_drag", None) is not None:
                 self.session.refit()
             self._redraw()
-        self._drag_job = self.after(layout.DRAG_PREVIEW_MS, tick)
+        self._drag_job = self._schedule_after(layout.DRAG_PREVIEW_MS, tick)
 
     def _drag_preview_end(self):
         self._drag_said = False
@@ -4335,9 +4348,11 @@ class ReviewPanel(tk.Frame):
                 self.after_cancel(self._fill_after)
             except tk.TclError:
                 pass
-        self._fill_after = self.after(layout.DEFERRED_FILL_MS, self._fill_start)
+        self._fill_after = self._schedule_after(layout.DEFERRED_FILL_MS, self._fill_start)
 
     def _fill_start(self):
+        if not self.winfo_exists():
+            return
         self._fill_after = None
         s = self.session
         job = getattr(s, "deferred_fill", None) if s is not None else None
@@ -4345,7 +4360,7 @@ class ReviewPanel(tk.Frame):
             return
         if self._fill_thread is not None and self._fill_thread.is_alive():
             # One model, one job: wait for the running one, then do the latest.
-            self._fill_after = self.after(150, self._fill_start)
+            self._fill_after = self._schedule_after(150, self._fill_start)
             return
         s.deferred_fill = None
         raw, hole, settings, finish = job
@@ -4362,14 +4377,16 @@ class ReviewPanel(tk.Frame):
         self._fill_thread = threading.Thread(target=work, daemon=True)
         self._fill_thread.start()
         self._set_status_extra(f"preview: quick fill now -- {settings.fill} follows")
-        self.after(60, self._fill_poll)
+        self._schedule_after(60, self._fill_poll)
 
     def _fill_poll(self):
+        if not self.winfo_exists():
+            return
         try:
             gen, img, err = self._fill_q.get_nowait()
         except queue.Empty:
             if self._fill_thread is not None and self._fill_thread.is_alive():
-                self.after(60, self._fill_poll)
+                self._schedule_after(60, self._fill_poll)
             return
         if err is not None:
             logging.getLogger("pc.gui").warning("deferred fill failed: %s", err)
@@ -4421,7 +4438,7 @@ class ReviewPanel(tk.Frame):
         if self._busy:
             return
         self._busy = True
-        self.after(60, self._redraw)
+        self._schedule_after(60, self._redraw)
 
     def _paint_ground(self, canvas):
         """Lay the theme's gradient under everything else on *canvas*.
@@ -4468,6 +4485,8 @@ class ReviewPanel(tk.Frame):
         self._set_status("")
 
     def _redraw(self):
+        if not self.winfo_exists():
+            return
         self._busy = False
         if self.session is None:
             self._draw_empty()
@@ -4500,7 +4519,7 @@ class ReviewPanel(tk.Frame):
                 # picture back, because a successful redraw resets the count.
                 if self._redraw_tries < 6:
                     self._redraw_tries += 1
-                    self.after(120, self._redraw)
+                    self._schedule_after(120, self._redraw)
                 return
             self._redraw_tries = 0
             # Fit-once-then-lock (see _img_box in __init__): render the picture
@@ -5235,7 +5254,7 @@ class ReviewPanel(tk.Frame):
             if app is not None:
                 app.queue.put(("call", fn))
             else:
-                self.after(0, fn)
+                self._schedule_after(0, fn)
 
         def _run():
             try:
@@ -5375,10 +5394,12 @@ class ReviewPanel(tk.Frame):
                 self.after_cancel(job)
             except Exception:
                 pass
-        self._notice_job = self.after(layout.NOTICE_MS, self._clear_notice)
+        self._notice_job = self._schedule_after(layout.NOTICE_MS, self._clear_notice)
         self._draw_status_overlay()
 
     def _clear_notice(self):
+        if not self.winfo_exists():
+            return
         self._notice = ""
         self._notice_job = None
         self._draw_status_overlay()
@@ -5460,6 +5481,8 @@ class ReviewPanel(tk.Frame):
         return s is not None and s.state_key() != getattr(self, "_clean_key", None)
 
     def _mark_clean(self):
+        if not self.winfo_exists():
+            return
         if self.session is not None:
             self._clean_key = self.session.state_key()
 
@@ -5528,6 +5551,8 @@ class App(_ROOT_CLASS):
     def __init__(self, initial=None, start_maximized=True, start_fullscreen=False,
                  in_taskbar=True):
         super().__init__()
+        # Tracking set for all after() IDs — must be before first _schedule_after call
+        self._after_jobs = set()
         if not in_taskbar:
             # Off-screen windows of the tests and tools: a tool window has no
             # taskbar button on Windows (user, 2026-10-21). Elsewhere a no-op.
@@ -5554,7 +5579,7 @@ class App(_ROOT_CLASS):
         self._last_applied_theme = "Minimal Black"
         # Deferred: the caption is only honoured once the window is mapped, and
         # that happens in mainloop -- a direct call here would be reset on show.
-        self.after(0, lambda: _dark_titlebar(self))
+        self._schedule_after(0, lambda: _dark_titlebar(self))
         self._icon = _set_window_icon(self)
         self.queue = queue.Queue()
         self.worker = None
@@ -5595,11 +5620,42 @@ class App(_ROOT_CLASS):
         self.bind("<m>", lambda _e: self._tool_key("v_mark", "_on_mark_toggle"))
         self.bind("<b>", lambda _e: self._tool_key("v_stroke", "_on_stroke_toggle"))
         self.bind("<s>", lambda _e: self._tool_key("v_sam", "_on_sam_toggle"))
-        self.after(120, self._pump)
+        self._pump_closing = False
+        self._pump_job = self._schedule_after(120, self._pump)
         if start_fullscreen:
-            self.after(50, self._enter_fullscreen)
+            self._schedule_after(50, self._enter_fullscreen)
         elif start_maximized:
-            self.after(50, self._maximize)
+            self._schedule_after(50, self._maximize)
+
+    def _schedule_after(self, ms, fn):
+        """Schedule an after() callback, auto-pruning its ID once it fires."""
+        box = []
+
+        def _run():
+            if box:
+                self._after_jobs.discard(box[0])
+            if self.winfo_exists():
+                fn()
+
+        job = self.after(ms, _run)
+        box.append(job)
+        self._after_jobs.add(job)
+        return job
+
+    def _cancel_after_jobs(self):
+        """Cancel every tracked after() ID; safe to call repeatedly."""
+        for job in list(self._after_jobs):
+            try:
+                self.after_cancel(job)
+            except tk.TclError:
+                pass  # already fired or cancelled
+        self._after_jobs.clear()
+
+    def destroy(self):
+        """Stop the queue timer before destroying the application window."""
+        self._pump_closing = True
+        self._cancel_after_jobs()
+        super().destroy()
 
     def _maximize(self):
         try:
@@ -5647,8 +5703,8 @@ class App(_ROOT_CLASS):
             self._maximize()
             # Windows re-creates the caption after the state change, so the
             # dark title bar does not stick on the first pass.
-            self.after(100, lambda: _dark_titlebar(self))
-            self.after(400, lambda: _dark_titlebar(self))
+            self._schedule_after(100, lambda: _dark_titlebar(self))
+            self._schedule_after(400, lambda: _dark_titlebar(self))
             self._notify("windowed -- F11 for fullscreen")
 
     def _esc(self, _e):
@@ -6072,7 +6128,7 @@ class App(_ROOT_CLASS):
                     ok, text = SU.apply()
                 except Exception as exc:               # never lose the button
                     ok, text = False, str(exc)
-                self.after(0, lambda: pulled(ok, text))
+                self._schedule_after(0, lambda: pulled(ok, text))
 
             threading.Thread(target=pull, daemon=True).start()
 
@@ -6081,7 +6137,7 @@ class App(_ROOT_CLASS):
                 info = SU.check()
             except Exception as exc:
                 info = {"can_update": False, "message": str(exc)}
-            self.after(0, lambda: found(info))
+            self._schedule_after(0, lambda: found(info))
 
         threading.Thread(target=look, daemon=True).start()
 
@@ -6239,12 +6295,12 @@ class App(_ROOT_CLASS):
         def work():
             try:
                 DL.download_weights(
-                    lambda d, t: self.after(0, lambda d=d, t=t: item.configure(
+                    lambda d, t: self._schedule_after(0, lambda d=d, t=t: item.configure(
                         text=f"downloading… {d >> 20} MB"
                              + (f" / {t >> 20} MB" if t else ""))))
-                self.after(0, lambda: finish("DeepLSD weights ready in models/", False))
+                self._schedule_after(0, lambda: finish("DeepLSD weights ready in models/", False))
             except Exception as exc:
-                self.after(0, lambda msg=str(exc): finish(msg, True))
+                self._schedule_after(0, lambda msg=str(exc): finish(msg, True))
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -6794,6 +6850,8 @@ class App(_ROOT_CLASS):
         self._open_next_review()
 
     def _open_next_review(self):
+        if not self.winfo_exists():
+            return
         queue_left = getattr(self, "_review_queue", [])
         if not queue_left:
             if getattr(self, "_review_total", 0) > 1:
@@ -6810,7 +6868,7 @@ class App(_ROOT_CLASS):
                          # Deferred: `on_closed` fires while the panel is being
                          # rebuilt, and loading inside that rebuild is asking for
                          # a half-dead parent.
-                         on_closed=lambda: self.after(50, self._open_next_review),
+                         on_closed=lambda: self._schedule_after(50, self._open_next_review),
                          position=f"[{done}/{self._review_total}]"
                                   if self._review_total > 1 else "")
 
@@ -6979,8 +7037,11 @@ class App(_ROOT_CLASS):
         self.stop_flag.set()
 
     def _pump(self):
+        if not self.winfo_exists():
+            return
+        self._pump_job = None
         try:
-            while True:
+            while not self._pump_closing:
                 kind, payload = self.queue.get_nowait()
                 if kind == "row":
                     i, status, src, why = payload
@@ -6996,7 +7057,8 @@ class App(_ROOT_CLASS):
                     payload()
         except queue.Empty:
             pass
-        self.after(120, self._pump)
+        if not self._pump_closing:
+            self._pump_job = self._schedule_after(120, self._pump)
 
     def _batch_done(self, how):
         self.btn_batch.configure(text="batch")
