@@ -2027,8 +2027,9 @@ def test_the_icons_come_from_the_shipped_fonts_and_survive_without_them():
         assert img is not None and img.getbbox() is not None, f"{cp} not in the shipped font"
     dino = G._icon_pil("1F996", g, G.INK["dim"], emoji=True, mono=True)
     assert dino is not None and dino.getbbox() is not None, "no dinosaur in the shipped emoji font"
-    real = G.ICON_FONT
-    G.ICON_FONT = os.path.join(G.FONT_DIR, "missing.ttf")
+    from pc import ui_theme as UT
+    real = UT.ICON_FONT
+    UT.ICON_FONT = os.path.join(UT.FONT_DIR, "missing.ttf")
     try:
         app = _app()
         try:
@@ -2040,7 +2041,7 @@ def test_the_icons_come_from_the_shipped_fonts_and_survive_without_them():
         finally:
             app.destroy()
     finally:
-        G.ICON_FONT = real
+        UT.ICON_FONT = real
 
 
 def test_the_shipped_text_fonts_are_what_the_window_uses():
@@ -2164,8 +2165,9 @@ def test_no_colour_is_typed_into_a_widget_below_the_palette_tables():
     drawn ON a photograph (which deliberately do NOT follow the theme, because
     they are read against the picture and not against the palette),
     `MASK_SWATCHES`, `ICON_WHITE`, `GUIDE_GREY`. All of those live at the top
-    of the module. So the rule becomes checkable: below them, a colour must be
-    referred to by name.
+    of `ui_theme.py`. So the rule becomes checkable: below them, a colour must
+    be referred to by name -- and in `gui.py`, which carries no palette
+    tables at all, a colour literal anywhere is an offender.
 
     Parsed rather than grepped, so that a hex written inside a docstring --
     such as the one in `on_accent` explaining the literal it replaced -- is
@@ -2175,27 +2177,31 @@ def test_no_colour_is_typed_into_a_widget_below_the_palette_tables():
     import os
     import re
 
-    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                        "src", "pc", "gui.py")
-    with open(path, encoding="utf-8") as fh:
-        src = fh.read()
-    tree = ast.parse(src, filename="gui.py")
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
     # The tables end where the first function after them begins.
+    ui_theme = os.path.join(root, "src", "pc", "ui_theme.py")
+    with open(ui_theme, encoding="utf-8") as fh:
+        tree = ast.parse(fh.read(), filename="ui_theme.py")
     boundary = None
     for node in tree.body:
         if isinstance(node, ast.FunctionDef) and node.name == "_relative_luminance":
             boundary = node.lineno
             break
     assert boundary, ("cannot find `_relative_luminance`, which marks the end of "
-                      "the colour tables -- if it was renamed, update this test")
+                      "the colour tables in ui_theme.py -- if it was renamed, "
+                      "update this test")
 
     hexish = re.compile(r"^#[0-9a-fA-F]{3,8}$")
     offenders = []
-    for node in ast.walk(tree):
-        if (isinstance(node, ast.Constant) and isinstance(node.value, str)
-                and hexish.match(node.value) and node.lineno > boundary):
-            offenders.append(f"gui.py:{node.lineno}: {node.value!r}")
+    for path, cut in ((ui_theme, boundary),
+                      (os.path.join(root, "src", "pc", "gui.py"), 0)):
+        with open(path, encoding="utf-8") as fh:
+            tree = ast.parse(fh.read(), filename=os.path.basename(path))
+        for node in ast.walk(tree):
+            if (isinstance(node, ast.Constant) and isinstance(node.value, str)
+                    and hexish.match(node.value) and node.lineno > cut):
+                offenders.append(f"{os.path.basename(path)}:{node.lineno}: {node.value!r}")
     assert not offenders, (
         "a colour is typed in below the palette tables, so it cannot be "
         "retinted and no theme switch will reach it. Name it in INK, OVERLAY "
@@ -2758,15 +2764,16 @@ def test_the_logo_sits_large_before_the_wordmark_in_its_true_proportions():
     for size in (26, 64, 256):
         assert abs(aspect(size) - 839 / 727) < 0.08, (size, aspect(size))
     # a replacement file that is not square is fitted, not stretched
-    real = G.LOGO_FILE
+    from pc import ui_theme as UT
+    real = UT.LOGO_FILE
     with tempfile.TemporaryDirectory() as d:
         wide = Image.new("RGBA", (300, 100), (0, 0, 0, 255))
-        G.LOGO_FILE = os.path.join(d, "wide.png")
-        wide.save(G.LOGO_FILE)
+        UT.LOGO_FILE = os.path.join(d, "wide.png")
+        wide.save(UT.LOGO_FILE)
         try:
             assert abs(aspect(64) - 3.0) < 0.1, aspect(64)
         finally:
-            G.LOGO_FILE = real
+            UT.LOGO_FILE = real
     app = _app()
     try:
         _settle(app, 5)
