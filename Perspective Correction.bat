@@ -11,4 +11,8 @@ rem already handled: the application writes failures to pc_errors.log, which is
 rem where to look when it does not come up. Do not "fix" this by going back to
 rem python.exe -- check that file instead.
 cd /d "%~dp0"
-start "" pythonw perspective_correction.py --gui
+if exist ".venv\Scripts\pythonw.exe" (
+    start "" ".venv\Scripts\pythonw.exe" perspective_correction.py --gui
+) else (
+    start "" pythonw perspective_correction.py --gui
+)

@@ -169,7 +169,9 @@ def main(argv=None):
                     help="install every optional package: --mlsd plus --lama")
     ap.add_argument("--venv", default=os.path.join(ROOT, ".venv") if MAC else None,
                     help="install into this venv (default: .venv on macOS, "
-                         "the running Python on Windows)")
+                         "prompt or running Python on Windows)")
+    ap.add_argument("--system", action="store_true",
+                    help="install into the running system Python without prompting")
     a = ap.parse_args(argv)
     a.mlsd = a.mlsd or a.full
     a.lama = a.lama or a.full
@@ -189,6 +191,17 @@ def main(argv=None):
             say("   " + line)
         say("   Then run this installer again.")
         return 1
+
+    if WIN and a.venv is None and not a.system and sys.stdin.isatty():
+        say("\nInstall target:")
+        say("  [1] System Python (smaller -- reuses already-installed packages)")
+        say("  [2] Local .venv   (isolated inside this folder)")
+        try:
+            choice = input("Choice [1]: ").strip().lower()
+        except EOFError:
+            choice = ""
+        if choice in ("2", "v", "venv"):
+            a.venv = os.path.join(ROOT, ".venv")
 
     if a.venv:
         py = venv_python(a.venv)
