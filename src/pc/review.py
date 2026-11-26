@@ -167,7 +167,7 @@ class ReviewSession:
         # in the GUI, in frame fractions; the session only ever sees the result.
         self.sam_mask = None
         # The box the user dragged for SAM (full-resolution px), which is also
-        # the crop box (user, 2026-10-24: "SAM-Box sollte Crop-Box sein").
+        # the crop box.
         self.sam_box = None
         # One switch over the whole union (user, 2026-09-15): whatever the
         # layers ignore, keep, and keep what they ignore.  It belongs here and
@@ -385,7 +385,6 @@ class ReviewSession:
         # discards the more reliable of the two. The same reasoning `would_skip`
         # already applies to the confidence gate -- refusing evidence for being
         # scarce is right for a detector and wrong for a person.
-        # (2026-09-20, user: "maske und marker sollten sich vertragen".)
         # Positions in self.vert of the lines the fit sees, so its inliers can
         # be mapped back.  The mask used to drop lines without this, the
         # lengths no longer matched, and with any mask on the overlay showed
@@ -641,8 +640,7 @@ class ReviewSession:
         if soft:
             rect = W.centred_free_rect(region, W.poly_centroid(region), score=src_area)
         else:
-            # Auto (no yaw) is centred too ("bei Auto soll das auch so sein",
-            # 2026-10-24), in the photograph's own aspect.
+            # Auto (no yaw) is centred too, in the photograph's own aspect.
             rect = (W.max_free_rect(region, score=src_area) if yawed
                     else W.inscribed_rect(region, self.w / float(self.h),
                                           W.poly_centroid(region)))
@@ -729,11 +727,11 @@ class ReviewSession:
         """What the SAM selection / automatic mask keeps (analysis pixels, True =
         kept), or None when neither is in force or it keeps nearly everything.
 
-        The painted mask counts only from PAINT_FRAMES_SHARE of the frame on
-        (user, 2026-10-24: "Maskierung manuell muss anders bewertet werden, da
-        oft nur punktweise, um Annotatoren zu killen" -- "grundsaetzlich wird
-        aber eher ausserhalb POI maskiert"): a few dabs that switch off lines
-        say nothing about where the subject is, a broad wash does. The strip
+        The painted mask counts only from PAINT_FRAMES_SHARE of the frame on:
+        a painted mask is not an answer about the subject the way an automatic
+        one is -- it is often just point dabs that switch off lines, placed
+        outside the subject. A few dabs that switch off lines say nothing
+        about where the subject is, a broad wash does. The strip
         has its own band."""
         if not getattr(self, "mask_enabled", True):
             return None
@@ -1553,10 +1551,10 @@ class ReviewSession:
     def directions_diverge(self, ratio=0.5, min_support=0.5):
         """Two (or more) comparably-strong, DIFFERENT horizontal directions.
 
-        User-directed (2026-09-26): a corner view mixes two facades' worth of
+        A corner view mixes two facades' worth of
         horizontal evidence into one pitch/yaw estimate, which is exactly why
         the old corner-view pitch damping existed and was then removed --
-        "keine Daempfung waere am besten" (no damping is the cleaner answer).
+        no damping is the cleaner answer.
         The replacement is manual, not automatic: point the strip at one
         facade instead of guessing how much to trust the mixed evidence. This
         only detects the case that needs pointing at; it never places the
@@ -2172,9 +2170,9 @@ class ReviewSession:
         A strongly foreshortened facade sends its horizontals to a vanishing
         point near or inside the frame; warping the WHOLE photograph then folds
         the part beyond that line over, and `warp.plan` used to give up -- the
-        preview fell back to the uncorrected photo and Save refused. User,
-        2026-10-23: "Warps muessen kontrolliert, nicht verworfen werden" -- and
-        squares must stay squares there too ("das ist der haerteste Contest").
+        preview fell back to the uncorrected photo and Save refused. The
+        answer is that a warp is kept under control, never discarded -- and
+        squares must stay squares there too.
 
         So the warp is kept and only its CANVAS changes: the facade is framed
         by four lines, two through each vanishing point, at the facade strip's
@@ -2243,10 +2241,10 @@ class ReviewSession:
                     else:
                         x1 = min(x1, vx - gap)
         # Crop in time: a wall drawn right up to its vanishing point needs an
-        # unbounded magnification there (user: "rechtzeitig croppen, darf nicht
-        # abschmieren"). The near end stays at least a third of the far end's
-        # distance from the vanishing point, so no part of the facade is
-        # foreshortened more than FOLD_MAX_FORESHORTEN times the rest.
+        # unbounded magnification there. The near end stays at least a third
+        # of the far end's distance from the vanishing point, so no part of
+        # the facade is foreshortened more than FOLD_MAX_FORESHORTEN times
+        # the rest.
         if abs(vh[2]) > 1e-12:
             vx = vh[0] / vh[2]
             if vx <= x0:
@@ -2354,8 +2352,7 @@ class ReviewSession:
             return False
         _H, cw, ch = t
         x0, y0, x1, y1 = self._planar_box
-        # A mask makes the crop box: what it keeps + STRIP_CROP_MARGIN (user,
-        # 2026-10-24: "Maskierung soll Crop-Box generieren").
+        # A mask makes the crop box: what it keeps + STRIP_CROP_MARGIN.
         kept = self._kept_box(_H, cw, ch) if self.strip is None else None
         if kept is not None:
             x0, y0, x1, y1 = kept[0], kept[1], kept[2] - 1, kept[3] - 1
@@ -2534,9 +2531,8 @@ class ReviewSession:
             os.makedirs(os.path.dirname(os.path.abspath(dst_path)) or ".", exist_ok=True)
             IO.save(dst_path, out, self.src, self.settings)
             return dst_path
-        # keep_size=True here, only here (2026-09-26, user-directed: "lange
-        # Kante gleich viel Pixel, nicht doppelt so viele" -- at False a large
-        # yaw grew the long edge well past the source). Tried as a global
+        # keep_size=True here, only here (at False a large yaw grew the long
+        # edge well past the source). Tried as a global
         # default first and reverted: it broke four unrelated tests
         # (strip-cropping, the keep_pixels dial, fill sizing) that build a
         # bare Settings() and never meant to opt into this. Scoped to just

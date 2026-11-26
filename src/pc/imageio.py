@@ -93,7 +93,7 @@ def _to_srgb(im, icc):
     sRGB. A photograph tagged with another profile was shown wrong -- the
     user's ``wajavill.jpg`` carries ``sRGB-elle-V2-g10`` (sRGB primaries,
     gamma 1.0, i.e. linear light), whose raw values are far darker than what a
-    colour-managed viewer shows ("wird zu dunkel dargestellt", 2026-10-24).
+    colour-managed viewer shows.
     Converted here once, every consumer (preview, detection, save) sees what the
     photographer saw, and the save then embeds sRGB instead of the old profile,
     which no longer describes the pixels. A profile that cannot be read leaves

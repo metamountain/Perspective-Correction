@@ -107,9 +107,8 @@ def analyse(bgr, settings, exif_focal_px=None, image_path="", strip=None):
     if m.f:
         m.f = m.f / scale                       # back to full resolution pixels
     m.detect_info = info
-    # Corner-view pitch damping was tried here and removed 2026-09-26
-    # (user-directed: "keine Daempfung waere am besten" -- no damping is the
-    # cleaner answer, even where it costs accuracy on a corner view). It had
+    # Corner-view pitch damping was tried here and removed: no damping is the
+    # cleaner answer, even where it costs accuracy on a corner view. It had
     # also only ever lived in this function, never in review.py's `_detect`,
     # which builds a Model via `M.estimate()` directly -- so every interactive
     # session ran undamped while every CLI batch run ran damped, and the two

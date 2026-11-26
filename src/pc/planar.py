@@ -141,8 +141,8 @@ def target_size(quad, center=None, focal=None, long_edge=None, foreshorten=False
     times ``long_edge`` -- ``focal`` (the estimator's) stands in. With neither,
     the apparent aspect is kept as before.
 
-    **No compression by default** (user, 2026-10-23: "es muessen nach
-    Entzerrung wieder Quadrate rauskommen"). Measured on rendered Rubik cubes
+    **No compression by default**: after the rectification, squares must come
+    out as squares again. Measured on rendered Rubik cubes
     (4x4 squares a face, yaw 25-55 deg): the true aspect gives cells of 1.000
     with the true focal and 0.93-1.06 with the estimator's (no EXIF); the
     horizontal-auto compression, the default for a few hours that day, made
@@ -228,9 +228,9 @@ def order_quad(quad):
 
 CROP_MARGIN = 0.20
 """Picture kept around the rectified quad, as a share of its width/height per
-side (user, 2026-10-23: "rechteck modus crop +20%. lieber manuell wenn nötig").
-The quad alone cut everything outside the four clicks; with the margin the
-rest is there to crop by hand. The same 20 % as ``warp.STRIP_CROP_MARGIN``."""
+side. The quad alone cut everything outside the four clicks; with the margin
+the rest is there to crop by hand. The same 20 % as
+``warp.STRIP_CROP_MARGIN``."""
 
 
 def transform_for(quad, margin=0.0, center=None, focal=None, long_edge=None):
@@ -263,10 +263,10 @@ KEEP_MARGIN = 0.50
 """How much picture the rectified canvas keeps around the quad, as a fraction
 of the quad's own width and height on each side -- never more than the
 photograph itself reaches. The default crop stays at :data:`CROP_MARGIN`; the
-rest is there so a hand crop can be dragged OUT (user, 2026-10-23: "maxime dass
-keine pixel verloren gehen, oder nur moderat"). Measured on the Muenzstrasse
-row: quad + 20 % kept 14-33 % of the photograph, the whole photograph would
-have needed 7-21x the canvas, nearly all of it fill."""
+rest is there so a hand crop can be dragged OUT without losing pixels.
+Measured on the Muenzstrasse row: quad + 20 % kept 14-33 % of the photograph,
+the whole photograph would have needed 7-21x the canvas, nearly all of it
+fill."""
 
 
 def canvas_for(quad, src_w, src_h, center=None, focal=None, long_edge=None,

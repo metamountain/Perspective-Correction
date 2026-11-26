@@ -60,8 +60,7 @@ def limit(roll: float, pitch: float, settings, yaw: float = 0.0,
 YAW_FORESHORTEN = 0.5
 """Exponent of the horizontal compression after a yaw correction.
 
-User-directed 2026-09-26, asked for many times: "Verkürzung auf 70% bei
-altbau", AFTER the full HA correction, not instead of it. A facade seen at
+Applied after the full HA correction, not instead of it: a facade seen at
 yaw θ is foreshortened to cos θ of its width; the rotation undoes that and
 stretches it by 1/cos θ -- geometrically true, visually far too wide on a
 steep corner view. The result is compressed in x by ``cos(θ) ** k``:
@@ -70,7 +69,7 @@ steep corner view. The result is compressed in x by ``cos(θ) ** k``:
     k = 0.5  halfway, on a log scale, between the photograph and frontal
     k = 1    the photograph's own width at the centre
 
-At k = 0.5 altbau.jpeg (θ = 60°) gets sqrt(0.5) = 0.707 -- the 70% asked for
+At k = 0.5 altbau.jpeg (θ = 60°) gets sqrt(0.5) = 0.707 -- the 70% target
 -- while 30° keeps 93%, 10° keeps 99.6% and a straight photograph is
 untouched. A pure x-scale keeps every horizontal horizontal and every
 vertical vertical, so straightness is exactly what the rotation delivered.
@@ -139,19 +138,18 @@ INTEREST_QUANTILES = (0.05, 0.95)
 INTEREST_MARGIN = 0.10
 INTEREST_STRAIGHT_DEG = 3.0
 INTEREST_ROOF_LEN = 0.06
-"""The centre of interest is where the detected lines are (user, 2026-10-23:
-"center of interest? Dichte LSD?" -- "Vorteil: Himmel fliegt raus"). Sky and
-plain ground carry no lines, so the length-weighted 5-95 % extent of the
+"""The centre of interest is where the detected lines are: sky and plain
+ground carry no lines, so the length-weighted 5-95 % extent of the
 segments, mapped into the output, frames the building; the margin is that share
 of the box added on each side.
 
 Only segments that come out STRAIGHT (within INTEREST_STRAIGHT_DEG of vertical
 or horizontal) frame it: railings, stairs, ramps and branches run slanted after
-the correction and had pulled the box into the foreground (00010519, user:
-"Bild sitzt gut, Auto-Crop noch nicht"). Slanted segments at least
-INTEREST_ROOF_LEN of the segments' extent long may only RAISE the top edge,
-above the straight box and over its width -- a gable or a pediment is slanted
-and belongs to the building; a short slanted segment up there is a tree."""
+the correction and had pulled the box into the foreground (00010519). Slanted
+segments at least INTEREST_ROOF_LEN of the segments' extent long may only
+RAISE the top edge, above the straight box and over its width -- a gable or a
+pediment is slanted and belongs to the building; a short slanted segment up
+there is a tree."""
 
 
 def interest_box(H_total, segs, ow, oh, q=INTEREST_QUANTILES, margin=INTEREST_MARGIN):
@@ -843,8 +841,7 @@ def _fit_inside(H_out, cw, ch, img_w, img_h):
     content's own aspect makes this plan a pure scale of the ``keep_size``-off
     one, so crop fractions taken on one hold on the other.
     """
-    # Long edge to long edge (user: "lange Kante gleich viel Pixel, nicht
-    # doppelt so viele"), rather than fitting inside the source's box: a
+    # Long edge to long edge, rather than fitting inside the source's box: a
     # correction that turns a portrait landscape would otherwise come out
     # smaller than the photograph on every side.
     s = max(img_w, img_h) / float(max(cw, ch))
@@ -982,11 +979,10 @@ def magnification_at(H_total, x, y):
 def keep_centre(H_total, out_w, out_h, img_w, img_h, segs=None):
     """Scale a plan up until the motif's centre is sampled at least 1:1.
 
-    User, 2026-10-23, on an Auto save that shrank the house: "sollte eigentlich
-    zentral erhalten werden". A pitch correction stretches the top edge, the
-    canvas grows tall, and ``_fit_inside`` then scales everything back to the
-    source's long edge -- so the sky got the room and the building paid:
-    measured 0.84 x 0.87 linear (0.73 of its pixels) at the house centre,
+    A pitch correction stretches the top edge, the canvas grows tall, and
+    ``_fit_inside`` then scales everything back to the source's long edge --
+    so the sky got the room and the building paid: measured 0.84 x 0.87 linear
+    (0.73 of its pixels) at the house centre,
     2.15 at the treetops. ``_keep_near_edge`` guards the same loss, but only
     under a yaw. This one holds in every mode, at the point that matters, and
     stops at ``NEAR_EDGE_MAX_SCALE`` like its sibling.

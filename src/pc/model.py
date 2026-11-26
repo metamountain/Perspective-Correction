@@ -300,8 +300,7 @@ def _tilt_prior_focal(vp_vert, f_center, sigma_f, cx, cy, sigma_pitch_deg):
     lines, and either straightens them. Holding f at the 28 mm default then
     picks whatever tilt that implies -- 50 deg on the ultra-wide Antibes
     facade, past the 30 deg cap, so it is clamped and the verticals stay
-    converging (user, 2026-09-26: "geht HA wenn man Objektiv auf 12 mm
-    runterzieht, warum schafft es das Programm nicht automatisch?").
+    converging.
 
     So walk the curve of equally good (f, pitch) pairs and take the most
     plausible point: the focal prior (log-normal around the blended value,

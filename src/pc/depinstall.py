@@ -91,8 +91,8 @@ def catalogue():
     """Every optional package for the deps menu, with ``installed`` and
     ``purpose`` added, in install order (torch first).
 
-    User, 2026-10-24: "soll nicht blind installieren" -- the menu shows them
-    all and installs only what is ticked; this is its data."""
+    The menu shows them all and installs only what is ticked; this is its
+    data."""
     by_key = {p["key"]: p for p in PACKAGES}
     by_key["torch"] = TORCH
     rows = []
