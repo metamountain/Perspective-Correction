@@ -39,12 +39,6 @@ dependencies = [
 [project.optional-dependencies]
 gui = ["tkinterdnd2>=0.4"]           # drag-and-drop only; Tkinter itself ships with Python
 mlsd = ["ai-edge-litert>=1.0"]       # the M-LSD model is vendored in models/
-deeplsd = [                          # also wants a cvg/DeepLSD checkout in tools/ and
-  "torch>=2.0",                      # models/deeplsd_md.tar (98 MB); pytlsd builds from
-  "omegaconf>=2.3",                  # source, so cmake and a C++ compiler are needed too
-  "scikit-image>=0.21",
-  "pytlsd>=0.0.3",
-]
 
 [project.urls]
 Homepage = "https://github.com/metamountain/Perspective-Correction"

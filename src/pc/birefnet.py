@@ -631,7 +631,7 @@ def arch_missing() -> list:
 def default_weights_dir() -> str:
     """Where a downloaded model lives: ``models/BiRefNet/`` beside the code.
 
-    Next to DeepLSD and M-LSD, which already sit in ``models/``.  Deliberately
+    Next to M-LSD, which already sits in ``models/``.  Deliberately
     not inside the user's ComfyUI install -- that folder belongs to ComfyUI,
     and a machine-independent location is what makes the path savable and the
     download testable.

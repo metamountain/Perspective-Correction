@@ -64,7 +64,7 @@ from pc.pipeline import analyse                                  # noqa: E402
 # roll-only, pitch-only and combined cases are all represented.
 DELTAS = [(2.0, 0.0), (-3.0, 0.0), (0.0, 4.0), (0.0, -5.0), (2.5, 3.5), (-1.5, -2.5)]
 
-ALL_DETECTORS = ("lsd", "fld", "mlsd", "union", "deeplsd", "deep-union")
+ALL_DETECTORS = ("lsd", "fld", "mlsd", "union")
 
 
 BORDER_GUARD = 0.08
@@ -135,8 +135,6 @@ def main(argv=None) -> int:
                     help="'file' is deliberately not offered: a cached mask is "
                          "stale on a warped copy")
     ap.add_argument("--birefnet-model", default="auto")
-    ap.add_argument("--deeplsd-model", default="",
-                    help="DeepLSD weights; empty takes models/deeplsd_md.tar")
     ap.add_argument("--edge", type=int, default=1600)
     ap.add_argument("--per-image", action="store_true",
                     help="also print each photograph, not only the summary")
@@ -148,8 +146,7 @@ def main(argv=None) -> int:
         return 1
 
     base = Settings().replace(focal_35mm=args.focal, detect_max_edge=args.edge,
-                              mask_mode=args.mask,
-                              deeplsd_model=args.deeplsd_model)
+                              mask_mode=args.mask)
     if args.mask == "birefnet":
         from pc import birefnet as BN
         w = args.birefnet_model

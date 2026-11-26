@@ -168,15 +168,6 @@ def build_parser():
                         "(pip install --no-deps ai-edge-litert)")
     g.add_argument("--mlsd-model", default="",
                    help="M-LSD tflite model path, or a filename inside models/")
-    g.add_argument("--deeplsd-model", default="",
-                   help="DeepLSD weights (.tar), or a filename inside models/. "
-                        "Not bundled: curl -L -o models/deeplsd_md.tar "
-                        "https://cvg-data.inf.ethz.ch/DeepLSD/deeplsd_md.tar")
-    g.add_argument("--deeplsd-device", default="",
-                   help="torch device for DeepLSD; empty picks cuda when available")
-    g.add_argument("--no-grad-nfa", action="store_true",
-                   help="DeepLSD: skip the image-gradient NFA filter. The paper "
-                        "recommends it off for night, fog and blur")
     g.add_argument("--detector-info", action="store_true",
                    help="what this Python can run as a line detector, and exit")
     g.add_argument("--doctor", "--check-deps", action="store_true",
@@ -321,9 +312,6 @@ def settings_from(args) -> Settings:
     s = Settings()
     s.detector = args.detector
     s.mlsd_model = args.mlsd_model
-    s.deeplsd_model = args.deeplsd_model
-    s.deeplsd_device = args.deeplsd_device
-    s.deeplsd_grad_nfa = not args.no_grad_nfa
     s.mask_mode = args.mask
     s.mask_file = args.mask_file
     s.mask_invert = args.mask_invert
@@ -487,7 +475,7 @@ def diagnostics_text(args, settings) -> str:
         f"{k}={'yes' if v else 'no'}" for k, v in BN.backends().items()))
     if settings.mask_mode == "birefnet" and settings.birefnet_model:
         out.append(f"# birefnet: {BN.describe(settings.birefnet_model)}")
-    interesting = ("detector", "use_scheme", "deeplsd_model", "mask_mode", "mask_file",
+    interesting = ("detector", "use_scheme", "mask_mode", "mask_file",
                    "birefnet_model",
                    "birefnet_threshold", "focal_35mm", "default_focal_35mm",
                    "focal_estimate", "min_confidence", "max_pitch_deg",
@@ -532,23 +520,19 @@ def mask_info(args) -> int:
 def detector_info(args) -> int:
     """The detector half of --mask-info, and for the same reason.
 
-    Three of the detectors are optional dependencies with three different
-    failure modes -- a missing TFLite runtime, a missing checkout, missing
-    weights -- and a run that simply falls back to LSD says none of that out
-    loud.  It is a batch tool: the silent fallback is the dangerous one.
+    The M-LSD detector is an optional dependency with its own failure modes --
+    a missing TFLite runtime, a missing model -- and a run that simply falls
+    back to LSD says none of that out loud.  It is a batch tool: the silent
+    fallback is the dangerous one.
     """
     import sys as _sys
 
     import cv2
 
-    from . import deeplsd as DL
     from . import mlsd as ML
     print(f"interpreter: {_sys.executable}")
     print(f"  lsd/fld  opencv {cv2.__version__}")
     print(f"  {'yes' if ML.available(args.mlsd_model) else 'no '}  mlsd, union")
-    print(f"  {'yes' if DL.available(args.deeplsd_model) else 'no '}  "
-          f"deeplsd, deep-union")
-    print(f"       {DL.describe(args.deeplsd_model, args.deeplsd_device)}")
     return 0
 
 

@@ -70,35 +70,19 @@ def _mlsd(bgr, settings):
     return np.asarray(seg, dtype=float).reshape(-1, 4), "mlsd"
 
 
-def _deeplsd(gray, settings):
-    from . import deeplsd as D
-    seg = D.detect(gray, getattr(settings, "deeplsd_model", ""),
-                   getattr(settings, "deeplsd_device", ""),
-                   getattr(settings, "deeplsd_grad_nfa", True))
-    if seg is None or len(seg) == 0:
-        return None
-    return np.asarray(seg, dtype=float).reshape(-1, 4), "deeplsd"
-
-
 def detect_segments(gray: np.ndarray, min_len: float, detector: str = "lsd",
                     bgr=None, settings=None):
     """Return ``(segments, detector_name)``; segments may be empty."""
-    if detector in ("union", "deep-union"):
+    if detector == "union":
         if bgr is None:
             bgr = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
-        deep = detector.startswith("deep-")
-        guide = _deeplsd(gray, settings) if deep else _mlsd(bgr, settings)
+        guide = _mlsd(bgr, settings)
         base = _lsd(gray)
         if base is None:
             return guide if guide else (np.zeros((0, 4)), "none")
         if guide is None:
             return base[0], "lsd"
         return np.vstack([base[0], guide[0]]), detector
-    if detector == "deeplsd":
-        got = _deeplsd(gray, settings)
-        if got is not None:
-            return got
-        return np.zeros((0, 4)), "deeplsd"
     if detector == "mlsd":
         if bgr is None:
             bgr = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)

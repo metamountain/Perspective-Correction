@@ -1,11 +1,10 @@
 """Setup, update and model-download dialogs for the window.
 
-The six methods the ``App`` in :mod:`pc.gui` needs for the ``update`` and
-``deps`` buttons, the DeepLSD weights download, and the BiRefNet model prompt
-and download live here on a mixin.  This module never imports ``pc.gui``: it
-only needs the standard library, ``prefs`` and the theme names, plus lazy
-imports of ``selfupdate``, ``depinstall``, ``deeplsd`` and ``birefnet`` inside
-the methods that use them.
+The five methods the ``App`` in :mod:`pc.gui` needs for the ``update`` and
+``deps`` buttons and the BiRefNet model prompt and download live here on a
+mixin.  This module never imports ``pc.gui``: it only needs the standard
+library, ``prefs`` and the theme names, plus lazy imports of ``selfupdate``,
+``depinstall`` and ``birefnet`` inside the methods that use them.
 """
 from __future__ import annotations
 
@@ -23,7 +22,7 @@ class _SetupMixin:
     """The setup, update and model-download methods, mixed into ``App``.
 
     The host supplies the widgets and helpers these methods drive (``queue``,
-    ``btn_update``, ``btn_deps``, ``btn_weights``, ``v_mask``, ``v_maskpath``,
+    ``btn_update``, ``btn_deps``, ``v_mask``, ``v_maskpath``,
     ``_remembered``, ``_notify``, ``_check_fill``) and the ``_AfterOwner``
     scheduler; the methods only add the ``_w_deps`` window and the busy flags
     on ``self``.
@@ -32,11 +31,10 @@ class _SetupMixin:
     def _check_for_update(self):
         """The `update` button beside the version number.
 
-        Same shape as `_download_models` below, for the same reason: a network
-        call behind a button. The work happens on a daemon thread so the window
-        keeps answering, the label carries the state instead of a second
-        widget, and every return to Tk goes through `self.after(0, ...)` --
-        touching a widget from the worker thread is the bug this pattern
+        A network call behind a button: the work happens on a daemon thread so
+        the window keeps answering, the label carries the state instead of a
+        second widget, and every return to Tk goes through `self.after(0, ...)`
+        -- touching a widget from the worker thread is the bug this pattern
         exists to avoid.
 
         Two steps, and the user decides between them. `selfupdate.check` only
@@ -49,8 +47,8 @@ class _SetupMixin:
         from . import selfupdate as SU
         self._upd_busy = True
         btn = self.btn_update
-        # The label is the indicator, the way `_download_models` does it below:
-        # a second widget for two seconds of network is not worth the width.
+        # The label is the indicator: a second widget for two seconds of
+        # network is not worth the width.
         btn.configure(text="checking")
 
         def done():
@@ -224,38 +222,6 @@ class _SetupMixin:
             except Exception as exc:                   # never lose the button
                 results = [(items[0], False, str(exc))]
             self.queue.put(("call", lambda: finished(results)))
-
-        threading.Thread(target=work, daemon=True).start()
-
-    def _download_models(self):
-        """Fetch the DeepLSD weights (98 MB) into models/.
-
-        The button label is the progress bar: a download is the one thing a
-        user will not start twice, so the second click is refused and the label
-        carries the megabytes instead of a second widget.  It used to be a menu
-        entry; with the menus gone it lives next to the detector that needs it.
-        """
-        if getattr(self, "_dl_busy", False):
-            return
-        from . import deeplsd as DL
-        self._dl_busy = True
-        item = self.btn_weights
-
-        def finish(text, is_error):
-            item.configure(text="weights...")
-            self._dl_busy = False
-            (messagebox.showerror if is_error else messagebox.showinfo)(
-                "Download", text)
-
-        def work():
-            try:
-                DL.download_weights(
-                    lambda d, t: self._schedule_after(0, lambda d=d, t=t: item.configure(
-                        text=f"downloading… {d >> 20} MB"
-                             + (f" / {t >> 20} MB" if t else ""))))
-                self._schedule_after(0, lambda: finish("DeepLSD weights ready in models/", False))
-            except Exception as exc:
-                self._schedule_after(0, lambda msg=str(exc): finish(msg, True))
 
         threading.Thread(target=work, daemon=True).start()
 

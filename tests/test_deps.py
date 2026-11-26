@@ -231,9 +231,7 @@ def test_the_source_parses_on_the_oldest_python_pyproject_promises():
     paths = []
     for sub in ("src", "tests", "tools"):
         for dirpath, dirnames, filenames in os.walk(os.path.join(root, sub)):
-            # a vendored third-party checkout is not ours to keep compatible
-            dirnames[:] = [d for d in dirnames
-                           if d not in ("__pycache__", "DeepLSD")]
+            dirnames[:] = [d for d in dirnames if d != "__pycache__"]
             paths += [os.path.join(dirpath, f)
                       for f in filenames if f.endswith(".py")]
     assert len(paths) > 40, f"only found {len(paths)} source files -- walk is wrong"
@@ -286,7 +284,7 @@ def test_no_public_module_constant_sits_in_src_without_a_reader():
     for sub in ("src", "tests", "tools"):
         dirpath = os.path.join(root, sub)
         for cur, dirnames, filenames in os.walk(dirpath):
-            dirnames[:] = [d for d in dirnames if d not in ("__pycache__", "DeepLSD")]
+            dirnames[:] = [d for d in dirnames if d != "__pycache__"]
             for f in filenames:
                 if f.endswith(".py"):
                     path = os.path.join(cur, f)

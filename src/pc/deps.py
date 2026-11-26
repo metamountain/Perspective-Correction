@@ -15,7 +15,7 @@ Two kinds of dependency, treated differently on purpose:
   imported lazily in `imageio.py` with a fallback to `default_focal_35mm`, so a
   missing piexif degrades, not stops -- reported, never fatal.
 
-* **optional** -- the learned backends (M-LSD, DeepLSD, LaMa, ComfyUI, BiRefNet).
+* **optional** -- the learned backends (M-LSD, LaMa, ComfyUI, BiRefNet).
   These are only a problem when *asked for*.  A run left at the defaults
   (`detector=lsd`, `fill=telea`, `mask=off`) must stay runnable on a machine
   with nothing but the core installed; that is the point of them being optional.
@@ -106,12 +106,6 @@ def preflight(settings, fill_asked=False):
         if not ML.available(settings.mlsd_model):
             errs.append(f"--detector {det} needs the M-LSD TFLite runtime "
                         f"(pip install ai-edge-litert) and a model; run --doctor for detail")
-    elif det in ("deeplsd", "deep-union"):
-        from . import deeplsd as DL
-        if not DL.available(settings.deeplsd_model, settings.deeplsd_device):
-            errs.append(f"--detector {det} needs torch + a DeepLSD checkout in tools/ "
-                        f"+ models/deeplsd_md.tar; run --doctor for detail")
-
     fill = settings.fill
     if fill == "lama" and fill_asked:
         from . import inpaint as FILL
@@ -189,14 +183,11 @@ def doctor() -> int:
 
     if by.get("cv2", {}).get("ok") and by.get("numpy", {}).get("ok"):
         from . import mlsd as ML
-        from . import deeplsd as DL
         from . import inpaint as FILL
         from . import birefnet as BN
         lines += ["", "optional backends (only needed when selected on the command line)"]
         ok = ML.available(st.mlsd_model)
         lines.append(f"  [{'yes' if ok else 'no ':>3}]  mlsd / union        TFLite runtime + vendored model")
-        ok = DL.available(st.deeplsd_model, st.deeplsd_device)
-        lines.append(f"  [{'yes' if ok else 'no ':>3}]  deeplsd / deep-union   {DL.describe(st.deeplsd_model, st.deeplsd_device)}")
         for mode in ("telea", "lama", "comfyui"):
             ok = FILL.available(mode, st)
             lines.append(f"  [{'yes' if ok else 'no ':>3}]  fill {mode:<8} {FILL.describe(mode, st)}")

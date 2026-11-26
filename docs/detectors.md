@@ -124,15 +124,9 @@ that uses only its judgement is the one that wins.**
 
 It is not the default. It costs torch, 98 MB of weights, a checkout that is not
 on PyPI and a `pytlsd` that builds from source -- and it buys 0.06° of mean.
-
-    git clone https://github.com/cvg/DeepLSD tools/DeepLSD
-    pip install omegaconf scikit-image pytlsd        # pytlsd wants cmake + a C++ compiler
-    curl -L -o models/deeplsd_md.tar https://cvg-data.inf.ethz.ch/DeepLSD/deeplsd_md.tar
-    python perspective_correction.py --detector-info
-
-`deeplsd_md` is the MegaDepth model and the right one outdoors;
-`deeplsd_wireframe` is the indoor one. `--no-grad-nfa` turns off the image
-gradient NFA filter, which the paper recommends for night, fog and blur.
+The numbers above are kept as the record of that measurement; the backend
+itself was removed from the code base, so `deeplsd` and `deep-union` no longer
+exist as detector names.
 
 ## Not tried, and why
 

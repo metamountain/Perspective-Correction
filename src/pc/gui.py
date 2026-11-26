@@ -2138,7 +2138,7 @@ class ReviewPanel(tk.Frame, _AfterOwner, _SamMixin, _LoupeMixin, _CropGuidesMixi
         # One grid, one TOPIC per row, every cell filled edge to edge (user,
         # 2026-10-20: compact, no half-empty areas, sorted by topic -- not
         # arbitrarily):
-        #   row 0  LINES      detector | weights | clear marks (2 cells)
+        #   row 0  LINES      detector | clear marks (3 cells)
         #   row 1  MASK       active | invert all | opacity | clear mask
         g = ttk.Frame(parent)
         g.pack(fill="x")
@@ -2159,16 +2159,11 @@ class ReviewPanel(tk.Frame, _AfterOwner, _SamMixin, _LoupeMixin, _CropGuidesMixi
                                 style="Compact.TCombobox", state="readonly",
                                 values=list(DETECTORS)), 0, 1)
         dbox.bind("<<ComboboxSelected>>", lambda e: self._apply_detector())
-        app = self._app()
-        if app is not None:
-            app.btn_weights = put(ttk.Button(g, text="weights", style="Compact.TButton",
-                                             command=app._download_models), 0, 2)
-            _attach_tooltip(app.btn_weights, "Download or check detector model weights")
         # No brush-width field: the pen is sized on the picture, Shift+left
         # or Alt+right dragged sideways (user, 2026-10-20).
         _b = ttk.Button(g, text="Clear marks", style="Compact.TButton",
                         command=self._clear_marks)
-        _b.grid(row=0, column=3, columnspan=2, sticky="nsew")
+        _b.grid(row=0, column=2, columnspan=3, sticky="nsew")
         _attach_tooltip(_b, "Remove all manually placed control lines,\n"
                             "vertical and horizontal.")
 

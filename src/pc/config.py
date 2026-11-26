@@ -15,15 +15,12 @@ from dataclasses import dataclass, asdict
 @dataclass
 class Settings:
     # ---- detection ----
-    # lsd | mlsd offered; fld | union | deeplsd | deep-union only for
-    # tools/benchmark_detectors.py.  See lines.detect_segments.
+    # lsd | mlsd offered; fld | union only for tools/benchmark_detectors.py.
+    # See lines.detect_segments.
     detector: str = "lsd"
     mlsd_model: str = ""                # path, or a name in models/
     mlsd_score_thr: float = 0.10
     mlsd_dist_thr: float = 20.0
-    deeplsd_model: str = ""             # path, or a name in models/
-    deeplsd_device: str = ""            # "" = cuda when available
-    deeplsd_grad_nfa: bool = True       # off for night/fog/blur, per the paper
     detect_max_edge: int = 1600         # analysis resolution (long edge, px)
     min_line_length_frac: float = 0.035  # of the short edge
     vertical_window_deg: float = 32.0
