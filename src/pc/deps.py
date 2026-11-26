@@ -101,7 +101,7 @@ def preflight(settings, fill_asked=False):
     errs = list(core_errors())
 
     det = settings.detector
-    if det in ("mlsd", "union"):
+    if det == "mlsd":
         from . import mlsd as ML
         if not ML.available(settings.mlsd_model):
             errs.append(f"--detector {det} needs the M-LSD TFLite runtime "
@@ -187,7 +187,7 @@ def doctor() -> int:
         from . import birefnet as BN
         lines += ["", "optional backends (only needed when selected on the command line)"]
         ok = ML.available(st.mlsd_model)
-        lines.append(f"  [{'yes' if ok else 'no ':>3}]  mlsd / union        TFLite runtime + vendored model")
+        lines.append(f"  [{'yes' if ok else 'no ':>3}]  mlsd                TFLite runtime + vendored model")
         for mode in ("telea", "lama", "comfyui"):
             ok = FILL.available(mode, st)
             lines.append(f"  [{'yes' if ok else 'no ':>3}]  fill {mode:<8} {FILL.describe(mode, st)}")

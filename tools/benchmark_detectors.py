@@ -3,7 +3,7 @@
 
     python tools/benchmark_detectors.py "D:\\Fotos"
     python tools/benchmark_detectors.py tests/assets --mask birefnet
-    python tools/benchmark_detectors.py tests/assets --detectors lsd,fld --focal 24
+    python tools/benchmark_detectors.py tests/assets --detectors lsd,mlsd --focal 24
 
 **Why this exists rather than a synthetic benchmark.** A rendered scene carries
 an exactly known camera pose, which makes it the right instrument for a
@@ -64,7 +64,7 @@ from pc.pipeline import analyse                                  # noqa: E402
 # roll-only, pitch-only and combined cases are all represented.
 DELTAS = [(2.0, 0.0), (-3.0, 0.0), (0.0, 4.0), (0.0, -5.0), (2.5, 3.5), (-1.5, -2.5)]
 
-ALL_DETECTORS = ("lsd", "fld", "mlsd", "union")
+ALL_DETECTORS = ("lsd", "mlsd")
 
 
 BORDER_GUARD = 0.08
@@ -126,7 +126,7 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("folder", help="a folder of photographs, or one file")
-    ap.add_argument("--detectors", default="lsd,fld",
+    ap.add_argument("--detectors", default="lsd",
                     help="comma separated; any of " + ", ".join(ALL_DETECTORS))
     ap.add_argument("--focal", type=float, default=24.0,
                     help="35mm-equivalent focal length, fixed in every pass "

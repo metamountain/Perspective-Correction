@@ -34,7 +34,6 @@ MODULES = ["test_geometry", "test_lines", "test_layout", "test_warp", "test_esti
             "test_pipeline", "test_cli", "test_review", "test_masks", "test_birefnet", "test_prefs",
              "test_inpaint", "test_imageio",
             "test_detectors",
-            "test_schemes",
             "test_planar",
            "test_reference",
            "test_assets",
@@ -83,7 +82,6 @@ def _empty_modules():
     signal.  It is printed where the FAST RUN banner is, which is the one place
     in this output somebody actually reads.
     """
-    import glob
     import re
     out = []
     for m in MODULES:

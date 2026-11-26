@@ -135,12 +135,6 @@ def build_parser():
                         "pools are restricted, verticals included: the two faces "
                         "of a corner have different vertical clusters. A strip "
                         "holding no lines of a kind leaves that pool whole")
-    g.add_argument("--scheme", action="store_true",
-                   help="partition detected lines into the building's Manhattan "
-                        "planes before the VP search (ArchitectureScheme); off by "
-                        "default. A non-established frame filters nothing, so the "
-                        "change is bounded to frames with a confident second plane")
-
     g = p.add_argument_group("decision")
     g.add_argument("--min-confidence", type=float, default=Settings.min_confidence,
                    help="below this the image is left unchanged")
@@ -328,7 +322,6 @@ def settings_from(args) -> Settings:
     s.angular_softness = args.angular_softness
     s.seed = args.seed
     s.merge_lines = args.merge_lines
-    s.use_scheme = args.scheme
     s.focal_35mm = args.focal_35mm
     s.default_focal_35mm = args.default_focal_35mm
     s.use_exif_focal = not args.no_exif_focal
@@ -475,7 +468,7 @@ def diagnostics_text(args, settings) -> str:
         f"{k}={'yes' if v else 'no'}" for k, v in BN.backends().items()))
     if settings.mask_mode == "birefnet" and settings.birefnet_model:
         out.append(f"# birefnet: {BN.describe(settings.birefnet_model)}")
-    interesting = ("detector", "use_scheme", "mask_mode", "mask_file",
+    interesting = ("detector", "mask_mode", "mask_file",
                    "birefnet_model",
                    "birefnet_threshold", "focal_35mm", "default_focal_35mm",
                    "focal_estimate", "min_confidence", "max_pitch_deg",
@@ -531,8 +524,8 @@ def detector_info(args) -> int:
 
     from . import mlsd as ML
     print(f"interpreter: {_sys.executable}")
-    print(f"  lsd/fld  opencv {cv2.__version__}")
-    print(f"  {'yes' if ML.available(args.mlsd_model) else 'no '}  mlsd, union")
+    print(f"  lsd       opencv {cv2.__version__}")
+    print(f"  {'yes' if ML.available(args.mlsd_model) else 'no '}  mlsd")
     return 0
 
 

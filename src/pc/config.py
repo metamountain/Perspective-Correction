@@ -15,8 +15,7 @@ from dataclasses import dataclass, asdict
 @dataclass
 class Settings:
     # ---- detection ----
-    # lsd | mlsd offered; fld | union only for tools/benchmark_detectors.py.
-    # See lines.detect_segments.
+    # lsd | mlsd; see lines.detect_segments.
     detector: str = "lsd"
     mlsd_model: str = ""                # path, or a name in models/
     mlsd_score_thr: float = 0.10
@@ -51,15 +50,6 @@ class Settings:
     gdino_model: str = ""           # GDINO model dir; "" = models/GroundingDINO
     sam_model: str = ""             # SAM2 checkpoint; "" = models/sam2/sam2.1_hiera_base_plus.pt
     sam_device: str = ""            # "" = cuda when available
-
-    # ---- line partitioning (ArchitectureScheme) ----
-    # Off by default: the classifier only ever *removes* evidence, and this is a
-    # batch tool that runs unattended -- so it stays opt-in until measured
-    # against the assets.  When on, detected lines are partitioned into the
-    # building's Manhattan planes before the VP search; a non-established frame
-    # filters nothing (a safe no-op), so the risk is bounded to frames where a
-    # second horizontal plane is confidently present.
-    use_scheme: bool = False
 
     # ---- vanishing point search ----
     ransac_iters: int = 800

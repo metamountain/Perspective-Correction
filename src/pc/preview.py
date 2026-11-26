@@ -7,15 +7,12 @@ import numpy as np
 from . import geometry as G
 from .lineoverlay import LINE, infinite_line_points
 
-# Aliases kept for the callers that read them by name (e.g.
-# `scheme.ArchitectureScheme.draw_preview`).  The values live in
-# `lineoverlay.LINE`, the one table for every line overlay: the before pane's
-# detection colours and the after pane's check-line colours, read by both
-# renderers from one place instead of each keeping its own set.
-GREEN = LINE["v_inlier"]
+# Kept for the callers that read it by name (the horizon line in the preview
+# and the review renderers).  The value lives in `lineoverlay.LINE`, the one
+# table for every line overlay: the before pane's detection colours and the
+# after pane's check-line colours, read by both renderers from one place
+# instead of each keeping its own set.
 MAGENTA = LINE["horizon"]
-GREY = LINE["struck"]
-VP_MARK = LINE["vp_mark"]
 
 
 def draw_lines(canvas, seg, colour, thickness=2):

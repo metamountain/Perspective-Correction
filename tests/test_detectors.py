@@ -4,6 +4,7 @@ The M-LSD test skips cleanly when its optional dependency is missing -- a
 TFLite runtime -- because the default path must not require it.
 """
 import math
+from unittest import SkipTest
 
 import synth
 from pc import lines as L
@@ -14,7 +15,7 @@ from pc.pipeline import analyse
 def _mlsd_or_skip():
     from pc import mlsd
     if not mlsd.available():
-        raise SkipTest("no TFLite runtime or model")     # noqa: F821
+        raise SkipTest("no TFLite runtime or model")
     return mlsd
 
 
@@ -31,7 +32,7 @@ def test_every_detector_produces_a_usable_estimate():
     from pc import mlsd
     sc = synth.Scene(w=1200, h=800, focal_35mm=28, pitch_deg=9, roll_deg=-2, seed=43)
     tr, tp = sc.true_roll_pitch()
-    names = ["lsd"] + (["mlsd", "union"] if mlsd.available() else [])
+    names = ["lsd"] + (["mlsd"] if mlsd.available() else [])
     for name in names:
         st = Settings().replace(detector=name, focal_35mm=28)
         m, _, _, _, _ = analyse(sc.img, st)

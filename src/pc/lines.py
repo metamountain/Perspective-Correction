@@ -1,15 +1,14 @@
 """Line segment detection, merging, classification and weighting.
 
-The detector chain is LSD -> FastLineDetector.  LSD is the accurate one and is
-what darktable's ashift uses; FLD only exists because OpenCV dropped and
-re-added LSD several times and because contrib builds are not always present.
-Canny+HoughLinesP (`hough`) used to sit at the end of that chain as a silent
-last resort and was also a user-selectable mode; removed 2026-09-12 -- it is
-much noisier than LSD/FLD (no idea what a building is, votes on every seam and
-twig) and the silent fallback meant picking `lsd` explicitly could still hand
-back Hough's lines with no indication. The chain now returns an empty result
-rather than degrading to a worse detector; see CLAUDE.md's Ledger. Whichever
-detector runs, everything downstream sees the same ``(N, 4)`` endpoint array.
+LSD is the only classical detector: it is the accurate one and is what
+darktable's ashift uses.  The FastLineDetector that used to sit behind it as a
+fallback is retired, and the silent last resort Canny+HoughLinesP (`hough`)
+was removed before that -- it is much noisier than LSD (no idea what a
+building is, votes on every seam and twig) and the silent fallback meant
+picking `lsd` explicitly could still hand back Hough's lines with no
+indication. Detection therefore returns an empty result rather than degrading
+to a worse detector; see CLAUDE.md's Ledger.  Whichever detector runs,
+everything downstream sees the same ``(N, 4)`` endpoint array.
 """
 from __future__ import annotations
 
@@ -46,20 +45,6 @@ def _lsd(gray: np.ndarray):
     return np.asarray(seg, dtype=float).reshape(-1, 4), "lsd"
 
 
-def _fld(gray: np.ndarray):
-    try:
-        det = cv2.ximgproc.createFastLineDetector()
-    except Exception:
-        return None
-    try:
-        seg = det.detect(gray)
-    except Exception:
-        return None
-    if seg is None or len(seg) == 0:
-        return None
-    return np.asarray(seg, dtype=float).reshape(-1, 4), "fld"
-
-
 def _mlsd(bgr, settings):
     from . import mlsd as M
     seg = M.detect(bgr, getattr(settings, "mlsd_model", ""),
@@ -73,16 +58,6 @@ def _mlsd(bgr, settings):
 def detect_segments(gray: np.ndarray, min_len: float, detector: str = "lsd",
                     bgr=None, settings=None):
     """Return ``(segments, detector_name)``; segments may be empty."""
-    if detector == "union":
-        if bgr is None:
-            bgr = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
-        guide = _mlsd(bgr, settings)
-        base = _lsd(gray)
-        if base is None:
-            return guide if guide else (np.zeros((0, 4)), "none")
-        if guide is None:
-            return base[0], "lsd"
-        return np.vstack([base[0], guide[0]]), detector
     if detector == "mlsd":
         if bgr is None:
             bgr = cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)
@@ -90,7 +65,7 @@ def detect_segments(gray: np.ndarray, min_len: float, detector: str = "lsd",
         if got is not None:
             return got
         return np.zeros((0, 4)), "mlsd"
-    chain = {"auto": (_lsd, _fld), "lsd": (_lsd,), "fld": (_fld,)}[detector]
+    chain = {"auto": (_lsd,), "lsd": (_lsd,)}[detector]
     for fn in chain:
         got = fn(gray)
         if got is not None:

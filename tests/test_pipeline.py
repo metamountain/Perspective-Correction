@@ -407,28 +407,6 @@ def test_in_xband_accepts_its_bounds_in_either_order():
     assert list(L.in_xband(seg, 200.0, 100.0)) == list(L.in_xband(seg, 100.0, 200.0))
 
 
-def test_use_scheme_partitions_lines_and_is_off_by_default():
-    """The batch/CLI half of ArchitectureScheme: off by default the frame is
-    untouched and nothing is reported; on, it partitions the detected lines into
-    the building's Manhattan planes, re-derives vert/horiz from the survivors and
-    leaves a visible summary in detect_info.  The safety contract this test pins
-    is that the partition only ever *removes* evidence -- a classifier must never
-    invent a line to fit a hypothesis.  A corner view is the case it exists for:
-    two facades whose horizontals the plain orientation split would otherwise mix."""
-    from pc.pipeline import analyse
-    img = _strip_scene().img
-    base_m, v0, h0, _, _ = analyse(img, Settings())
-    assert "scheme" not in (base_m.detect_info or {}), \
-        "use_scheme defaults off, so nothing may be partitioned or reported"
-
-    on_m, v1, h1, _, _ = analyse(img, Settings().replace(use_scheme=True))
-    info = on_m.detect_info or {}
-    assert isinstance(info.get("scheme"), str) and info["scheme"], \
-        f"a scheme run must report its summary, got {info.get('scheme')!r}"
-    assert len(v1) + len(h1) <= len(v0) + len(h0), \
-        "the scheme only removes lines, it never invents them"
-
-
 def test_a_strip_thins_both_pools_not_just_the_horizontals():
     """The strip restricts the evidence to one facade of a corner view -- BOTH
     pools, verticals included, because the two faces have different vertical

@@ -85,8 +85,11 @@ The alternatives ship as measured options:
 | flag | when it is worth trying |
 |---|---|
 | `--detector hybrid` | real photographs, plenty of structure; best mean error measured on real input |
-| `--detector union` | the safest addition: never discards anything, best p90 on real input, and unlike the hybrid it does not damage the synthetic case |
 | `--detector mlsd` | heavy texture where LSD drowns in fragments; also the fastest way to see what the network considers structural |
+
+The `union` detector has been removed from the code base, so `--detector union`
+no longer exists; the measurement tables above keep its numbers as the record
+of the comparison.
 
 ## Deciding on your own photographs
 
@@ -95,7 +98,7 @@ your own is better evidence than any table here:
 
     python tools/benchmark_detectors.py "D:\Fotos" --focal-35mm 24
 
-If the hybrid or union wins on your material by a clear margin, make it the
+If the hybrid wins on your material by a clear margin, make it the
 default with `--detector`, and please open an issue with the table -- that is
 the evidence needed to change the shipped default.
 
