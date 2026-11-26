@@ -181,7 +181,7 @@ class Settings:
     # It is still invention: see the fill section of CLAUDE.md for why that is
     # defensible here and why "none" is one flag away.
     fill: str = "lama"                  # none | telea | lama | comfyui
-    fill_max_edge: int = 2048           # generate at this size, paste back full res
+    fill_max_edge: int = 2048           # telea/lama: generate at this size, paste back full res
     # Let the SLOW fills into the preview too. Off by default and deliberately
     # a switch rather than a mode list: measured on Platte_1 at preview size,
     # telea costs 50 ms and lama 1191 ms. A second per redraw is unusable while

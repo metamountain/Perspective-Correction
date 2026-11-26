@@ -228,7 +228,7 @@ def build_parser():
     g.add_argument("--comfy-url", default=Settings.comfy_url)
     g.add_argument("--comfy-workflow", default="", metavar="FILE.json",
                    help="ComfyUI API-format workflow; empty takes the "
-                        "bundled workflows/flux2-klein-edit-nomask.json, which "
+                        "bundled workflows/flux2-klein-border-patrol.json, which "
                         "is written for an edit model (image + instruction). "
                         "An inpainting model wants a different graph and no "
                         "example ships -- build it in ComfyUI, Save (API "

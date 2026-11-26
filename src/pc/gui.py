@@ -813,15 +813,25 @@ class ReviewPanel(tk.Frame, _AfterOwner, _SamMixin, _LoupeMixin, _CropGuidesMixi
             "see what lama will actually put there: about a second per\n"
             "redraw (measured at preview size), fine once and unusable\n"
             "while a slider moves. Off by default.")
-        # ComfyUI needs a server address and a workflow; the unnamed default
-        # graph is the inpainting one.  Same window as the batch panel's.
+        # ComfyUI needs a server address and a workflow. When fill == "comfyui",
+        # the main button becomes a one-shot "Render ComfyUI" trigger and the
+        # compact gear button opens the ComfyUI settings popup.
+        self._last_non_comfy_fill = (
+            self.v_fill.get() if self.v_fill.get() != "comfyui" else "lama"
+        )
         self.btn_comfy = ttk.Button(row, text="ComfyUI", style="Compact.TButton",
-                                    command=self._open_comfy)
+                                    command=self._on_comfy_button)
         self._put(row, self.btn_comfy, 2)
-        _attach_tooltip(self.btn_comfy, "Configure the ComfyUI server address and inpainting workflow")
+        _attach_tooltip(self.btn_comfy, "Configure ComfyUI, or render one preview pass when ComfyUI fill is active")
+        self.btn_comfy_cfg = ttk.Button(row, text="\u2699", width=2,
+                                        style="Compact.TButton",
+                                        command=self._open_comfy)
+        self._put(row, self.btn_comfy_cfg, 0)
+        _attach_tooltip(self.btn_comfy_cfg, "Open ComfyUI server and workflow settings")
         # Status text for the ComfyUI setup; a tooltip-sized note, kept out of
         # the row so an empty one costs no width.
         self.lbl_comfy = ttk.Label(self._strip, text="", style="Dim.TLabel")
+        self._sync_comfy_button()
         self._register_comfy()
 
     def _strip_crop(self, row):
@@ -1197,14 +1207,59 @@ class ReviewPanel(tk.Frame, _AfterOwner, _SamMixin, _LoupeMixin, _CropGuidesMixi
         self.lbl_comfy.configure(text=f"ComfyUI: {label} -- {text}",
                                  foreground=INK[ink])
 
-    def _open_comfy(self):
+    def _open_comfy(self, on_cancel=None):
         app = self._app()
         if app is None:
             messagebox.showinfo("ComfyUI", "open the batch window to reach the "
                                            "ComfyUI settings", parent=self)
             return
-        app._open_comfy()
+        app._open_comfy(on_cancel=on_cancel)
         app._test_comfy()
+
+    def _sync_comfy_button(self):
+        btn = getattr(self, "btn_comfy", None)
+        if btn is None:
+            return
+        if self.v_fill.get() == "comfyui":
+            btn.configure(text="Render ComfyUI")
+        else:
+            btn.configure(text="ComfyUI")
+
+    def _on_comfy_button(self):
+        if self.v_fill.get() == "comfyui":
+            self._render_comfy_once()
+        else:
+            self._open_comfy()
+
+    def _render_comfy_once(self):
+        """Run a single ComfyUI fill pass into the preview with a fresh seed.
+
+        Each click rolls a new random seed so the user can re-render if they
+        dislike a generation, and keeps that seed on ``session.settings`` so
+        saving reproduces the approved result.
+        """
+        if self.session is None:
+            return
+        import random
+        self._sync_comfy()
+        seed = random.randint(1, (1 << 48) - 1)
+        orig_live = bool(getattr(self, "v_livefill", None) and self.v_livefill.get())
+        self.session.settings = self.session.settings.replace(
+            fill="comfyui", comfy_seed=seed, live_fill_preview=True)
+        try:
+            self._redraw()
+        finally:
+            if self.session is not None:
+                self.session.settings = self.session.settings.replace(
+                    live_fill_preview=orig_live)
+
+    def _revert_from_comfy(self):
+        """Restore the previous non-ComfyUI fill mode when ComfyUI settings are cancelled."""
+        fallback = getattr(self, "_last_non_comfy_fill", "lama") or "lama"
+        if fallback == "comfyui":
+            fallback = "lama"
+        self.v_fill.set(fallback)
+        self._apply_fill()
 
     def _sync_comfy(self):
         """Take the App's current ComfyUI settings, not the ones this window
@@ -1227,15 +1282,22 @@ class ReviewPanel(tk.Frame, _AfterOwner, _SamMixin, _LoupeMixin, _CropGuidesMixi
         them.  Writing ``self.settings`` here made the whole control a no-op."""
         if self.session is None:
             return
+        mode = self.v_fill.get()
+        prev = getattr(self.session.settings, "fill", "none")
+        if mode != "comfyui":
+            self._last_non_comfy_fill = mode
+        elif prev != "comfyui":
+            self._last_non_comfy_fill = prev or "lama"
         self.session.settings = self.session.settings.replace(
-            fill=self.v_fill.get(),
+            fill=mode,
             live_fill_preview=bool(getattr(self, "v_livefill", None)
                                    and self.v_livefill.get()))
-        if self.v_fill.get() == "comfyui":
-            # Choosing it is asking for it -- the same rule the batch panel
-            # follows. A mode that silently needs six settings nobody was shown
-            # is the quiet failure this project keeps arguing against.
-            self._open_comfy()
+        self._sync_comfy_button()
+        if mode == "comfyui":
+            # Switching to ComfyUI opens its settings with a Cancel callback
+            # that reverts to the previous fill mode if the user backs out.
+            if prev != "comfyui":
+                self._open_comfy(on_cancel=self._revert_from_comfy)
         else:
             self.lbl_comfy.configure(text="")
         self._fill_fallback_notice()

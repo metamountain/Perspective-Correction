@@ -50,7 +50,9 @@ change a required one.
 """
 from __future__ import annotations
 
+import copy
 import json
+import math
 import os
 import threading
 import time
@@ -105,9 +107,9 @@ LAMA_NOTE = ""             # why a faster device was not used, if one was tried
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.normpath(os.path.join(HERE, "..", ".."))
 WORKFLOWS = os.path.join(ROOT, "workflows")
-DEFAULT_WORKFLOW = os.path.join(WORKFLOWS, "flux2-klein-edit-nomask.json")
+DEFAULT_WORKFLOW = os.path.join(WORKFLOWS, "flux2-klein-border-patrol.json")
 
-SHIPPED = (("flux2-klein-edit-nomask.json", "edit model -- image + instruction"),)
+SHIPPED = (("flux2-klein-border-patrol.json", "Border Patrol -- Flux 2 Klein 9B (4-step, lazy 4MP)"),)
 """The graphs that ship, listed by the window and named by `status`.
 
 There were two, for the two shapes a generator comes in, and the inpainting one
@@ -191,7 +193,13 @@ def _composite(bgr: np.ndarray, filled_small: np.ndarray, hole: np.ndarray,
     ``test_the_fill_touches_nothing_that_was_photographed``.
     """
     h, w = bgr.shape[:2]
-    gen = cv2.resize(filled_small, (w, h), interpolation=cv2.INTER_LANCZOS4)
+    # A frame that was generated at its own size (the ComfyUI path for a frame
+    # at or under the 4 MP threshold) is taken as it is: no resample, so the
+    # band lands on exactly the pixels the hole occupies.
+    if filled_small.shape[:2] != (h, w):
+        gen = cv2.resize(filled_small, (w, h), interpolation=cv2.INTER_LANCZOS4)
+    else:
+        gen = filled_small
     a = hole.astype(np.float32)
     if feather > 0:
         k = 2 * feather + 1
@@ -407,7 +415,7 @@ def _png(arr: np.ndarray) -> bytes:
 DEFAULT_COMFY_URL = "http://127.0.0.1:8188"
 
 PRIME_GREY = 128
-PRIME_MIX = 0.5
+PRIME_MIX = 1.0
 """How the band is primed before a generator sees it.
 
 What arrives at ComfyUI would otherwise be the *padded* band -- either black, or
@@ -416,14 +424,19 @@ in opposite ways: black is an edge the sampler will happily treat as content,
 and the streaks are exactly the artifact that once cost this project two wrong
 conclusions (see the round-trip section of the working notes).
 
-So the hole is filled first -- with LaMa when the package is installed, with
-TELEA when it is not or the model fails to load (see `_prime_hole`) -- and then
-pulled halfway towards mid grey. The fill gives the sampler the right colours
-and rough texture to continue (LaMa a plausible continuation, TELEA a smear in
-the right colours); the grey half destroys the *structure* the fill invents
-along with them, so nothing in the band reads as an edge worth preserving.
-Only the hole is touched, and the result is a starting point, not an answer:
-the generator replaces it.
+Live A/B testing on Flux 2 Klein 9B Edit settled what the band should be: a
+100% flat mid-grey (`PRIME_GREY`, i.e. `PRIME_MIX = 1.0`) in the empty border
+band produces dramatically cleaner, more photorealistic textures than blending
+a LaMa/TELEA fill halfway with it.  The fill's own smears -- the greenish LaMa
+ones above all -- are what the model keeps and paints over, so a fill in the
+starting point is a liability, not a help: flat grey gives the sampler nothing
+to preserve and is pure signal for the prompt's "replace this".
+
+`PRIME_MIX` stays the switch: at 1.0 the default fills the hole with exactly
+`PRIME_GREY` and loads no fill model at all; below 1.0 the old blend is
+restored -- the hole is filled first (LaMa or TELEA, see `_prime_hole`) and
+pulled that far towards grey.  Only the hole is touched, and the result is a
+starting point, not an answer: the generator replaces it.
 """
 
 
@@ -477,14 +490,22 @@ def _prime_hole(small: np.ndarray, mask: np.ndarray) -> np.ndarray:
 
 
 def _prime_for_generation(small: np.ndarray, mask: np.ndarray) -> np.ndarray:
-    """Fill the hole (LaMa or TELEA, see `_prime_hole`), then blend it halfway
-    to grey.  ``mask`` is 0/255."""
+    """Fill the hole so a generator can replace it.  ``mask`` is 0/255.
+
+    At the default `PRIME_MIX = 1.0` that is a flat `PRIME_GREY` and nothing
+    else: no fill model is loaded (see the constant's notes for the A/B that
+    decided it).  Below 1.0 the hole is filled first (LaMa or TELEA, see
+    `_prime_hole`) and pulled that far towards grey instead.
+    """
     if not mask.any():
         return small
-    primed = _prime_hole(small, mask)
-    primed = primed * (1.0 - PRIME_MIX) + float(PRIME_GREY) * PRIME_MIX
     out = small.copy()
     inside = mask > 0
+    if PRIME_MIX >= 1.0:
+        out[inside] = PRIME_GREY
+        return out
+    primed = _prime_hole(small, mask)
+    primed = primed * (1.0 - PRIME_MIX) + float(PRIME_GREY) * PRIME_MIX
     out[inside] = primed[inside].clip(0, 255).astype(np.uint8)
     return out
 
@@ -519,6 +540,165 @@ def _match_sent_shape(gen: np.ndarray, small: np.ndarray) -> np.ndarray:
             f"wrong place. Check the workflow for a crop or a fixed-size latent; "
             f"a node that only scales is fine.")
     return cv2.resize(gen, (sw, sh), interpolation=cv2.INTER_LANCZOS4)
+
+
+# --------------------------------------------------------------------------
+# ComfyUI 32-px tensor padding and alignment
+# --------------------------------------------------------------------------
+VAE_MULTIPLE = 32
+"""Tensor alignment grid (32 px): satisfies Flux 2 VAE (16 px) and even 2x2 quadrant splits."""
+
+
+def _pad_to_vae_grid(img: np.ndarray, mask: np.ndarray) -> tuple:
+    """Pad an image right/bottom onto the 32-px grid; returns the pair and crop.
+
+    The image is padded by repeating its edge (a hard line at the frame edge
+    would read as content), the mask with 0, so the padded cells are more
+    photograph and no hole.  The returned ``(crop_h, crop_w)`` is the frame's
+    exact size, to be cut off again once the result comes back.
+    """
+    th, tw = img.shape[:2]
+    ph = (th + VAE_MULTIPLE - 1) // VAE_MULTIPLE * VAE_MULTIPLE
+    pw = (tw + VAE_MULTIPLE - 1) // VAE_MULTIPLE * VAE_MULTIPLE
+    if ph == th and pw == tw:
+        return img, mask, (th, tw)
+    img = cv2.copyMakeBorder(img, 0, ph - th, 0, pw - tw, cv2.BORDER_REPLICATE)
+    mask = cv2.copyMakeBorder(mask, 0, ph - th, 0, pw - tw,
+                              cv2.BORDER_CONSTANT, value=0)
+    return img, mask, (th, tw)
+
+
+def _comfy_roundtrip(base: str, wf: dict, settings, n_img: str, n_mask,
+                     img: np.ndarray, mask: np.ndarray) -> np.ndarray:
+    """One full pass over ``img``: upload it, run the graph, fetch the result.
+
+    ``wf`` is this pass's own copy of the graph: a pass re-uploads and
+    re-writes the loaders it touches, so a tile must not read what an earlier
+    tile left in a shared dict.  ``img`` is on the VAE grid, so the run
+    returns at exactly that size; a graph that scales anyway is re-matched
+    here (see `_match_sent_shape`).  The mask is uploaded only when the graph
+    has a node titled ``BPC_MASK`` -- a whole family of edit models takes an
+    image and an instruction and has nowhere to put a mask.  For those the
+    priming *is* the signal: the band arrives as flat mid-grey and the prompt
+    says to replace it.  PC's own guarantee does not rest on the workflow
+    honouring a mask in any case: the composite puts the result back through
+    the hole and nowhere else.
+    """
+    stamp = uuid.uuid4().hex[:12]
+    try:
+        wf[n_img]["inputs"]["image"] = _upload(base, f"pc_{stamp}.png", _png(img))
+        if n_mask is not None:
+            wf[n_mask]["inputs"]["image"] = _upload(base, f"bpc_{stamp}_mask.png",
+                                                    _png(mask))
+    except Exception as exc:
+        raise FillUnavailable(
+            f"ComfyUI at {base} did not accept the upload ({exc}). Is it "
+            "running, and is --comfy-url right?") from exc
+
+    n_prompt = _find(wf, TITLE_PROMPT)
+    text = getattr(settings, "comfy_prompt", "")
+    if n_prompt is not None and text:
+        wf[n_prompt]["inputs"]["text"] = text
+    seed = int(getattr(settings, "comfy_seed", 0) or 0)
+    if seed:
+        for node in wf.values():                    # every sampler, one seed
+            for key in ("seed", "noise_seed"):
+                if key in node.get("inputs", {}):
+                    node["inputs"][key] = seed
+
+    client = "pc-" + stamp
+    body = json.dumps({"prompt": wf, "client_id": client}).encode("utf-8")
+    try:
+        got = json.loads(_http(base + "/prompt", body,
+                               {"Content-Type": "application/json"}).decode())
+    except Exception as exc:
+        raise FillUnavailable(
+            f"ComfyUI rejected the workflow ({exc}). The usual cause is a node "
+            "or a model filename that does not exist on that server -- open "
+            "the workflow in ComfyUI and run it once by hand.") from exc
+    pid = got.get("prompt_id")
+    if not pid:
+        raise FillUnavailable(f"ComfyUI returned no prompt_id: {got}")
+
+    deadline = time.time() + float(getattr(settings, "comfy_timeout", 300.0))
+    while True:
+        if time.time() > deadline:
+            raise FillUnavailable(f"ComfyUI did not finish within the timeout ({pid})")
+        time.sleep(0.7)
+        try:
+            hist = json.loads(_http(f"{base}/history/{pid}", timeout=15.0).decode())
+        except Exception:
+            continue
+        entry = hist.get(pid)
+        if not entry:
+            continue
+        status = entry.get("status", {})
+        if status.get("status_str") == "error" or status.get("completed") is False:
+            raise FillUnavailable(f"the ComfyUI run failed: {status}")
+        images = [im for out in entry.get("outputs", {}).values()
+                  for im in out.get("images", [])]
+        if not images:
+            if status.get("completed"):
+                raise FillUnavailable(
+                    "the workflow completed but saved no image -- it needs a "
+                    "SaveImage or PreviewImage node")
+            continue
+        im = images[-1]
+        import urllib.parse
+        q = urllib.parse.urlencode({"filename": im["filename"],
+                                    "subfolder": im.get("subfolder", ""),
+                                    "type": im.get("type", "output")})
+        raw = _http(f"{base}/view?{q}", timeout=60.0)
+        gen = cv2.imdecode(np.frombuffer(raw, np.uint8), cv2.IMREAD_COLOR)
+        if gen is None:
+            raise FillUnavailable("could not decode the image ComfyUI returned")
+        if gen.shape[:2] != img.shape[:2]:
+            gen = _match_sent_shape(gen, img)
+        return gen
+
+
+def _align_to_source(gen: np.ndarray, src: np.ndarray, hole: np.ndarray) -> np.ndarray:
+    """Counter-shift a diffusion edit output back onto ``src``'s pixel grid.
+
+    Edit models conditioned through ``ReferenceLatent`` regenerate the whole
+    frame from noise and can introduce a 2-8 px global translation drift.
+    Pasting such an output directly at ``(0, 0)`` leaves a visible step along
+    straight architectural lines at the hole boundary.  We estimate the
+    sub-pixel shift strictly on the unmasked interior pixels (with ``hole``
+    neutralised to the interior mean so generated border texture cannot bias
+    the correlation) and warp ``gen`` back before compositing.
+    """
+    h, w = src.shape[:2]
+    if gen.shape[:2] != (h, w) or h < 32 or w < 32:
+        return gen
+    known = ~hole
+    if float(np.mean(known)) < 0.2:
+        return gen
+    g_src = cv2.cvtColor(src, cv2.COLOR_BGR2GRAY).astype(np.float32)
+    g_gen = cv2.cvtColor(gen, cv2.COLOR_BGR2GRAY).astype(np.float32)
+    # Neutralise hole pixels in both images so only photographed structure drives the shift.
+    if hole.any():
+        g_src[hole] = float(np.mean(g_src[known]))
+        g_gen[hole] = float(np.mean(g_gen[known]))
+    win = cv2.createHanningWindow((w, h), cv2.CV_32F)
+    (dx, dy), response = cv2.phaseCorrelate(g_src, g_gen, window=win)
+    mag = math.hypot(dx, dy)
+    if response < 0.15 or mag < 0.25 or mag > 32.0:
+        return gen
+    M = np.array([[1.0, 0.0, -dx], [0.0, 1.0, -dy]], dtype=np.float32)
+    return cv2.warpAffine(gen, M, (w, h), flags=cv2.INTER_LANCZOS4,
+                          borderMode=cv2.BORDER_REPLICATE)
+
+
+def _expand_prime_mask(mask: np.ndarray, radius: int = 2) -> np.ndarray:
+    """Slightly dilate the priming mask so warped anti-aliased edge fringes
+    are swallowed into the flat grey band before ComfyUI sees the image.
+    The composite mask stays un-expanded so no photographed pixel is altered."""
+    if radius <= 0 or not mask.any():
+        return mask
+    k = 2 * radius + 1
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k, k))
+    return cv2.dilate(mask, kernel)
 
 
 def _combo_options(decl):
@@ -705,84 +885,20 @@ def _fill_comfy(bgr: np.ndarray, hole: np.ndarray, settings) -> np.ndarray:
             f"the workflow needs a node titled {TITLE_IMAGE} (rename it in "
             "ComfyUI: right-click > Title)")
 
-    small, m = _prepare(bgr, hole, int(getattr(settings, "fill_max_edge", 2048)))
-    small = _prime_for_generation(small, m)
-    stamp = uuid.uuid4().hex[:12]
-    try:
-        wf[n_img]["inputs"]["image"] = _upload(base, f"pc_{stamp}.png", _png(small))
-        # `BPC_MASK` is optional, because a whole family of edit models takes an
-        # image and an instruction and has nowhere to put a mask.  For those the
-        # priming *is* the signal: the band arrives as flat grey-tinted colour
-        # and the prompt says to replace it.  PC's own guarantee does not rest
-        # on the workflow honouring a mask in any case -- `_composite` puts the
-        # result back through the hole and nowhere else, so a model that repaints
-        # the whole frame still cannot touch a photographed pixel.
-        if n_mask is not None:
-            wf[n_mask]["inputs"]["image"] = _upload(base, f"bpc_{stamp}_mask.png",
-                                                    _png(m))
-    except Exception as exc:
-        raise FillUnavailable(
-            f"ComfyUI at {base} did not accept the upload ({exc}). Is it "
-            "running, and is --comfy-url right?") from exc
-
-    n_prompt = _find(wf, TITLE_PROMPT)
-    text = getattr(settings, "comfy_prompt", "")
-    if n_prompt is not None and text:
-        wf[n_prompt]["inputs"]["text"] = text
-    seed = int(getattr(settings, "comfy_seed", 0) or 0)
-    if seed:
-        for node in wf.values():                    # every sampler, one seed
-            for key in ("seed", "noise_seed"):
-                if key in node.get("inputs", {}):
-                    node["inputs"][key] = seed
-
-    client = "pc-" + stamp
-    body = json.dumps({"prompt": wf, "client_id": client}).encode("utf-8")
-    try:
-        got = json.loads(_http(base + "/prompt", body,
-                               {"Content-Type": "application/json"}).decode())
-    except Exception as exc:
-        raise FillUnavailable(
-            f"ComfyUI rejected the workflow ({exc}). The usual cause is a node "
-            "or a model filename that does not exist on that server -- open "
-            "the workflow in ComfyUI and run it once by hand.") from exc
-    pid = got.get("prompt_id")
-    if not pid:
-        raise FillUnavailable(f"ComfyUI returned no prompt_id: {got}")
-
-    deadline = time.time() + float(getattr(settings, "comfy_timeout", 300.0))
-    while True:
-        if time.time() > deadline:
-            raise FillUnavailable(f"ComfyUI did not finish within the timeout ({pid})")
-        time.sleep(0.7)
-        try:
-            hist = json.loads(_http(f"{base}/history/{pid}", timeout=15.0).decode())
-        except Exception:
-            continue
-        entry = hist.get(pid)
-        if not entry:
-            continue
-        status = entry.get("status", {})
-        if status.get("status_str") == "error" or status.get("completed") is False:
-            raise FillUnavailable(f"the ComfyUI run failed: {status}")
-        images = [im for out in entry.get("outputs", {}).values()
-                  for im in out.get("images", [])]
-        if not images:
-            if status.get("completed"):
-                raise FillUnavailable(
-                    "the workflow completed but saved no image -- it needs a "
-                    "SaveImage or PreviewImage node")
-            continue
-        im = images[-1]
-        import urllib.parse
-        q = urllib.parse.urlencode({"filename": im["filename"],
-                                    "subfolder": im.get("subfolder", ""),
-                                    "type": im.get("type", "output")})
-        raw = _http(f"{base}/view?{q}", timeout=60.0)
-        gen = cv2.imdecode(np.frombuffer(raw, np.uint8), cv2.IMREAD_COLOR)
-        if gen is None:
-            raise FillUnavailable("could not decode the image ComfyUI returned")
-        return _composite(bgr, _match_sent_shape(gen, small), hole)
+    h, w = bgr.shape[:2]
+    # Send the whole photograph at native 1:1 resolution (padded right/bottom
+    # to the 32-px tensor grid, never scaled or split in Python).  The ComfyUI
+    # workflow itself decides whether to process <= 4 MP directly or split > 4 MP
+    # lazily into four quadrants.
+    img, mask = bgr, (hole.astype(np.uint8) * 255)
+    img, mask, crop = _pad_to_vae_grid(img, mask)
+    primed = _prime_for_generation(img, _expand_prime_mask(mask))
+    gen = _comfy_roundtrip(base, copy.deepcopy(wf), settings,
+                           n_img, n_mask, primed, mask)
+    if gen.shape[:2] != (h, w):
+        gen = gen[:crop[0], :crop[1]]
+    gen = _align_to_source(gen, bgr, hole)
+    return _composite(bgr, gen, hole, feather=0)
 
 
 # --------------------------------------------------------------------------

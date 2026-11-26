@@ -143,6 +143,124 @@ def test_the_shipped_workflow_has_the_sockets_the_code_fills_in():
     assert "image" in wf[n]["inputs"], "BPC_IMAGE must be a LoadImage-shaped node"
 
 
+def test_the_shipped_workflow_never_scales_the_photograph():
+    """The shipped graph must resize nothing: smaller frames go through at 1:1
+    (the Python side handles the VAE grid and the 4 MP tiling), and a scaler
+    in the graph is how the band used to come back at the size the scaler
+    wanted instead of the size the photograph has.  So no scaling node may be
+    in it, and the size probe and the latent both read straight off
+    `BPC_IMAGE`.
+    """
+    import os
+    from pc import inpaint as FILL
+
+    path = os.path.join(os.path.dirname(FILL.DEFAULT_WORKFLOW),
+                        "flux2-klein-border-patrol.json")
+    wf = FILL.load_workflow(path)          # also asserts it is the API format
+    assert "131" not in wf, "ImageScaleDownToSize must not be in the graph"
+    assert "sg75_80" not in wf, "ImageScaleToTotalPixels must not be in the graph"
+    for nid, node in wf.items():
+        assert "Scale" not in node.get("class_type", ""), \
+            f"node {nid} ({node['class_type']}) must not resize the photograph"
+    n_img = FILL._find(wf, FILL.TITLE_IMAGE)
+    assert wf["100"]["inputs"]["image"] == [n_img, 0], \
+        "GetImageSize must read the size of what was uploaded"
+    assert wf["201"]["class_type"] == "ComfyMathExpression"
+    assert "4000000" in wf["201"]["inputs"]["expression"]
+    assert wf["220"]["class_type"] == "ComfySwitchNode", \
+        "lazy input switch must guard the >4MP quadrant branch"
+    assert wf["240"]["class_type"] == "ComfySwitchNode", \
+        "lazy output switch must guard quadrant reassembly"
+    assert wf["sg75_64"]["class_type"] == "KSampler", \
+        "the shipped graph must use the standard KSampler node"
+    assert wf["sg75_64"]["inputs"]["steps"] == 4 and wf["sg75_64"]["inputs"]["cfg"] == 1, \
+        "Flux 2 Klein 9B distilled runs at 4 steps, cfg 1"
+    assert wf["sg75_75"]["class_type"] == "LoraLoaderModelOnly", \
+        "the shipped graph must load the Flux 2 Klein consistency LoRA v2"
+    assert "consistency-V2" in wf["sg75_75"]["inputs"]["lora_name"]
+    assert wf["sg75_64"]["inputs"]["model"] == ["sg75_75", 0], \
+        "KSampler must consume the LoRA-patched model"
+
+
+def test_comfyui_aligns_drifted_output_before_compositing():
+    """A small global translation drift from an edit model must be counter-
+    shifted on the unmasked pixels before pasting so architectural lines do not
+    step across the hole boundary."""
+    import cv2
+    from pc import inpaint as FILL
+
+    # Build a high-contrast geometric scene so phase correlation is exact.
+    h, w = 256, 320
+    src = np.full((h, w, 3), 40, np.uint8)
+    for x in range(40, w - 20, 40):
+        cv2.line(src, (x, 0), (x, h), (220, 220, 220), 4)
+    for y in range(40, h - 20, 40):
+        cv2.line(src, (0, y), (w, y), (180, 180, 180), 4)
+    hole = np.zeros((h, w), bool)
+    hole[:, :48] = True
+
+    # Simulate a +5 px right, -3 px up drift in the returned edit image.
+    M = np.array([[1.0, 0.0, 5.0], [0.0, 1.0, -3.0]], dtype=np.float32)
+    drifted = cv2.warpAffine(src, M, (w, h), borderMode=cv2.BORDER_REPLICATE)
+    before_err = float(np.mean(np.abs(drifted[~hole].astype(float) - src[~hole].astype(float))))
+    aligned = FILL._align_to_source(drifted, src, hole)
+    after_err = float(np.mean(np.abs(aligned[~hole].astype(float) - src[~hole].astype(float))))
+    assert after_err < before_err * 0.25, \
+        f"alignment should remove the 5px/-3px drift: before={before_err:.1f}, after={after_err:.1f}"
+
+
+def test_a_frame_that_fits_one_pass_runs_natively_and_calls_comfyui_once():
+    """At or under the 4 MP threshold the photograph is sent at its own size
+    -- never upscaled -- and exactly one pass runs.  The size the (mock)
+    server receives is the size the photograph had.
+    """
+    import cv2
+    import json
+    from pc import inpaint as FILL
+
+    bgr = _photo(256, 320)                  # 0.08 MP: already on the 32-px grid
+    hole = np.zeros((256, 320), bool)
+    hole[:32, :] = True                     # a band across the top
+
+    prompts, uploads = 0, []
+
+    def http(url, data=None, headers=None, timeout=30.0):
+        nonlocal prompts
+        if url.endswith("/upload/image"):
+            _head, _, rest = (data or b"").partition(b"\r\n\r\n")
+            png, _, _ = rest.partition(b"\r\n--")
+            uploads.append(cv2.imdecode(np.frombuffer(png, np.uint8), cv2.IMREAD_COLOR))
+            return json.dumps({"name": f"up{len(uploads)}.png"}).encode()
+        if url.endswith("/prompt"):
+            prompts += 1
+            return json.dumps({"prompt_id": f"p{prompts}"}).encode()
+        if "/history/" in url:
+            return json.dumps({f"p{prompts}": {"status": {"completed": True},
+                               "outputs": {"3": {"images": [
+                                   {"filename": "o.png", "type": "output"}]}}}}).encode()
+        ok, buf = cv2.imencode(".png", np.full((256, 320, 3), 90, np.uint8))
+        return buf.tobytes()
+
+    wf = {"1": {"class_type": "LoadImage", "inputs": {"image": ""},
+                "_meta": {"title": FILL.TITLE_IMAGE}},
+          "3": {"class_type": "SaveImage", "inputs": {"images": ["1", 0]},
+                "_meta": {"title": "out"}}}
+
+    orig_http, orig_load = FILL._http, FILL.load_workflow
+    FILL._http = http
+    FILL.load_workflow = lambda *a, **k: json.loads(json.dumps(wf))
+    try:
+        out = FILL._fill_comfy(bgr, hole, Settings().replace(fill="comfyui"))
+    finally:
+        FILL._http, FILL.load_workflow = orig_http, orig_load
+
+    assert prompts == 1, f"one frame under the threshold runs one pass, not {prompts}"
+    assert len(uploads) == 1
+    assert uploads[0].shape[:2] == bgr.shape[:2], \
+        "the photograph is sent at its own size, never upscaled"
+    assert np.array_equal(out[~hole], bgr[~hole]), "a photographed pixel moved"
+
+
 def test_a_masked_workflow_still_gets_its_mask():
     """The inpainting half of the contract, with no shipped graph behind it.
 
@@ -152,6 +270,7 @@ def test_a_masked_workflow_still_gets_its_mask():
     inpainting graph is the whole reason the branch exists, and a branch no
     shipped file exercises is one nobody would notice breaking.
     """
+    import cv2
     import json
     import numpy as np
     from pc.config import Settings
@@ -172,7 +291,10 @@ def test_a_masked_workflow_still_gets_its_mask():
 
     def http(url, data=None, headers=None, timeout=30.0):
         if url.endswith("/upload/image"):
-            uploaded.append(len(data or b""))
+            _head, _, rest = (data or b"").partition(b"\r\n\r\n")
+            png, _, _ = rest.partition(b"\r\n--")
+            uploaded.append(__import__("cv2").imdecode(np.frombuffer(png, np.uint8),
+                                                       cv2.IMREAD_COLOR))
             return json.dumps({"name": f"up{len(uploaded)}.png"}).encode()
         if url.endswith("/prompt"):
             posted.update(json.loads(data.decode())["prompt"])
@@ -180,7 +302,9 @@ def test_a_masked_workflow_still_gets_its_mask():
         if "/history/" in url:
             return json.dumps({"p1": {"status": {"completed": True}, "outputs": {
                 "3": {"images": [{"filename": "o.png", "type": "output"}]}}}}).encode()
-        ok, buf = __import__("cv2").imencode(".png", bgr)
+        # The shipped graph scales nothing, so what comes back is what went in,
+        # at the (padded) size it went in at.
+        ok, buf = __import__("cv2").imencode(".png", uploaded[-1])
         return buf.tobytes()
 
     orig_http, orig_load = FILL._http, FILL.load_workflow
@@ -196,6 +320,58 @@ def test_a_masked_workflow_still_gets_its_mask():
     assert posted["2"]["inputs"]["image"] == "up2.png", posted["2"]
     # And the guarantee that does not depend on the mask being honoured.
     assert (out[hole == False] == bgr[hole == False]).all(),         "a photographed pixel moved"
+
+
+def test_a_big_frame_is_sent_whole_and_padded_to_32px_for_workflow_tiling():
+    """Frames over 4 MP are sent whole in a single ComfyUI call (padded to a
+    multiple of 32 px, never scaled or split in Python) so the ComfyUI
+    workflow's own lazy 4-quadrant branch handles the split."""
+    import cv2
+    import json
+    from pc import inpaint as FILL
+
+    bgr = _photo(2003, 2401)                  # > 4 MP, odd dimensions
+    hole = np.zeros((2003, 2401), bool)
+    hole[:, :200] = True
+
+    prompts, uploads = 0, []
+
+    def http(url, data=None, headers=None, timeout=30.0):
+        nonlocal prompts
+        if url.endswith("/upload/image"):
+            _head, _, rest = (data or b"").partition(b"\r\n\r\n")
+            png, _, _ = rest.partition(b"\r\n--")
+            uploads.append(cv2.imdecode(np.frombuffer(png, np.uint8), cv2.IMREAD_COLOR))
+            return json.dumps({"name": f"up{len(uploads)}.png"}).encode()
+        if url.endswith("/prompt"):
+            prompts += 1
+            return json.dumps({"prompt_id": f"p{prompts}"}).encode()
+        if "/history/" in url:
+            return json.dumps({f"p{prompts}": {"status": {"completed": True}, "outputs": {
+                "3": {"images": [{"filename": "o.png", "type": "output"}]}}}}).encode()
+        ok, buf = cv2.imencode(".png", np.full(uploads[-1].shape, 150, np.uint8))
+        return buf.tobytes()
+
+    wf = {"1": {"class_type": "LoadImage", "inputs": {"image": ""},
+                "_meta": {"title": FILL.TITLE_IMAGE}},
+          "3": {"class_type": "SaveImage", "inputs": {"images": ["1", 0]},
+                "_meta": {"title": "out"}}}
+
+    orig_http, orig_load = FILL._http, FILL.load_workflow
+    FILL._http = http
+    FILL.load_workflow = lambda *a, **k: json.loads(json.dumps(wf))
+    try:
+        out = FILL._fill_comfy(bgr, hole, Settings().replace(fill="comfyui"))
+    finally:
+        FILL._http, FILL.load_workflow = orig_http, orig_load
+
+    assert prompts == 1, f"workflow handles >4MP tiling itself, so 1 pass, not {prompts}"
+    assert len(uploads) == 1
+    uh, uw = uploads[0].shape[:2]
+    assert uh % 32 == 0 and uw % 32 == 0, f"uploaded frame must be 32-px padded: {uw}x{uh}"
+    assert uh >= 2003 and uw >= 2401, "must pad, never downscale"
+    assert out.shape == bgr.shape
+    assert np.array_equal(out[~hole], bgr[~hole]), "a photographed pixel moved"
 
 
 def test_an_editor_export_is_rejected_with_the_fix_in_the_message():
@@ -264,47 +440,38 @@ def test_telea_fills_the_band_and_leaves_the_rest_alone():
     assert not np.array_equal(out[:24], img[:24]), "inside the hole something must"
 
 
-def test_comfyui_gets_a_primed_band_not_a_padded_one():
+def test_comfyui_gets_a_flat_grey_band_not_a_padded_one():
     """What a generator sees in the hole must be neither black nor the
-    resampler's streaks.  Both are bad starting points in opposite ways: black
-    reads as content, and the streaks are the artifact that cost this project
-    two wrong conclusions.  Here the hole is filled by the TELEA fallback, then
-    pulled halfway to grey so the structure TELEA invents alongside it does not
-    survive.  LaMa is pinned off: the band under assertion is deterministically
-    TELEA's, on a machine with LaMa installed as well as on one without.
+    resampler's streaks, nor a fill model's own smears.  The live A/B on Flux
+    2 Klein 9B Edit kept a LaMa/TELEA blend's greenish artefacts in the band,
+    while a 100% flat mid-grey came back as clean, photorealistic texture --
+    so the prime is exactly `PRIME_GREY` inside the hole and nothing else,
+    with no fill model loaded at all: the same answer on a machine with LaMa
+    installed as on one without.
     """
-    import cv2
     import numpy as np
     from pc import inpaint as FILL
 
     rng = np.random.default_rng(3)
-    img = cv2.GaussianBlur((rng.random((200, 300, 3)) * 255).astype(np.uint8), (31, 31), 0)
+    img = (rng.random((200, 300, 3)) * 255).astype(np.uint8)
     mask = np.zeros((200, 300), np.uint8)
     mask[:30, :] = 255
     inside = mask > 0
 
-    saved = FILL._lama_probe
-    try:
-        FILL._lama_probe = lambda: (False, RuntimeError("pinned off"))
-        out = FILL._prime_for_generation(img, mask)
-        assert np.array_equal(out[~inside], img[~inside]), "outside the hole is untouched"
-        assert not np.array_equal(out[inside], img[inside]), "inside the hole is primed"
-        assert abs(float(out[inside].mean()) - FILL.PRIME_GREY) < 12, "pulled towards grey"
-        plain = cv2.inpaint(img, mask, 3, cv2.INPAINT_TELEA)
-        assert out[inside].std() < plain[inside].std(), "grey flattens telea's invented structure"
-        assert np.array_equal(FILL._prime_for_generation(img, np.zeros_like(mask)), img), \
-            "no hole, no work"
-    finally:
-        FILL._lama_probe = saved
+    out = FILL._prime_for_generation(img, mask)
+    assert (out[inside] == FILL.PRIME_GREY).all(), \
+        "the default prime is a flat mid-grey, not a blend of a fill"
+    assert np.array_equal(out[~inside], img[~inside]), "outside the hole is untouched"
+    assert np.array_equal(FILL._prime_for_generation(img, np.zeros_like(mask)), img), \
+        "no hole, no work"
 
 
-def test_the_primed_band_uses_lama_when_it_is_available():
-    """LaMa importable, model loadable: the priming must ask IT, not TELEA.
-    A model that paints the hole a constant (200, 200, 200) is unmistakable
-    after the grey blend: the band is flat at exactly 0.5*200 + 0.5*128 = 164
-    and the model was the one that primed it -- TELEA, given this same
-    photograph, lands near the boundary colour (~128), nowhere near 164."""
-    import cv2
+def test_the_solid_grey_prime_does_not_consult_the_lama_model():
+    """Even with LaMa installed and loadable, the default prime must not touch
+    it: the A/B that set `PRIME_MIX` to 1.0 is exactly the finding that the
+    model's own fill smears were what the generator kept in the band, so the
+    prime is a flat mid-grey with zero model calls.
+    """
     import numpy as np
     from PIL import Image
     from pc import inpaint as FILL
@@ -321,61 +488,21 @@ def test_the_primed_band_uses_lama_when_it_is_available():
              FILL._load_lama, FILL._lama_probe)
     try:
         FILL._lama_probe = lambda: (True, None)
-        fake = Fake()                 # short-circuits _lama_model without importing torch
+        fake = Fake()                 # would prime the band if the prime asked it
         FILL._LAMA = fake
         FILL._pick_device = lambda requested="": "cpu"
 
         rng = np.random.default_rng(3)
-        img = cv2.GaussianBlur((rng.random((200, 300, 3)) * 255).astype(np.uint8), (31, 31), 0)
+        img = (rng.random((200, 300, 3)) * 255).astype(np.uint8)
         mask = np.zeros((200, 300), np.uint8)
         mask[:30, :] = 255
         inside = mask > 0
 
         out = FILL._prime_for_generation(img, mask)
-        assert fake.calls == 1, "the model is the one that primes the band"
+        assert fake.calls == 0, "a flat prime asks no model to prime the band"
+        assert (out[inside] == FILL.PRIME_GREY).all(), \
+            "the band is exactly PRIME_GREY, not the model's fill"
         assert np.array_equal(out[~inside], img[~inside]), "outside the hole is untouched"
-        want = 0.5 * 200.0 + 0.5 * FILL.PRIME_GREY
-        assert abs(float(out[inside].mean()) - want) < 0.5, \
-            "the model's fill, pulled halfway to grey, landed"
-        assert float(out[inside].std()) < 1.0, "the model's flat fill stayed flat"
-    finally:
-        (FILL._LAMA, FILL._LAMA_DEVICE, FILL.LAMA_NOTE, FILL._pick_device,
-         FILL._load_lama, FILL._lama_probe) = saved
-
-
-def test_a_lama_that_fails_to_load_is_a_silent_telea_prime():
-    """LaMa importable but broken (the loader blows up): priming must still
-    produce a band -- exactly the old TELEA prime -- without an error of any
-    kind, because a primed band is a nicety, not a requirement."""
-    import cv2
-    import numpy as np
-    from pc import inpaint as FILL
-
-    def boom(dev):
-        raise RuntimeError("weights download failed")
-
-    saved = (FILL._LAMA, FILL._LAMA_DEVICE, FILL.LAMA_NOTE, FILL._pick_device,
-             FILL._load_lama, FILL._lama_probe)
-    try:
-        FILL._lama_probe = lambda: (True, None)
-        FILL._LAMA, FILL._LAMA_DEVICE = None, None
-        FILL._pick_device = lambda requested="": "cpu"
-        FILL._load_lama = boom
-
-        rng = np.random.default_rng(7)
-        img = (rng.random((96, 128, 3)) * 255).astype(np.uint8)
-        mask = np.zeros((96, 128), np.uint8)
-        mask[:24, :] = 255
-        inside = mask > 0
-
-        out = FILL._prime_for_generation(img, mask)      # must not raise
-        radius = max(3, int(min(img.shape[:2]) * 0.01))
-        telea = cv2.inpaint(img, mask, radius, cv2.INPAINT_TELEA)
-        want = (telea * (1.0 - FILL.PRIME_MIX) + FILL.PRIME_GREY * FILL.PRIME_MIX)
-        assert np.array_equal(out[~inside], img[~inside]), "outside the hole is untouched"
-        assert np.array_equal(out[inside], want[inside].clip(0, 255).astype(np.uint8)), \
-            "the fallback is exactly the old TELEA prime"
-        assert not FILL._LAMA, "a failed load leaves no cached model behind"
     finally:
         (FILL._LAMA, FILL._LAMA_DEVICE, FILL.LAMA_NOTE, FILL._pick_device,
          FILL._load_lama, FILL._lama_probe) = saved
@@ -434,7 +561,7 @@ def test_the_shipped_edit_workflow_carries_the_titles_the_code_writes_into():
     from pc import inpaint as FILL
 
     path = os.path.join(os.path.dirname(FILL.DEFAULT_WORKFLOW),
-                        "flux2-klein-edit-nomask.json")
+                        "flux2-klein-border-patrol.json")
     assert os.path.isfile(path), "the edit-model workflow ships with the project"
     wf = FILL.load_workflow(path)          # also asserts it is the API format
     assert FILL._find(wf, FILL.TITLE_IMAGE), "BPC_IMAGE is where the photo goes"
@@ -667,7 +794,7 @@ def test_the_indicator_names_the_workflow_and_says_when_nobody_chose_it():
 
     def load(path=""):
         seen["path"] = path
-        return graph(with_mask="mask" not in os.path.basename(path))
+        return graph(with_mask="inpaint" in os.path.basename(path))
 
     orig_http, orig_load = FILL._http, FILL.load_workflow
     FILL._http, FILL.load_workflow = serve, load

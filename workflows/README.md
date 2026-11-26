@@ -4,7 +4,7 @@ One ships, and it is the edit-model shape:
 
 | file | model shape | needs a mask |
 |---|---|---|
-| `flux2-klein-edit-nomask.json` | **edit model**: image + instruction | no |
+| `flux2-klein-border-patrol.json` | **edit model**: Flux 2 Klein 9B (4-step, lazy >4MP 4-quadrant) | no |
 
 There were two. The other, `flux-klein-outpaint.json`, was an inpainting graph
 (image + mask + prompt) **and it was the unnamed default**, so an edit model
@@ -19,7 +19,7 @@ Two things follow.
 still takes any graph and "connected" without saying *to what* is that failure
 waiting to happen again:
 
-    ComfyUI 0.34.0, workflow: flux2-klein-edit-nomask.json, edit-model,
+    ComfyUI 0.34.0, workflow: flux2-klein-border-patrol.json, edit-model,
     every model present
 
 and when nobody has picked, it says so rather than staying quiet:
@@ -34,18 +34,19 @@ and `test_a_masked_workflow_still_gets_its_mask` builds its own graph so the
 branch cannot rot unnoticed.
 
 An edit model has nowhere to put a mask, so the *band itself* carries the
-information. PC primes it before uploading -- TELEA propagates the
-boundary colour inwards and the result is pulled halfway to mid grey -- and the
-prompt says `remove grey border`. `docs/outpaint-band-example.jpg` is what that
-looks like before priming: a corrected frame whose rotation opened a flat grey
-band at the edges.
+information. PC fills it with a flat mid-grey before uploading -- a live A/B
+on Flux 2 Klein 9B Edit showed the model keeps a LaMa/TELEA fill's own smears
+in the band, while a 100% flat mid-grey comes back as clean, photorealistic
+texture -- and the prompt says `remove grey border`. `docs/outpaint-band-example.jpg`
+is what that looks like before priming: a corrected frame whose rotation opened
+a flat grey band at the edges.
 
 Either way the guarantee is the same and does not depend on the workflow
 honouring anything: PC composites the returned image back through the hole and
 nowhere else, so a model that repaints the whole frame still cannot move a
 photographed pixel.
 
-`flux2-klein-edit-nomask.json` was produced by flattening a ComfyUI *subgraph*
+`flux2-klein-border-patrol.json` was produced by flattening a ComfyUI *subgraph*
 export -- the editor stores such a node as an opaque UUID type, and its 17 inner
 nodes had to be inlined and their positional widget values named against the
 running server's `/object_info`. Worth knowing if you ever need to do it again:
@@ -60,11 +61,12 @@ usable workflows -- `/prompt` cannot take an editor export -- which is why they
 do not live in this folder.
 
 
-**The shipped graph names three files your ComfyUI probably does not have:**
+**The shipped graph names four files your ComfyUI probably does not have:**
 
 | node | input | change it to |
 |---|---|---|
-| `UNETLoader` | `flux-2-klein-9b-fp8.safetensors` | whatever your `models/unet` holds |
+| `UNETLoader` | `flux-2-klein-9b.safetensors` | whatever your `models/unet` holds |
+| `LoraLoaderModelOnly` | `Klein\Flux2-Klein-9B-consistency-V2.safetensors` | Flux 2 Klein 9B consistency LoRA v2 in `models/loras` (`strength_model: 0.7`) |
 | `CLIPLoader` | `qwen_3_8b_fp8mixed.safetensors` | the encoder **that model** wants |
 | `VAELoader` | `flux2-vae.safetensors` | your FLUX.2 VAE |
 
@@ -117,8 +119,11 @@ the run produced.
 
 ## What PC does with the result
 
-It pastes it **into the hole and nowhere else**. The generated frame is resized
-to the output, and the composite ramps its alpha inside the hole mask, so every
+It pastes it **into the hole and nowhere else**. A frame at or under 4 MP is
+sent at its own size and the result lands pixel for pixel on the frame; a
+bigger frame is generated as four overlapping quadrants (each pass at most 4 MP,
+quadrants the hole does not reach are skipped) and blended across the overlap.
+Either way the composite applies the result only inside the hole mask, so every
 pixel that came off the sensor survives bit for bit no matter what the model
 returned. A workflow that changes the whole image -- an upscaler, a relight, a
 style transfer -- will therefore appear to do almost nothing. That is deliberate:

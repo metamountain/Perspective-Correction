@@ -52,8 +52,9 @@ class _ComfyMixin:
         win.configure(bg=INK["bg"])
         win.title("ComfyUI settings")
         win.transient(self)
-        win.protocol("WM_DELETE_WINDOW", win.withdraw)
+        win.protocol("WM_DELETE_WINDOW", self._cancel_comfy)
         self._w_comfy = win
+        self._comfy_on_cancel = None
         body = ttk.Frame(win, padding=(10, 8))
         body.pack(fill="both", expand=True)
 
@@ -110,12 +111,45 @@ class _ComfyMixin:
                                           wraplength=440, justify="left")
         self.lbl_comfy_detail.pack(fill="x", pady=(8, 0))
 
+        btns = ttk.Frame(body)
+        btns.pack(fill="x", pady=(10, 0))
+        self.btn_comfy_cancel = ttk.Button(btns, text="Cancel", command=self._cancel_comfy)
+        self.btn_comfy_cancel.pack(side="right", padx=(6, 0))
+        self.btn_comfy_ok = ttk.Button(btns, text="OK", command=self._ok_comfy)
+        self.btn_comfy_ok.pack(side="right")
+
         self._sync_comfy_workflow_label()
         self._fill_model_lists(self._comfy_models_cache)
         self._show_comfy_state(*self._comfy_state)
         win.withdraw()
 
-    def _open_comfy(self):
+    def _ok_comfy(self):
+        """Confirm ComfyUI settings and hide the popup without reverting fill."""
+        self._comfy_on_cancel = None
+        try:
+            prefs.save(comfy_url=self._comfy_url())
+        except Exception:
+            pass
+        try:
+            self._w_comfy.withdraw()
+        except Exception:
+            pass
+
+    def _cancel_comfy(self):
+        """Close the popup and invoke any pending cancel callback (e.g. revert fill)."""
+        cb = getattr(self, "_comfy_on_cancel", None)
+        self._comfy_on_cancel = None
+        try:
+            self._w_comfy.withdraw()
+        except Exception:
+            pass
+        if cb is not None:
+            try:
+                cb()
+            except Exception:
+                pass
+
+    def _open_comfy(self, on_cancel=None):
         """Open the ComfyUI settings window.
 
         Kept as a name because three callers mean "let them at the ComfyUI
@@ -123,6 +157,7 @@ class _ComfyMixin:
         The window is built once and kept withdrawn, so this only shows it --
         the verdict and model lists from the last test are still there.
         """
+        self._comfy_on_cancel = on_cancel
         try:
             self._w_comfy.deiconify()
             self._w_comfy.lift()

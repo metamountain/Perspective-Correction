@@ -114,7 +114,7 @@ that band is ever touched — the photographed pixels survive bit for bit.
 
 ![The corrected frame before priming: the never-photographed band around the edges is a flat grey border, which the edit model is asked to replace.](docs/outpaint-band-example.jpg)
 
-The shipped graph (`workflows/flux2-klein-edit-nomask.json`) is written for an
+The shipped graph (`workflows/flux2-klein-border-patrol.json`) is written for an
 **edit model**: it receives the corrected frame and a text instruction, with no
 mask node. Before the request goes out, PC **primes** the band: LaMa fills the
 hole (telea on any failure) and blends the result 50 % to mid grey, so the
@@ -479,7 +479,7 @@ output:
   --comfy-url COMFY_URL
   --comfy-workflow FILE.json
                         ComfyUI API-format workflow; empty takes the bundled
-                        workflows/flux2-klein-edit-nomask.json, which is
+                        workflows/flux2-klein-border-patrol.json, which is
                         written for an edit model (image + instruction). An
                         inpainting model wants a different graph and no
                         example ships -- build it in ComfyUI, Save (API

@@ -1,0 +1,785 @@
+{
+ "76": {
+  "class_type": "LoadImage",
+  "inputs": {
+   "image": "bpc_input.png"
+  },
+  "_meta": {
+   "title": "BPC_IMAGE"
+  }
+ },
+ "100": {
+  "class_type": "GetImageSize",
+  "inputs": {
+   "image": [
+    "76",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "GetImageSize (Input)"
+  }
+ },
+ "201": {
+  "class_type": "ComfyMathExpression",
+  "inputs": {
+   "expression": "a * b > 4000000",
+   "values.a": [
+    "100",
+    0
+   ],
+   "values.b": [
+    "100",
+    1
+   ]
+  },
+  "_meta": {
+   "title": "Is > 4 MP"
+  }
+ },
+ "202": {
+  "class_type": "ComfyMathExpression",
+  "inputs": {
+   "expression": "min(a, (ceil(a / 32) + 8) * 16)",
+   "values.a": [
+    "100",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "Crop Width (x16 + Overlap)"
+  }
+ },
+ "203": {
+  "class_type": "ComfyMathExpression",
+  "inputs": {
+   "expression": "min(a, (ceil(a / 32) + 8) * 16)",
+   "values.a": [
+    "100",
+    1
+   ]
+  },
+  "_meta": {
+   "title": "Crop Height (x16 + Overlap)"
+  }
+ },
+ "204": {
+  "class_type": "ComfyMathExpression",
+  "inputs": {
+   "expression": "a - b",
+   "values.a": [
+    "100",
+    0
+   ],
+   "values.b": [
+    "202",
+    1
+   ]
+  },
+  "_meta": {
+   "title": "Offset X"
+  }
+ },
+ "205": {
+  "class_type": "ComfyMathExpression",
+  "inputs": {
+   "expression": "a - b",
+   "values.a": [
+    "100",
+    1
+   ],
+   "values.b": [
+    "203",
+    1
+   ]
+  },
+  "_meta": {
+   "title": "Offset Y"
+  }
+ },
+ "206": {
+  "class_type": "ComfyMathExpression",
+  "inputs": {
+   "expression": "min(128, max(0, 2 * b - a))",
+   "values.a": [
+    "100",
+    0
+   ],
+   "values.b": [
+    "202",
+    1
+   ]
+  },
+  "_meta": {
+   "title": "Feather X"
+  }
+ },
+ "207": {
+  "class_type": "ComfyMathExpression",
+  "inputs": {
+   "expression": "min(128, max(0, 2 * b - a))",
+   "values.a": [
+    "100",
+    1
+   ],
+   "values.b": [
+    "203",
+    1
+   ]
+  },
+  "_meta": {
+   "title": "Feather Y"
+  }
+ },
+ "210": {
+  "class_type": "ImageCrop",
+  "inputs": {
+   "image": [
+    "76",
+    0
+   ],
+   "width": [
+    "202",
+    1
+   ],
+   "height": [
+    "203",
+    1
+   ],
+   "x": 0,
+   "y": 0
+  },
+  "_meta": {
+   "title": "Crop Q1 (Top-Left)"
+  }
+ },
+ "211": {
+  "class_type": "ImageCrop",
+  "inputs": {
+   "image": [
+    "76",
+    0
+   ],
+   "width": [
+    "202",
+    1
+   ],
+   "height": [
+    "203",
+    1
+   ],
+   "x": [
+    "204",
+    1
+   ],
+   "y": 0
+  },
+  "_meta": {
+   "title": "Crop Q2 (Top-Right)"
+  }
+ },
+ "212": {
+  "class_type": "ImageCrop",
+  "inputs": {
+   "image": [
+    "76",
+    0
+   ],
+   "width": [
+    "202",
+    1
+   ],
+   "height": [
+    "203",
+    1
+   ],
+   "x": 0,
+   "y": [
+    "205",
+    1
+   ]
+  },
+  "_meta": {
+   "title": "Crop Q3 (Bottom-Left)"
+  }
+ },
+ "213": {
+  "class_type": "ImageCrop",
+  "inputs": {
+   "image": [
+    "76",
+    0
+   ],
+   "width": [
+    "202",
+    1
+   ],
+   "height": [
+    "203",
+    1
+   ],
+   "x": [
+    "204",
+    1
+   ],
+   "y": [
+    "205",
+    1
+   ]
+  },
+  "_meta": {
+   "title": "Crop Q4 (Bottom-Right)"
+  }
+ },
+ "214": {
+  "class_type": "ImageBatch",
+  "inputs": {
+   "image1": [
+    "210",
+    0
+   ],
+   "image2": [
+    "211",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "Batch Top"
+  }
+ },
+ "215": {
+  "class_type": "ImageBatch",
+  "inputs": {
+   "image1": [
+    "212",
+    0
+   ],
+   "image2": [
+    "213",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "Batch Bottom"
+  }
+ },
+ "216": {
+  "class_type": "ImageBatch",
+  "inputs": {
+   "image1": [
+    "214",
+    0
+   ],
+   "image2": [
+    "215",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "Batch 4 Quadrants"
+  }
+ },
+ "217": {
+  "class_type": "ImpactImageBatchToImageList",
+  "inputs": {
+   "image": [
+    "216",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "Quadrants to List"
+  }
+ },
+ "220": {
+  "class_type": "ComfySwitchNode",
+  "inputs": {
+   "switch": [
+    "201",
+    2
+   ],
+   "on_false": [
+    "76",
+    0
+   ],
+   "on_true": [
+    "217",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "Switch Input (<=4MP vs 4Q)"
+  }
+ },
+ "sg75_100": {
+  "class_type": "GetImageSize",
+  "inputs": {
+   "image": [
+    "220",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "GetImageSize (Active)"
+  }
+ },
+ "sg75_70": {
+  "class_type": "UNETLoader",
+  "inputs": {
+   "unet_name": "flux-2-klein-9b.safetensors",
+   "weight_dtype": "default"
+  },
+  "_meta": {
+   "title": "UNETLoader"
+  }
+ },
+ "sg75_75": {
+  "class_type": "LoraLoaderModelOnly",
+  "inputs": {
+   "lora_name": "Klein\\Flux2-Klein-9B-consistency-V2.safetensors",
+   "strength_model": 0.7,
+   "model": [
+    "sg75_70",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "LoraLoaderModelOnly"
+  }
+ },
+ "sg75_71": {
+  "class_type": "CLIPLoader",
+  "inputs": {
+   "clip_name": "qwen_3_8b_fp8mixed.safetensors",
+   "type": "flux2",
+   "device": "default"
+  },
+  "_meta": {
+   "title": "CLIPLoader"
+  }
+ },
+ "sg75_72": {
+  "class_type": "VAELoader",
+  "inputs": {
+   "vae_name": "flux2-vae.safetensors"
+  },
+  "_meta": {
+   "title": "VAELoader"
+  }
+ },
+ "sg75_74": {
+  "class_type": "CLIPTextEncode",
+  "inputs": {
+   "clip": [
+    "sg75_71",
+    0
+   ],
+   "text": "remove grey border\n"
+  },
+  "_meta": {
+   "title": "BPC_PROMPT"
+  }
+ },
+ "sg75_67": {
+  "class_type": "CLIPTextEncode",
+  "inputs": {
+   "clip": [
+    "sg75_71",
+    0
+   ],
+   "text": ""
+  },
+  "_meta": {
+   "title": "CLIP Text Encode (Negative Prompt)"
+  }
+ },
+ "sg75_123": {
+  "class_type": "VAEEncode",
+  "inputs": {
+   "pixels": [
+    "220",
+    0
+   ],
+   "vae": [
+    "sg75_72",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "VAEEncode"
+  }
+ },
+ "sg75_124": {
+  "class_type": "ReferenceLatent",
+  "inputs": {
+   "conditioning": [
+    "sg75_74",
+    0
+   ],
+   "latent": [
+    "sg75_123",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "ReferenceLatent (Pos)"
+  }
+ },
+ "sg75_122": {
+  "class_type": "ReferenceLatent",
+  "inputs": {
+   "conditioning": [
+    "sg75_67",
+    0
+   ],
+   "latent": [
+    "sg75_123",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "ReferenceLatent (Neg)"
+  }
+ },
+ "sg75_66": {
+  "class_type": "EmptyFlux2LatentImage",
+  "inputs": {
+   "width": [
+    "sg75_100",
+    0
+   ],
+   "height": [
+    "sg75_100",
+    1
+   ],
+   "batch_size": 1
+  },
+  "_meta": {
+   "title": "EmptyFlux2LatentImage"
+  }
+ },
+ "sg75_64": {
+  "class_type": "KSampler",
+  "inputs": {
+   "seed": 192774551144773,
+   "steps": 4,
+   "cfg": 1,
+   "sampler_name": "euler",
+   "scheduler": "simple",
+   "denoise": 1,
+   "model": [
+    "sg75_75",
+    0
+   ],
+   "positive": [
+    "sg75_124",
+    0
+   ],
+   "negative": [
+    "sg75_122",
+    0
+   ],
+   "latent_image": [
+    "sg75_66",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "KSampler"
+  }
+ },
+ "sg75_65": {
+  "class_type": "VAEDecode",
+  "inputs": {
+   "samples": [
+    "sg75_64",
+    0
+   ],
+   "vae": [
+    "sg75_72",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "VAEDecode"
+  }
+ },
+ "230": {
+  "class_type": "ImageListToImageBatch",
+  "inputs": {
+   "images": [
+    "sg75_65",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "List to Batch"
+  }
+ },
+ "231": {
+  "class_type": "ImageFromBatch",
+  "inputs": {
+   "image": [
+    "230",
+    0
+   ],
+   "batch_index": 0,
+   "length": 1
+  },
+  "_meta": {
+   "title": "Q1 Out"
+  }
+ },
+ "232": {
+  "class_type": "ImageFromBatch",
+  "inputs": {
+   "image": [
+    "230",
+    0
+   ],
+   "batch_index": 1,
+   "length": 1
+  },
+  "_meta": {
+   "title": "Q2 Out"
+  }
+ },
+ "233": {
+  "class_type": "ImageFromBatch",
+  "inputs": {
+   "image": [
+    "230",
+    0
+   ],
+   "batch_index": 2,
+   "length": 1
+  },
+  "_meta": {
+   "title": "Q3 Out"
+  }
+ },
+ "234": {
+  "class_type": "ImageFromBatch",
+  "inputs": {
+   "image": [
+    "230",
+    0
+   ],
+   "batch_index": 3,
+   "length": 1
+  },
+  "_meta": {
+   "title": "Q4 Out"
+  }
+ },
+ "250": {
+  "class_type": "SolidMask",
+  "inputs": {
+   "value": 1.0,
+   "width": [
+    "202",
+    1
+   ],
+   "height": [
+    "203",
+    1
+   ]
+  },
+  "_meta": {
+   "title": "Tile Solid Mask"
+  }
+ },
+ "251": {
+  "class_type": "FeatherMask",
+  "inputs": {
+   "mask": [
+    "250",
+    0
+   ],
+   "left": [
+    "206",
+    1
+   ],
+   "top": 0,
+   "right": 0,
+   "bottom": 0
+  },
+  "_meta": {
+   "title": "Feather Q2 (Left)"
+  }
+ },
+ "252": {
+  "class_type": "FeatherMask",
+  "inputs": {
+   "mask": [
+    "250",
+    0
+   ],
+   "left": 0,
+   "top": [
+    "207",
+    1
+   ],
+   "right": 0,
+   "bottom": 0
+  },
+  "_meta": {
+   "title": "Feather Q3 (Top)"
+  }
+ },
+ "253": {
+  "class_type": "FeatherMask",
+  "inputs": {
+   "mask": [
+    "250",
+    0
+   ],
+   "left": [
+    "206",
+    1
+   ],
+   "top": [
+    "207",
+    1
+   ],
+   "right": 0,
+   "bottom": 0
+  },
+  "_meta": {
+   "title": "Feather Q4 (Left+Top)"
+  }
+ },
+ "235": {
+  "class_type": "ImageCompositeMasked",
+  "inputs": {
+   "destination": [
+    "76",
+    0
+   ],
+   "source": [
+    "231",
+    0
+   ],
+   "x": 0,
+   "y": 0,
+   "resize_source": false
+  },
+  "_meta": {
+   "title": "Paste Q1"
+  }
+ },
+ "236": {
+  "class_type": "ImageCompositeMasked",
+  "inputs": {
+   "destination": [
+    "235",
+    0
+   ],
+   "source": [
+    "232",
+    0
+   ],
+   "mask": [
+    "251",
+    0
+   ],
+   "x": [
+    "204",
+    1
+   ],
+   "y": 0,
+   "resize_source": false
+  },
+  "_meta": {
+   "title": "Paste Q2 (Feathered)"
+  }
+ },
+ "237": {
+  "class_type": "ImageCompositeMasked",
+  "inputs": {
+   "destination": [
+    "236",
+    0
+   ],
+   "source": [
+    "233",
+    0
+   ],
+   "mask": [
+    "252",
+    0
+   ],
+   "x": 0,
+   "y": [
+    "205",
+    1
+   ],
+   "resize_source": false
+  },
+  "_meta": {
+   "title": "Paste Q3 (Feathered)"
+  }
+ },
+ "238": {
+  "class_type": "ImageCompositeMasked",
+  "inputs": {
+   "destination": [
+    "237",
+    0
+   ],
+   "source": [
+    "234",
+    0
+   ],
+   "mask": [
+    "253",
+    0
+   ],
+   "x": [
+    "204",
+    1
+   ],
+   "y": [
+    "205",
+    1
+   ],
+   "resize_source": false
+  },
+  "_meta": {
+   "title": "Paste Q4 (Feathered)"
+  }
+ },
+ "240": {
+  "class_type": "ComfySwitchNode",
+  "inputs": {
+   "switch": [
+    "201",
+    2
+   ],
+   "on_false": [
+    "sg75_65",
+    0
+   ],
+   "on_true": [
+    "238",
+    0
+   ]
+  },
+  "_meta": {
+   "title": "Switch Output (<=4MP vs 4Q)"
+  }
+ },
+ "9": {
+  "class_type": "SaveImage",
+  "inputs": {
+   "images": [
+    "240",
+    0
+   ],
+   "filename_prefix": "BPC_fill"
+  },
+  "_meta": {
+   "title": "BPC_OUTPUT"
+  }
+ }
+}
