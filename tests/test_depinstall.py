@@ -142,6 +142,69 @@ def test_the_installer_does_not_call_lama_ok_when_torch_failed():
     assert any(mod.LAMA[0] in s and "MISSING" in s for s in said), said[-6:]
 
 
+def _installer():
+    """tools/install_deps.py loaded by path, the way the test above does."""
+    import importlib.util
+    here = os.path.dirname(os.path.abspath(__file__))
+    spec = importlib.util.spec_from_file_location(
+        "install_deps_probe2", os.path.join(here, "..", "tools", "install_deps.py"))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def _main(mod, argv):
+    """main() with every external effect mocked away: no network, no
+    subprocess, no venv. Returns ``(rc, said, pip_calls)``."""
+    import types
+    said, asked = [], []
+    mod.say = lambda msg="": said.append(msg)
+    mod.MAC, mod.WIN = False, True             # the running Python, no venv
+    mod.tk_problem = lambda: None
+    mod.subprocess = types.SimpleNamespace(call=lambda *a, **k: 0)
+    mod.pip = lambda py, args: (asked.append(list(args)) or True)
+    rc = mod.main(argv)
+    return rc, said, asked
+
+
+def test_the_core_installer_downloads_nothing_when_every_core_module_is_present():
+    mod = _installer()
+    mod.has_module = lambda py, name: True
+    rc, said, asked = _main(mod, [])
+    assert rc == 0
+    assert asked == [], f"pip ran although everything is present: {asked}"
+    assert "core: all packages already present (0 MB downloaded)" in said
+
+
+def test_the_core_installer_asks_pip_only_for_the_missing_module():
+    mod = _installer()
+    mod.has_module = lambda py, name: name != "cv2"
+    rc, _said, asked = _main(mod, [])
+    assert rc == 0
+    cv2_spec = next(spec for name, spec in mod.CORE if name == "cv2")
+    assert asked == [[cv2_spec]], asked
+
+
+def test_the_default_run_skips_every_large_backend_and_the_flags_opt_them_in():
+    mod = _installer()
+    mod.has_module = lambda py, name: False    # a bare interpreter
+    rc, _said, asked = _main(mod, [])
+    assert rc == 0
+    # the whole default is core plus tkinterdnd2: no mlsd, no torch, no lama
+    assert len(asked) == 2 and asked[1] == mod.DND[1], asked
+    flat = " ".join(" ".join(a) for a in asked)
+    assert "ai-edge-litert" not in flat and "simple-lama-inpainting" not in flat
+    assert not any(a == mod.TORCH[1] for a in asked)
+
+    rc, _said, asked = _main(mod, ["--mlsd"])
+    assert rc == 0 and mod.MLSD[1] in asked and mod.LAMA[1] not in asked
+    rc, _said, asked = _main(mod, ["--lama"])
+    assert rc == 0 and mod.TORCH[1] in asked and mod.LAMA[1] in asked
+    rc, _said, asked = _main(mod, ["--full"])
+    assert rc == 0 and mod.MLSD[1] in asked and mod.TORCH[1] in asked \
+        and mod.LAMA[1] in asked
+
+
 def test_the_weights_count_only_when_complete_and_survive_a_scanner_lock():
     """A short download must never look installed, and a virus scanner holding
     the fresh file (WinError 32 on the first real install) must not fail it."""

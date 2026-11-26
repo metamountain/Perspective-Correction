@@ -64,7 +64,10 @@ pip install --no-deps simple-lama-inpainting   optional: lama fill (default; tel
 ```
 
 Python 3.9+, numpy, OpenCV, Pillow, piexif. The GUI needs Tkinter.
-`--no-deps` matters: lama's pins otherwise break OpenCV.
+The default install is minimal -- no torch, ~46 MB of downloads -- and it
+probes the target Python first, so packages it already has are skipped (0 MB).
+`--mlsd` / `--lama` / `--full` add the optional backends; `--no-deps` matters:
+lama's pins otherwise break OpenCV.
 `python perspective_correction.py --doctor` says what is present. Everything
 optional is also installed from inside the program: the **deps** button at the
 bottom right lists only what is missing and installs what you tick.
@@ -78,9 +81,8 @@ small; almost everything is the optional AI parts, and most of that is torch:
 | numpy, OpenCV, Pillow, piexif | 190 MB | everything |
 | tkinterdnd2 | 3 MB | drag photos onto the window |
 | ai-edge-litert | 59 MB | the mlsd detector |
-| torch | 0.25–0.7 GB (CPU, macOS) · 3.1 GB (Windows CUDA) | lama, GeoCalib, SAM |
+| torch | 0.25–0.7 GB (CPU, macOS) · 3.1 GB (Windows CUDA) | lama, SAM |
 | lama + its weights | 206 MB | the good fill for the empty corners (telea fills without it) |
-| GeoCalib + its weights | 117 MB | a better focal guess for photos without EXIF |
 | SAM 2.1 small + transformers | 306 MB | box select (`s`) |
 
 With all of it on Windows that is about 4 GB, of which the program is under

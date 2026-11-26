@@ -3,11 +3,21 @@
 Run by a double-click on ``Install (macOS).command`` / ``Install (Windows).bat``,
 or by hand:
 
-    python tools/install_deps.py            core + the small optional packages
-    python tools/install_deps.py --lama     also the lama fill (torch: ~1 GB)
+    python tools/install_deps.py            the core, plus drag and drop
+    python tools/install_deps.py --mlsd     add the mlsd detector (ai-edge-litert)
+    python tools/install_deps.py --lama     also the lama fill (torch if missing)
+    python tools/install_deps.py --full     both of the above
 
-Written 2026-10-23; the Windows path is tested, the macOS path has never run
-on a Mac. Linux users install from requirements.txt themselves (user).
+The default is deliberately minimal: the four core packages plus the small
+tkinterdnd2 package. The larger backends (mlsd, lama with torch) are opt-in,
+and the in-app deps button offers them too. OpenCV comes from the headless
+wheel on every platform: the window is Tkinter and the program never calls
+``cv2.imshow``, so the GUI flavour is dead weight. Each package is probed in
+the target Python first and pip installs only what is missing, so a system
+Python that already carries the core downloads nothing and is left untouched.
+
+The Windows path is tested, the macOS path has never run on a Mac. Linux users
+install from requirements.txt by hand.
 
 Where it installs differs on purpose:
 
@@ -44,8 +54,7 @@ MIN_TK = 8.6
 MAC = sys.platform == "darwin"
 WIN = os.name == "nt"
 
-# (label, pip arguments). Each is tried on its own so one missing wheel
-# (ai-edge-litert has none for some OS + Python pairs) costs only it.
+
 def _load_depinstall():
     """The one package list, shared with the in-app 'deps' button. Loaded by
     path: importing the `pc` package pulls in numpy, which may not be here yet."""
@@ -57,9 +66,30 @@ def _load_depinstall():
 
 
 _DI = _load_depinstall()
-OPTIONAL = [(p["label"], p["pip"]) for p in _DI.PACKAGES if p["key"] != "lama"]
-LAMA = next((p["label"], p["pip"]) for p in _DI.PACKAGES if p["key"] == "lama")
-TORCH = (_DI.TORCH["label"], _DI.TORCH["pip"])
+
+# (label, pip arguments, import name) for the optional packages the installer
+# knows. Each is tried on its own so one missing wheel (ai-edge-litert has
+# none for some OS + Python pairs) costs only it, and each is probed first:
+# a module that is already there is reported, never reinstalled.
+_BY_KEY = {p["key"]: p for p in _DI.PACKAGES}
+_BY_KEY["torch"] = _DI.TORCH
+
+
+def _step(key):
+    p = _BY_KEY[key]
+    return (p["label"], p["pip"], p["module"])
+
+
+DND = _step("dnd")
+MLSD = _step("mlsd")
+LAMA = _step("lama")
+TORCH = _step("torch")
+
+# (import name, pip specification) of the four core packages. Probed before
+# pip is asked, so a present module is left untouched and a Python that
+# already carries the whole core downloads nothing.
+CORE = [("numpy", "numpy>=1.24"), ("cv2", "opencv-python-headless>=4.8"),
+        ("PIL", "Pillow>=10.0"), ("piexif", "piexif>=1.1.3")]
 
 
 def say(msg=""):
@@ -130,13 +160,19 @@ def pip(py, args):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
+    ap.add_argument("--mlsd", action="store_true",
+                    help="also install the mlsd detector (ai-edge-litert, ~10 MB)")
     ap.add_argument("--lama", action="store_true",
                     help="also install the lama fill, and torch if it is missing "
                          "(large download)")
+    ap.add_argument("--full", action="store_true",
+                    help="install every optional package: --mlsd plus --lama")
     ap.add_argument("--venv", default=os.path.join(ROOT, ".venv") if MAC else None,
                     help="install into this venv (default: .venv on macOS, "
                          "the running Python on Windows)")
     a = ap.parse_args(argv)
+    a.mlsd = a.mlsd or a.full
+    a.lama = a.lama or a.full
 
     if not (MAC or WIN):
         say("This installer covers macOS and Windows. On Linux: "
@@ -175,23 +211,32 @@ def main(argv=None):
         py = sys.executable
         say("installing into this Python (the one the launchers start)")
 
-    say("\n== core (requirements.txt)")
-    if not pip(py, ["-r", os.path.join(ROOT, "requirements.txt")]):
+    say("\n== core (numpy, cv2, Pillow, piexif)")
+    missing = [spec for mod, spec in CORE if not has_module(py, mod)]
+    if not missing:
+        say("core: all packages already present (0 MB downloaded)")
+    elif not pip(py, missing):
         say("!! the core install failed -- read the pip output above.")
         return 1
 
     launcher_ok = WIN and build_launcher(py)
 
-    steps = list(OPTIONAL)
+    steps = [DND]
+    if a.mlsd:
+        steps.append(MLSD)
     if a.lama:
         # An installed torch is left alone: on Windows it is often a CUDA build
         # that a plain `pip install torch` would not reproduce.
         if not has_module(py, "torch"):
             steps.append(TORCH)
         steps.append(LAMA)
-    done, missed = [], []
-    for label, args in steps:
+    present, done, missed = [], [], []
+    for label, args, module in steps:
         say(f"\n== optional: {label}")
+        if has_module(py, module):
+            say(f"already installed: {label}")
+            present.append(label)
+            continue
         if args == LAMA[1] and TORCH[0] in missed:
             # The in-app button skips it the same way: lama installs fine
             # with --no-deps and then cannot run, and the summary called it ok.
@@ -210,13 +255,20 @@ def main(argv=None):
     subprocess.call([py, os.path.join(ROOT, "perspective_correction.py"), "--doctor"], cwd=ROOT)
 
     say("\n== summary")
-    say("core: installed")
+    say("core: installed" if missing
+        else "core: already present, left untouched")
+    for label in present:
+        say(f"optional present: {label} (already installed)")
     for label in done:
         say(f"optional ok:      {label}")
     for label in missed:
         say(f"optional MISSING: {label} (the program runs without it)")
+    if not a.mlsd:
+        say("mlsd not asked for (the lsd detector runs without it); "
+            "add it with --mlsd or --full")
     if not a.lama:
-        say("lama fill not asked for (telea is used without it); add it with --lama")
+        say("lama fill not asked for (telea is used without it); "
+            "add it with --lama or --full")
     if launcher_ok:
         say("\nStart: double-click 'Perspective Correction.exe', or")
     else:
