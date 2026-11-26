@@ -120,6 +120,12 @@ class _SetupMixin:
             except tk.TclError:
                 pass
         rows = DI.catalogue()
+        # Asked of the WHOLE catalogue, before the filter drops the installed
+        # rows: the tick handler must not auto-tick torch for a torch that is
+        # not in the menu -- its checkbutton is never built, so the var lookup
+        # raised KeyError 'torch' (measured: torch installed, lama missing,
+        # tick "lama").
+        torch_there = any(r["key"] == "torch" and r["installed"] for r in rows)
         # Only what is missing is offered; what is installed is one line,
         # for reference.
         have = [r for r in rows if r["installed"]]
@@ -139,14 +145,14 @@ class _SetupMixin:
         ttk.Label(body, text="Tick what to install. Nothing is installed unasked.").pack(anchor="w")
         self._deps_vars = {}
         boxes = {}
-        torch_there = any(r["key"] == "torch" and r["installed"] for r in rows)
 
         def ticked(key):
             # lama/SAM without torch cannot run: take torch along, and
             # keep it while anything that needs it is ticked.
             v = self._deps_vars
             if key in DI.NEEDS_TORCH and v[key].get() and not torch_there:
-                v["torch"].set(True)
+                if "torch" in v:
+                    v["torch"].set(True)
             if key == "torch" and not v["torch"].get():
                 for k in DI.NEEDS_TORCH:
                     if k in v and not rows_by[k]["installed"]:
