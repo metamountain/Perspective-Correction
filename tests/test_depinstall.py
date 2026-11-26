@@ -76,29 +76,27 @@ def test_lama_is_skipped_when_torch_cannot_be_had_and_pip_is_not_asked_for_it():
 
 
 def test_the_menu_lists_every_package_with_torch_first_and_says_what_is_installed():
-    """The deps menu's rows (user 2026-10-24: "soll nicht blind installieren").
-    torch comes before what needs it; GeoCalib counts as installed only with
-    its weights complete; every row says what it is for."""
-    real, real_w, real_s = DI.present, DI.geocalib_weights_ok, DI.sam2_weights_ok
+    """The deps menu's rows: torch comes before what needs it, SAM counts as
+    installed only with its weights complete, and every row says what it is
+    for."""
+    real, real_s = DI.present, DI.sam2_weights_ok
     try:
         DI.present = lambda m: False
         rows = DI.catalogue()
         keys = [r["key"] for r in rows]
-        assert keys.index("torch") < keys.index("lama") < keys.index("geocalib"), keys
+        assert keys.index("torch") < keys.index("lama") < keys.index("sam"), keys
         assert not any(r["installed"] for r in rows) and all(r["purpose"] for r in rows)
         DI.present = lambda m: True
-        DI.geocalib_weights_ok = lambda path=None: False
         DI.sam2_weights_ok = lambda folder=None: False
         inst = {r["key"]: r["installed"] for r in DI.catalogue()}
-        assert inst["geocalib"] is False and inst["torch"] and inst["lama"], inst
-        DI.geocalib_weights_ok = lambda path=None: True
+        assert inst["sam"] is False and inst["torch"] and inst["lama"], inst
         DI.sam2_weights_ok = lambda folder=None: True
         not_inst = [r["key"] for r in DI.catalogue() if not r["installed"]]
         assert not not_inst, f"rows not counted as installed: {not_inst}"
-        assert [i["key"] for i in DI.in_order([{"key": "dnd"}, {"key": "geocalib"},
-                                               {"key": "torch"}])] == ["torch", "geocalib", "dnd"]
+        assert [i["key"] for i in DI.in_order([{"key": "dnd"}, {"key": "sam"},
+                                               {"key": "torch"}])] == ["torch", "sam", "dnd"]
     finally:
-        DI.present, DI.geocalib_weights_ok, DI.sam2_weights_ok = real, real_w, real_s
+        DI.present, DI.sam2_weights_ok = real, real_s
 
 
 def test_the_explanations_name_the_cause_a_user_can_act_on():
@@ -153,8 +151,8 @@ def test_the_weights_count_only_when_complete_and_survive_a_scanner_lock():
         with open(src, "wb") as f:
             f.write(b"x" * 1000)
         url = pathlib.Path(src).as_uri()
-        dst = os.path.join(d, "models", "geocalib", "pinhole.tar")
-        ok, why = DI.fetch_geocalib_weights(dst, url, size=2000)
+        dst = os.path.join(d, "weights.tar")
+        ok, why = DI.fetch_file(dst, url, 2000)
         assert not ok and "incomplete" in why and not os.path.exists(dst), why
         assert not os.path.exists(dst + ".part")
         real, calls = os.replace, []
@@ -166,11 +164,11 @@ def test_the_weights_count_only_when_complete_and_survive_a_scanner_lock():
             return real(a, b)
         DI.os.replace = locked
         try:
-            ok, why = DI.fetch_geocalib_weights(dst, url, size=1000)
+            ok, why = DI.fetch_file(dst, url, 1000)
         finally:
             DI.os.replace = real
         assert ok and os.path.getsize(dst) == 1000 and len(calls) == 3, (ok, why, calls)
-        assert DI.fetch_geocalib_weights(dst, url, size=1000) == (True, "")
+        assert DI.fetch_file(dst, url, 1000) == (True, "")
 
 
 def test_sam_counts_as_installed_only_with_every_file_at_its_size():

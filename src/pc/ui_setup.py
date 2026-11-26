@@ -102,7 +102,7 @@ class _SetupMixin:
         Every MISSING package is a row; what is installed is one line for
         reference and is never offered.  Telea is named as the built-in fill,
         nothing is ticked, and only what the user ticks is installed.  Ticking
-        lama or GeoCalib ticks torch too while torch is missing (both cannot
+        lama or SAM ticks torch too while torch is missing (neither can
         run without it).
 
         The work runs on a daemon thread with the button label as the
@@ -142,7 +142,7 @@ class _SetupMixin:
         torch_there = any(r["key"] == "torch" and r["installed"] for r in rows)
 
         def ticked(key):
-            # lama/GeoCalib without torch cannot run: take torch along, and
+            # lama/SAM without torch cannot run: take torch along, and
             # keep it while anything that needs it is ticked.
             v = self._deps_vars
             if key in DI.NEEDS_TORCH and v[key].get() and not torch_there:
@@ -206,9 +206,6 @@ class _SetupMixin:
             ok, text = DI.summary(results)
             if any(item["key"] == "lama" and good for item, good, _r in results):
                 text += "\n\nlama fills from the next preview or save on."
-            if any(item["key"] == "geocalib" and good for item, good, _r in results):
-                text += ("\n\nGeoCalib guesses the focal length from the next photograph "
-                         "on, where neither EXIF nor the lines decide it.")
             (messagebox.showinfo if ok else messagebox.showwarning)(
                 "Optional packages", text, parent=self)
             self._notify("optional packages installed" if ok

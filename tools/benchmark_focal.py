@@ -14,8 +14,6 @@ strip on that face.
 
     python tools/benchmark_focal.py [N] [--no-ha] [--csv out.csv] [--seed S]
 
-With GeoCalib installed it is used; PC_LEARNED_FOCAL=0 compares without it.
-
 N scenes (default 48), seeded, so before/after runs see the same scenes.
 """
 from __future__ import annotations

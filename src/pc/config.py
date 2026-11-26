@@ -63,9 +63,6 @@ class Settings:
     focal_35mm: float = 0.0             # >0 overrides EXIF
     default_focal_35mm: float = 28.0    # same generic default darktable uses
     use_exif_focal: bool = True
-    # GeoCalib's learned focal guess, used only when nothing geometric decided
-    # and only when it is installed (pc.geocal, the deps button).
-    learned_focal: bool = True
     focal_estimate: str = "vp"          # off | vp | horizon | both
     # 1.0 = off (2026-09-26, user-directed: "Dämpfungen sollen so weit wie
     # möglich weg"). Was 0.85, measured on the 40-scene benchmark to cut
@@ -155,13 +152,6 @@ class Settings:
     # end is defensible over the middle on the evidence that exists.
     keep_pixels: float = 0.5
     max_area_ratio: float = 9.0         # crop canvas to this × source area (trim fill zones)
-
-    # ---- distortion correction (Stage 0) ----
-    # "off" = no undistortion.  "lensfun" = look up the EXIF make/model/lens in
-    # the Lensfun database and apply a per-pixel remap before the perspective
-    # warp.  Only fires when EXIF identifies the camera; EXIF-stripped images
-    # fall through unchanged (Stage 1 AnyCalib is the no-EXIF route, not yet).
-    undistort: str = "off"              # off | lensfun
 
     # ---- output ----
     crop: str = "auto"                  # auto | aspect | inside | none

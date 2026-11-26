@@ -102,10 +102,8 @@ def analyse(bgr, settings, exif_focal_px=None, image_path="", strip=None):
     exif_small = exif_focal_px * scale if exif_focal_px else None
     # A strip means the caller has pointed at one facade, which is exactly the
     # precondition the two-vanishing-point rotation needs.
-    from . import geocal
     m = M.estimate(vert, horiz, gw, gh, settings, exif_small,
-                   single_facade=strip is not None,
-                   learned_focal=geocal.provider(bgr, scale, settings))
+                   single_facade=strip is not None)
     if m.f:
         m.f = m.f / scale                       # back to full resolution pixels
     m.detect_info = info
@@ -328,21 +326,8 @@ def process(src_path, dst_path, settings, debug_dir=None, dry_run=False,
                          _label(base, total_deg), info=info)
         return Result(status=OK, reason="dry run", seconds=time.time() - t0, **base)
 
-    # Stage 0 distortion correction: when a lens profile is available, remap
-    # the source to undo radial distortion before the perspective warp.  The
-    # undistortion map and H are composed into a single resample (Stage 5 rule).
-    undist_map = None
-    if settings.undistort == "lensfun":
-        from . import distortion as DIST
-        undist_map = DIST.undistort_map(src.exif_bytes, w, h)
-        if undist_map:
-            base["diagnostics"]["undistort"] = "lensfun"
-
     try:
-        if undist_map is not None:
-            out = W.apply_undistorted(bgr, H_total, ow, oh, settings, undist_map)
-        else:
-            out = W.apply(bgr, H_total, ow, oh, settings)
+        out = W.apply(bgr, H_total, ow, oh, settings)
         if getattr(settings, "fill", "none") not in ("", "none"):
             from . import inpaint as FILL
             hole = W.filled_region(H_total, w, h, ow, oh)

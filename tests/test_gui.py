@@ -1945,18 +1945,18 @@ def test_a_missing_lama_is_said_and_never_switched_to_telea_silently():
 
 
 def test_the_deps_button_is_a_menu_that_installs_only_what_is_ticked():
-    """User, 2026-10-24: "soll nicht blind installieren. torch lama telea geo".
-    The button opens a menu of what is MISSING ("dont ask for things that are
-    already there"): nothing ticked, installed ones only named, telea named as
-    built in; ticking lama takes torch along while torch is missing;
-    only the ticked rows are installed, on a thread, with a summary after."""
+    """The button opens a menu of the packages that are MISSING: nothing is
+    ticked, installed ones are named once and never offered, telea is named as
+    built in; ticking lama or SAM takes torch along while torch is missing
+    (unticking torch unticks them); only the ticked rows are installed, on a
+    thread, with a summary after."""
     from pc import depinstall as DI
     from pc import gui as GUI
 
     def row(key, installed):
         return {"key": key, "label": key + " pkg", "module": "x", "pip": [],
                 "size": "~1 MB", "installed": installed, "purpose": key + " for"}
-    cat = [row("torch", False), row("lama", False), row("geocalib", False),
+    cat = [row("torch", False), row("lama", False), row("sam", False),
            row("mlsd", True), row("dnd", False)]
     shown, ran = [], []
     saved = (DI.catalogue, DI.install, GUI.messagebox.showinfo, GUI.messagebox.showwarning)
@@ -1994,13 +1994,13 @@ def test_the_deps_button_is_a_menu_that_installs_only_what_is_ticked():
         app._deps_boxes["torch"].invoke()
         assert not v["torch"].get() and not v["lama"].get()
         app._deps_boxes["dnd"].invoke()
-        app._deps_boxes["geocalib"].invoke()
+        app._deps_boxes["sam"].invoke()
         app._deps_go()
         assert app.btn_deps.cget("text") in ("installing", "1/3")
         _settle_until(app, lambda: shown, n=150)
-        assert ran == [["torch", "geocalib", "dnd"]], ran
+        assert ran == [["torch", "sam", "dnd"]], ran
         assert shown and shown[0].startswith("ok: torch pkg"), shown
-        assert "GeoCalib guesses the focal" in shown[0], shown
+        assert "ok: sam pkg" in shown[0], shown
         assert app.btn_deps.cget("text") == "deps" and not app._deps_busy
         # Everything there: says so, opens no menu, installs nothing.
         for r in cat:

@@ -3567,9 +3567,6 @@ class App(_ROOT_CLASS, _AfterOwner, _SetupMixin, _ComfyMixin):
                         "      (needs torch: a large download, minutes)\n"
                         "  mlsd -- a second line detector\n"
                         "  tkinterdnd2 -- drag photos onto the window\n"
-                        "  GeoCalib -- a better focal guess for photos\n"
-                        "      without EXIF (offered only once torch is\n"
-                        "      there; ~140 MB)\n"
                         "Lists what is missing and asks first. Without them\n"
                         "the program still works (telea fills instead).")
         # The whole batch, rudimentary: one button, which turns into its own
