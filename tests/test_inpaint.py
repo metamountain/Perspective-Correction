@@ -268,8 +268,10 @@ def test_comfyui_gets_a_primed_band_not_a_padded_one():
     """What a generator sees in the hole must be neither black nor the
     resampler's streaks.  Both are bad starting points in opposite ways: black
     reads as content, and the streaks are the artifact that cost this project
-    two wrong conclusions.  Primed with TELEA for colour, then pulled halfway to
-    grey so the structure TELEA invents alongside it does not survive.
+    two wrong conclusions.  Here the hole is filled by the TELEA fallback, then
+    pulled halfway to grey so the structure TELEA invents alongside it does not
+    survive.  LaMa is pinned off: the band under assertion is deterministically
+    TELEA's, on a machine with LaMa installed as well as on one without.
     """
     import cv2
     import numpy as np
@@ -281,14 +283,102 @@ def test_comfyui_gets_a_primed_band_not_a_padded_one():
     mask[:30, :] = 255
     inside = mask > 0
 
-    out = FILL._prime_for_generation(img, mask)
-    assert np.array_equal(out[~inside], img[~inside]), "outside the hole is untouched"
-    assert not np.array_equal(out[inside], img[inside]), "inside the hole is primed"
-    assert abs(float(out[inside].mean()) - FILL.PRIME_GREY) < 12, "pulled towards grey"
-    plain = cv2.inpaint(img, mask, 3, cv2.INPAINT_TELEA)
-    assert out[inside].std() < plain[inside].std(), "grey flattens telea's invented structure"
-    assert np.array_equal(FILL._prime_for_generation(img, np.zeros_like(mask)), img), \
-        "no hole, no work"
+    saved = FILL._lama_probe
+    try:
+        FILL._lama_probe = lambda: (False, RuntimeError("pinned off"))
+        out = FILL._prime_for_generation(img, mask)
+        assert np.array_equal(out[~inside], img[~inside]), "outside the hole is untouched"
+        assert not np.array_equal(out[inside], img[inside]), "inside the hole is primed"
+        assert abs(float(out[inside].mean()) - FILL.PRIME_GREY) < 12, "pulled towards grey"
+        plain = cv2.inpaint(img, mask, 3, cv2.INPAINT_TELEA)
+        assert out[inside].std() < plain[inside].std(), "grey flattens telea's invented structure"
+        assert np.array_equal(FILL._prime_for_generation(img, np.zeros_like(mask)), img), \
+            "no hole, no work"
+    finally:
+        FILL._lama_probe = saved
+
+
+def test_the_primed_band_uses_lama_when_it_is_available():
+    """LaMa importable, model loadable: the priming must ask IT, not TELEA.
+    A model that paints the hole a constant (200, 200, 200) is unmistakable
+    after the grey blend: the band is flat at exactly 0.5*200 + 0.5*128 = 164
+    and the model was the one that primed it -- TELEA, given this same
+    photograph, lands near the boundary colour (~128), nowhere near 164."""
+    import cv2
+    import numpy as np
+    from PIL import Image
+    from pc import inpaint as FILL
+
+    class Fake:
+        def __init__(self):
+            self.calls = 0
+
+        def __call__(self, img, mask):
+            self.calls += 1
+            return Image.new("RGB", img.size, (200, 200, 200))
+
+    saved = (FILL._LAMA, FILL._LAMA_DEVICE, FILL.LAMA_NOTE, FILL._pick_device,
+             FILL._load_lama, FILL._lama_probe)
+    try:
+        FILL._lama_probe = lambda: (True, None)
+        fake = Fake()                 # short-circuits _lama_model without importing torch
+        FILL._LAMA = fake
+        FILL._pick_device = lambda requested="": "cpu"
+
+        rng = np.random.default_rng(3)
+        img = cv2.GaussianBlur((rng.random((200, 300, 3)) * 255).astype(np.uint8), (31, 31), 0)
+        mask = np.zeros((200, 300), np.uint8)
+        mask[:30, :] = 255
+        inside = mask > 0
+
+        out = FILL._prime_for_generation(img, mask)
+        assert fake.calls == 1, "the model is the one that primes the band"
+        assert np.array_equal(out[~inside], img[~inside]), "outside the hole is untouched"
+        want = 0.5 * 200.0 + 0.5 * FILL.PRIME_GREY
+        assert abs(float(out[inside].mean()) - want) < 0.5, \
+            "the model's fill, pulled halfway to grey, landed"
+        assert float(out[inside].std()) < 1.0, "the model's flat fill stayed flat"
+    finally:
+        (FILL._LAMA, FILL._LAMA_DEVICE, FILL.LAMA_NOTE, FILL._pick_device,
+         FILL._load_lama, FILL._lama_probe) = saved
+
+
+def test_a_lama_that_fails_to_load_is_a_silent_telea_prime():
+    """LaMa importable but broken (the loader blows up): priming must still
+    produce a band -- exactly the old TELEA prime -- without an error of any
+    kind, because a primed band is a nicety, not a requirement."""
+    import cv2
+    import numpy as np
+    from pc import inpaint as FILL
+
+    def boom(dev):
+        raise RuntimeError("weights download failed")
+
+    saved = (FILL._LAMA, FILL._LAMA_DEVICE, FILL.LAMA_NOTE, FILL._pick_device,
+             FILL._load_lama, FILL._lama_probe)
+    try:
+        FILL._lama_probe = lambda: (True, None)
+        FILL._LAMA, FILL._LAMA_DEVICE = None, None
+        FILL._pick_device = lambda requested="": "cpu"
+        FILL._load_lama = boom
+
+        rng = np.random.default_rng(7)
+        img = (rng.random((96, 128, 3)) * 255).astype(np.uint8)
+        mask = np.zeros((96, 128), np.uint8)
+        mask[:24, :] = 255
+        inside = mask > 0
+
+        out = FILL._prime_for_generation(img, mask)      # must not raise
+        radius = max(3, int(min(img.shape[:2]) * 0.01))
+        telea = cv2.inpaint(img, mask, radius, cv2.INPAINT_TELEA)
+        want = (telea * (1.0 - FILL.PRIME_MIX) + FILL.PRIME_GREY * FILL.PRIME_MIX)
+        assert np.array_equal(out[~inside], img[~inside]), "outside the hole is untouched"
+        assert np.array_equal(out[inside], want[inside].clip(0, 255).astype(np.uint8)), \
+            "the fallback is exactly the old TELEA prime"
+        assert not FILL._LAMA, "a failed load leaves no cached model behind"
+    finally:
+        (FILL._LAMA, FILL._LAMA_DEVICE, FILL.LAMA_NOTE, FILL._pick_device,
+         FILL._load_lama, FILL._lama_probe) = saved
 
 
 def test_a_workflow_without_a_mask_node_is_an_edit_model_not_an_error():

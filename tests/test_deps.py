@@ -246,3 +246,70 @@ def test_no_public_module_constant_sits_in_src_without_a_reader():
     assert not dead, (
         "module-level constants with no reader anywhere in the repository:\n  "
         + "\n  ".join(dead))
+
+
+# --------------------------------------------------------------------------
+# doctor hygiene: real versions, and OS text that never reaches the output
+# --------------------------------------------------------------------------
+def test_the_doctor_reports_the_real_piexif_version():
+    """piexif sets no ``__version__``, so a naive probe reads "?" for a
+    perfectly healthy installation.  The doctor must fall back to the
+    distribution metadata and print the real number."""
+    import importlib.metadata
+    try:
+        import piexif  # noqa: F401
+    except ImportError:
+        raise SkipTest("no piexif")  # noqa: F821
+    want = importlib.metadata.version("piexif")
+    assert want != "?"
+    ok, detail = deps._probe("piexif")
+    assert ok and detail == want, (ok, detail)
+    rec = next(r for r in deps.core_status() if r["name"] == "piexif")
+    assert rec["detail"] == want
+
+
+def test_an_unreachable_comfyui_reads_as_plain_english_never_os_text():
+    """A dead ComfyUI URL must come back as a clean "unreachable at <url>",
+    not as the OS's own wording for "connection refused" -- which on a German
+    Windows is a German sentence the doctor cannot translate and the user
+    cannot parse.  Binding and immediately closing a local socket is the
+    deterministic way to make a URL dead."""
+    import socket
+    from pc import inpaint as FILL
+    from pc.config import Settings
+
+    s = socket.socket()
+    s.bind(("127.0.0.1", 0))
+    port = s.getsockname()[1]
+    s.close()
+    st = Settings().replace(comfy_url=f"http://127.0.0.1:{port}")
+    line = FILL.describe("comfyui", st)
+    assert "unreachable" in line, line
+    assert str(port) in line, line
+    assert line.isascii(), f"an OS-localised error leaked into the line: {line!r}"
+
+
+def test_the_doctor_output_is_neutral_english_where_it_counts():
+    """Read the whole doctor output as text: the piexif line carries the real
+    version (not "?"), and the ComfyUI line carries no OS-localised error,
+    whether the server happens to be up on this machine or down."""
+    import contextlib
+    import importlib.metadata
+    import io
+    try:
+        import piexif  # noqa: F401
+    except ImportError:
+        raise SkipTest("no piexif")  # noqa: F821
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        deps.doctor()
+    lines = buf.getvalue().splitlines()
+    pix = [l for l in lines if "piexif" in l]
+    assert pix, "the doctor printed no piexif line"
+    want = importlib.metadata.version("piexif")
+    assert want in pix[0], f"the piexif line does not carry the real version: {pix[0]!r}"
+    assert pix[0].isascii()
+    comfy = [l for l in lines if "comfyui" in l.lower()]
+    assert comfy, "the doctor printed no comfyui line"
+    for l in comfy:
+        assert l.isascii(), f"an OS-localised error leaked into the doctor: {l!r}"

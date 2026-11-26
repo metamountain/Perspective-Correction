@@ -156,9 +156,18 @@ class _AppMixin:
         self.bind_all("<Control-n>", self._next_key)
         self.bind_all("<Control-N>", self._next_key)
         self.bind_all("<Control-Right>", self._next_key)
+        self.bind_all("<Control-z>", self._undo_key)
+        self.bind_all("<Control-Z>", self._undo_key)
+        self.bind_all("<Control-y>", self._redo_key)
+        self.bind_all("<Control-Y>", self._redo_key)
+        self.bind_all("<Control-Shift-Z>", self._redo_key)
         if _MAC:
             self.bind_all("<Command-s>", self._save_key)
             self.bind_all("<Command-n>", self._next_key)
+            self.bind_all("<Command-z>", self._undo_key)
+            self.bind_all("<Command-Z>", self._undo_key)
+            self.bind_all("<Command-y>", self._redo_key)
+            self.bind_all("<Command-Shift-Z>", self._redo_key)
         self.bind_all("<KeyPress-space>", self._space_press)
         self.bind_all("<KeyRelease-space>", self._space_release)
         # A window switch delivers no key release at all: the held-space
@@ -262,7 +271,7 @@ class _AppMixin:
         v.set(not v.get())
         getattr(r, handler_name)()
 
-    # -- review shortcuts: save, next photograph, hold-space peek ------------
+    # -- review shortcuts: save, next, undo, redo, hold-space peek ----------
     def _focus_in_main(self):
         """Does the key belong to this window?
 
@@ -326,6 +335,45 @@ class _AppMixin:
         # being rebuilt, and loading inside that rebuild is asking for a
         # half-dead parent, so the next photograph arrives a beat later.
         self._schedule_after(50, self._open_next_review)
+        return "break"
+
+    def _undo_key(self, _e=None):
+        """Ctrl+Z: one step back in the review's edit history.
+
+        The panel owns the stack and the "nothing to undo" notice
+        (`ReviewPanel._undo`); the window only routes the key, with the
+        same focus rules as every other shortcut here.
+        """
+        if not self._focus_in_main():
+            return
+        w = self.focus_get()
+        if w is not None:
+            try:
+                if w.winfo_class() in _TEXT_FOCUS:
+                    return
+            except Exception:
+                pass
+        r = getattr(self, "review", None)
+        if r is None or getattr(r, "session", None) is None:
+            return
+        r._undo()
+        return "break"
+
+    def _redo_key(self, _e=None):
+        """Ctrl+Y / Ctrl+Shift+Z: one step forward (see `_undo_key`)."""
+        if not self._focus_in_main():
+            return
+        w = self.focus_get()
+        if w is not None:
+            try:
+                if w.winfo_class() in _TEXT_FOCUS:
+                    return
+            except Exception:
+                pass
+        r = getattr(self, "review", None)
+        if r is None or getattr(r, "session", None) is None:
+            return
+        r._redo()
         return "break"
 
     def _space_press(self, _e=None):
@@ -1042,6 +1090,16 @@ class _AppMixin:
         if err:
             msg += " (reasons in pc_errors.log)"
         self._notify(msg)
+        # The status line vanishes in a blink; the counts and the output
+        # folder are what a finished batch is worth reporting, so they get
+        # the one dialog the run allows.  An empty queue (stopped at once)
+        # has nothing to say.
+        if self._batch_total > 0:
+            out_dir = self.v_output.get() or "next to the originals"
+            messagebox.showinfo(
+                "Batch complete",
+                f"Processed: {ok}\nSkipped: {skip}\nErrors: {err}\n\n"
+                f"Output folder: {out_dir}")
 
     def _log_error(self, text):
         """The same file the preview's failures go to."""

@@ -7,9 +7,10 @@ Framework 4) that starts ``pythonw perspective_correction.py --gui`` from its ow
 console window, the mark as its icon, and photographs dropped onto it open in
 the review window.
 
-It is a starter, not a bundle: the Python installation it finds (pythonw on
-PATH, else the py launcher's pyw) runs the code in this folder, so it stays
-in step with every ``git pull``. Run once after cloning:
+It is a starter, not a bundle: the Python installation it finds (the one
+``tools/install_deps.py --venv <dir>`` pinned in ``.pc_python``, else the
+local ``.venv``, else pythonw/pyw on PATH) runs the code in this folder, so
+it stays in step with every ``git pull``. Run once after cloning:
 
     python tools/make_launcher.py
 
@@ -30,6 +31,7 @@ CSC = os.path.join(os.environ.get("WINDIR", r"C:\Windows"),
 
 SOURCE = r'''
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
@@ -49,7 +51,22 @@ static class Launcher {
         }
         string rest = string.Join(" ", args.Select(a => "\"" + a + "\""));
         string cmdline = "\"" + script + "\" --gui " + rest;
-        foreach (string exe in new[] { "pythonw.exe", "pyw.exe" }) {
+        // Three tiers, first one that exists wins: the pythonw.exe that
+        // install_deps.py --venv pinned in .pc_python (one line, quotes
+        // optional), a local .venv beside the code, then pythonw/pyw on PATH.
+        var candidates = new List<string>();
+        string pin = Path.Combine(dir, ".pc_python");
+        if (File.Exists(pin)) {
+            string path = File.ReadAllText(pin).Trim().Trim('\"');
+            if (path.Length > 0 && File.Exists(path))
+                candidates.Add(path);
+        }
+        string venv = Path.Combine(dir, ".venv", "Scripts", "pythonw.exe");
+        if (File.Exists(venv))
+            candidates.Add(venv);
+        candidates.Add("pythonw.exe");
+        candidates.Add("pyw.exe");
+        foreach (string exe in candidates) {
             try {
                 var psi = new ProcessStartInfo(exe, cmdline);
                 psi.WorkingDirectory = dir;
@@ -57,11 +74,12 @@ static class Launcher {
                 Process.Start(psi);
                 return 0;
             } catch (System.ComponentModel.Win32Exception) {
-                // not on PATH -- try the next one
+                // not found -- try the next one
             }
         }
-        MessageBox.Show("No Python found (pythonw.exe or pyw.exe on PATH).\n" +
-                        "Install Python 3.9+ from python.org with \"Add to PATH\".",
+        MessageBox.Show("No Python found (.pc_python, .venv\\Scripts, or pythonw.exe/pyw.exe on PATH).\n" +
+                        "Run: python tools\\install_deps.py --venv <dir>\n" +
+                        "or install Python 3.9+ from python.org with \"Add to PATH\".",
                         "Perspective Correction", MessageBoxButtons.OK, MessageBoxIcon.Error);
         return 1;
     }

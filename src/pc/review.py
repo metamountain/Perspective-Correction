@@ -436,7 +436,9 @@ class ReviewSession(_ReviewCropPlanarMixin):
         that restore needs is captured here -- the GUI keeps only its own Tk
         state -- and every array is copied rather than aliased, so a restore
         that misses one field would leave exactly the edit the double was
-        supposed to take back.
+        supposed to take back.  The current mode and manual angles ride
+        along as well, so undo can take back a slider edit the same way it
+        takes back a line edit.
         """
         return {
             "control_lines": self.control_lines.copy(),
@@ -448,6 +450,11 @@ class ReviewSession(_ReviewCropPlanarMixin):
             "strip": tuple(self.strip) if isinstance(self.strip, (list, tuple)) else self.strip,
             "crop_edges": {k: tuple(v) for k, v in self._crop_edges.items()},
             "crop_is_auto": getattr(self, "crop_is_auto", False),
+            "mode": self.mode,
+            "manual_roll": self.manual_roll,
+            "manual_pitch": self.manual_pitch,
+            "manual_yaw": self.manual_yaw,
+            "manual_focal_35mm": self.manual_focal_35mm,
             "settings": asdict(self.settings),
         }
 
@@ -462,6 +469,13 @@ class ReviewSession(_ReviewCropPlanarMixin):
         self.strip = tuple(snap["strip"]) if isinstance(snap["strip"], (list, tuple)) else snap["strip"]
         self._crop_edges = {k: tuple(v) for k, v in snap["crop_edges"].items()}
         self.crop_is_auto = snap["crop_is_auto"]
+        # Restored before refit so the fit below honours the mode: in AUTO the
+        # fit resyncs the manual values from the model, in MANUAL they survive.
+        self.mode = snap.get("mode", AUTO)
+        self.manual_roll = snap.get("manual_roll", 0.0)
+        self.manual_pitch = snap.get("manual_pitch", 0.0)
+        self.manual_yaw = snap.get("manual_yaw", 0.0)
+        self.manual_focal_35mm = snap.get("manual_focal_35mm", 0.0)
         self.settings = config.Settings(**snap["settings"])
         self.refit()
 

@@ -29,6 +29,7 @@ probed with guarded imports, for the same reason the other optional backends do 
 from __future__ import annotations
 
 import importlib
+import importlib.metadata
 import platform
 import sys
 
@@ -55,12 +56,22 @@ def _probe(name):
     breaks (the simple-lama Pillow-downgrade case) must read as missing, and the
     version string comes for free.  Core packages are already imported by the time
     this runs, so it costs nothing.
+
+    A few packages (piexif) import fine but never set ``__version__``; for those
+    the number comes from the distribution metadata instead, so the doctor line
+    reads the real version rather than "?".
     """
     try:
         mod = importlib.import_module(name)
-        return True, getattr(mod, "__version__", "?")
     except Exception as exc:
         return False, f"{type(exc).__name__}: {exc}"
+    version = getattr(mod, "__version__", None)
+    if not version:
+        try:
+            version = importlib.metadata.version(name)
+        except Exception:
+            version = "?"
+    return True, version
 
 
 def core_status():

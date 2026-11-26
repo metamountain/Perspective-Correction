@@ -182,6 +182,11 @@ class ReviewPanel(tk.Frame, _AfterOwner, _SamMixin, _LoupeMixin, _CropGuidesMixi
     # task: a second window split one photograph across two frames and stole
     # focus on every double-click.  Built once; `load` swaps the photograph
     # into the same widgets.
+    # How many pre-gesture session snapshots to keep for undo: enough to
+    # walk a full session of marks and slider moves back, bounded so a long
+    # sitting cannot pin hundreds of complete session states in memory.
+    UNDO_LIMIT = 30
+
     def __init__(self, master):
         super().__init__(master, background=INK["cross"])
         # The cross: two previews on top, loader and controls below -- divided
@@ -273,6 +278,12 @@ class ReviewPanel(tk.Frame, _AfterOwner, _SamMixin, _LoupeMixin, _CropGuidesMixi
         # Tracking set for all after() IDs scheduled by this panel.
         # Cancelled in destroy() to avoid "invalid command name" on teardown.
         self._after_jobs = set()
+        # Undo/redo: session snapshots taken just before each editing
+        # gesture (see `_push_undo`).  Restoring one re-fits the whole
+        # session, so a stack entry is a complete session state, not the
+        # single value the gesture moved.
+        self._undo_stack = []
+        self._redo_stack = []
         self._show_hint()
 
     def _show_hint(self):
@@ -324,6 +335,10 @@ class ReviewPanel(tk.Frame, _AfterOwner, _SamMixin, _LoupeMixin, _CropGuidesMixi
         self._guide_drag = None
         self._guide_new = None
         self._cross_pull = None
+        # A new photograph is a new gesture: the old one's history would
+        # restore the old picture's lines and angles into this one.
+        self._undo_stack = []
+        self._redo_stack = []
         self._clear_cells()
         try:
             self.session = ReviewSession(path, settings)
@@ -1366,6 +1381,7 @@ class ReviewPanel(tk.Frame, _AfterOwner, _SamMixin, _LoupeMixin, _CropGuidesMixi
         drag keeps up with the hand (see `_redraw`)."""
         if self.session is None:
             return
+        self._push_undo()
         self._slider_dragging = True
 
     def _end_slider_drag(self, _event=None):
@@ -1398,13 +1414,62 @@ class ReviewPanel(tk.Frame, _AfterOwner, _SamMixin, _LoupeMixin, _CropGuidesMixi
         """
         if self.session is None:
             return
+        self._push_undo()
         self.session.use_auto_angles()
         self._sync_from_session()
 
     def _reset(self):
         if self.session is None:
             return
+        self._push_undo()
         self.session.reset_to_auto()
+        self._sync_from_session()
+
+    # -- undo / redo ------------------------------------------------------
+    def _push_undo(self):
+        """Take a session snapshot just before an editing gesture.
+
+        The snapshot is the session's full click-editable state (lines,
+        paint, planar quad, crop, settings, and the mode with its manual
+        angles), so restoring it later takes back everything that gesture
+        changed.  Redo no longer makes sense after a new gesture, so that
+        stack is cleared, and the stack itself is bounded to the
+        UNDO_LIMIT most recent snapshots.
+        """
+        if self.session is None:
+            return
+        self._undo_stack.append(self.session.snapshot())
+        if len(self._undo_stack) > self.UNDO_LIMIT:
+            self._undo_stack.pop(0)
+        self._redo_stack = []
+
+    def _undo(self, _event=None):
+        """One step back: the current state moves to the redo stack, the
+        newest pre-gesture snapshot is restored.  ``_sync_from_session``
+        re-renders both panes and re-syncs every control from it."""
+        if self.session is None:
+            return
+        if not self._undo_stack:
+            self._notify("nothing to undo")
+            return
+        self._redo_stack.append(self.session.snapshot())
+        self.session.restore(self._undo_stack.pop())
+        self._notify("undone")
+        self._sync_from_session()
+
+    def _redo(self, _event=None):
+        """One step forward: the current state moves to the undo stack, the
+        newest restored state is restored again."""
+        if self.session is None:
+            return
+        if not self._redo_stack:
+            self._notify("nothing to redo")
+            return
+        self._undo_stack.append(self.session.snapshot())
+        if len(self._undo_stack) > self.UNDO_LIMIT:
+            self._undo_stack.pop(0)
+        self.session.restore(self._redo_stack.pop())
+        self._notify("redone")
         self._sync_from_session()
 
     # Every drawing tool, and the handler that owns entering and leaving it.

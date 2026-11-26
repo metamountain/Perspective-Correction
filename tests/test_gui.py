@@ -3079,6 +3079,111 @@ def test_ctrl_s_saves_the_photo_on_screen_but_never_inside_a_text_field():
         app.destroy()
 
 
+def test_undo_takes_back_a_slider_edit_and_redo_gives_it_back():
+    """Undo/redo walks the review's edit history on the keyboard: a slider
+    move is one step, Ctrl+Z restores the mode and the angles the estimator
+    found, Ctrl+Y (or Ctrl+Shift+Z) gives the hand edit back.  A key for a
+    text field is the field's, and a new photograph starts a new history."""
+    import math
+    from pc import review as RV
+
+    app = _app()
+    try:
+        _loaded(app, 1600, 1000)
+        r = app.review
+        s = r.session
+        assert r.session is not None
+        assert app.bind_all("<Control-z>"), "Ctrl+Z is not bound"
+
+        roll0, pitch0, f0, _ = s.current_angles()
+
+        # Empty history: both directions say so, and nothing moves.
+        notes = []
+        r._notify = lambda text: notes.append(text)
+        r._undo()
+        assert notes == ["nothing to undo"], notes
+        notes.clear()
+        r._redo()
+        assert notes == ["nothing to redo"], notes
+        del r._notify
+
+        # One gesture: grab the pitch slider and move it five degrees.
+        r.v_pitch.set(math.degrees(pitch0) + 5.0)
+        r._on_slider_press()
+        r._on_slider()
+        _settle(app)
+        assert s.mode == RV.MANUAL, "a slider move is a manual correction"
+        assert len(r._undo_stack) == 1 and r._redo_stack == []
+        _roll, _pitch, _f, _ = s.current_angles()
+        assert abs(_pitch - (pitch0 + math.radians(5.0))) < 0.01
+
+        # Undo: the found angles come back, slider and all.
+        notes = []
+        r._notify = lambda text: notes.append(text)
+        app.focus_force(); app.update()
+        assert app._undo_key() == "break"
+        assert "undone" in notes
+        assert s.mode == RV.AUTO
+        _settle_until(app,
+                      lambda: abs(r.v_pitch.get() - round(math.degrees(pitch0), 2)) < 0.01,
+                      n=150)
+        u_roll, u_pitch, u_f, _ = s.current_angles()
+        assert abs(u_roll - roll0) < 1e-6 and abs(u_pitch - pitch0) < 1e-6
+        assert abs(u_f - f0) < 1.0, "the focal length the estimator found is back"
+
+        # Redo: the hand edit comes back.
+        notes.clear()
+        assert app._redo_key() == "break"
+        assert "redone" in notes
+        assert s.mode == RV.MANUAL
+        _roll, _pitch, _f, _ = s.current_angles()
+        assert abs(_pitch - (pitch0 + math.radians(5.0))) < 1e-3
+
+        # Undo once more, then the history is spent.
+        app._undo_key()
+        notes.clear()
+        r._undo()
+        assert notes == ["nothing to undo"], notes
+        del r._notify
+
+        # Generated events travel the real bind_all chain; a key for a text
+        # field is the field's.
+        calls = []
+        r._undo = lambda *a, **k: calls.append("undo")
+        r._redo = lambda *a, **k: calls.append("redo")
+        app._theme_combo.focus_set(); app.update()
+        app._undo_key()
+        app._redo_key()
+        assert calls == [], "a shortcut in a text field must not touch the review"
+        app.focus_force(); app.update()
+        app.event_generate("<Control-z>"); app.update()
+        app.event_generate("<Control-y>"); app.update()
+        app.event_generate("<Control-Shift-Z>"); app.update()
+        assert calls == ["undo", "redo", "redo"], calls
+        del r._undo
+        del r._redo
+
+        # A new photograph is a new history: the old one is gone with it.
+        # The first photo is dirty (edited, then unedited), so replacing it
+        # offers the save dialog, which here answers "discard".
+        from pc import gui as GUI
+        second = os.path.join(os.path.dirname(ASSET), "1070912stkzg.jpg")
+        assert os.path.exists(second)
+        real = GUI.messagebox.askyesnocancel
+        GUI.messagebox.askyesnocancel = lambda *a, **k: False
+        try:
+            app._add([second])
+            _settle_until(app, lambda: app.review.session is not None
+                          and os.path.basename(app.review.session.path)
+                          == os.path.basename(second), n=600)
+        finally:
+            GUI.messagebox.askyesnocancel = real
+        assert os.path.basename(app.review.session.path) == os.path.basename(second)
+        assert app.review._undo_stack == [] and app.review._redo_stack == []
+    finally:
+        app.destroy()
+
+
 def test_holding_space_peeks_the_original_and_releases_back_to_the_correction():
     """Space held down: the after pane shows the uncorrected original -- the
     before picture itself, fitted into the after field under a faint ORIGINAL

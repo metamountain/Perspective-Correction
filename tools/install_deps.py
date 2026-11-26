@@ -140,6 +140,27 @@ def has_module(py, name):
     return subprocess.call([py, "-c", probe]) == 0
 
 
+def pin_launcher_python(a_venv):
+    """Record an external venv in ``.pc_python`` so the launchers can find it.
+
+    Both launchers know two homes on their own: the venv beside the code and
+    the Python on PATH.  A venv anywhere else is reachable only through this
+    one-line pin (the path of the launcher Python, unquoted), which this
+    installer writes the moment such a venv is the install target.  The
+    default local .venv needs no pin -- the launchers already look there.
+    """
+    if not a_venv:
+        return
+    if os.path.normcase(os.path.abspath(a_venv)) == \
+            os.path.normcase(os.path.join(ROOT, ".venv")):
+        return
+    launcher_py = (os.path.join(a_venv, "Scripts", "pythonw.exe") if WIN
+                   else os.path.join(a_venv, "bin", "python"))
+    with open(os.path.join(ROOT, ".pc_python"), "w", encoding="utf-8") as f:
+        f.write(launcher_py + "\n")
+    say(f"pinned the launchers to {launcher_py}  (wrote .pc_python)")
+
+
 def build_launcher(py):
     """Build ``Perspective Correction.exe`` with the logo (Windows only).
 
@@ -223,6 +244,8 @@ def main(argv=None):
     else:
         py = sys.executable
         say("installing into this Python (the one the launchers start)")
+
+    pin_launcher_python(a.venv)
 
     say("\n== core (numpy, cv2, Pillow, piexif)")
     missing = [spec for mod, spec in CORE if not has_module(py, mod)]

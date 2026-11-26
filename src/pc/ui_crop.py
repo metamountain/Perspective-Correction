@@ -92,6 +92,10 @@ class _CropGuidesMixin:
     def _on_crop_press(self, event):
         if getattr(self, "_ph_a", None) is None:
             return
+        # Every gesture that starts here (handle drag, guide pull, rectangle
+        # drag) ends in a session change, so the snapshot goes down before
+        # the first pixel of it.
+        self._push_undo()
         x = event.x - self._after_off[0]
         y = event.y - self._after_off[1]
         iw, ih = self._ph_a.width(), self._ph_a.height()

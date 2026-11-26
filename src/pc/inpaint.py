@@ -416,13 +416,14 @@ in opposite ways: black is an edge the sampler will happily treat as content,
 and the streaks are exactly the artifact that once cost this project two wrong
 conclusions (see the round-trip section of the working notes).
 
-So the hole is primed with TELEA first -- boundary colour propagated inwards,
-no model, milliseconds -- and then pulled halfway towards mid grey. The TELEA
-half gives the sampler the right colours and rough gradient to continue; the
-grey half destroys the smeared *structure* TELEA invents along with them, so
-nothing in the band reads as an edge worth preserving. Only the hole is
-touched, and the result is a starting point, not an answer: the generator
-replaces it.
+So the hole is filled first -- with LaMa when the package is installed, with
+TELEA when it is not or the model fails to load (see `_prime_hole`) -- and then
+pulled halfway towards mid grey. The fill gives the sampler the right colours
+and rough texture to continue (LaMa a plausible continuation, TELEA a smear in
+the right colours); the grey half destroys the *structure* the fill invents
+along with them, so nothing in the band reads as an edge worth preserving.
+Only the hole is touched, and the result is a starting point, not an answer:
+the generator replaces it.
 """
 
 
@@ -449,12 +450,38 @@ def join_url(host, port):
 
 
 
+def _prime_hole(small: np.ndarray, mask: np.ndarray) -> np.ndarray:
+    """Fill the hole for priming: LaMa when it can be loaded, TELEA otherwise.
+
+    LaMa hands the sampler a plausible continuation of the boundary; TELEA is
+    the boundary smear that always works.  Anything can fail on the LaMa side
+    -- the package missing, the weights stalling, a GPU refusing the first
+    pass -- and a primed band is a nicety, not a requirement, so every failure
+    lands on the same TELEA line.  ``mask`` is 0/255.
+    """
+    ok, _exc = _lama_probe()
+    if ok:
+        try:
+            from PIL import Image
+            model = _lama_model("")
+            img = Image.fromarray(cv2.cvtColor(small, cv2.COLOR_BGR2RGB))
+            gen = model(img, Image.fromarray(mask))
+            gen = cv2.cvtColor(np.array(gen.convert("RGB")), cv2.COLOR_RGB2BGR)
+            if gen.shape[:2] != small.shape[:2]:      # LaMa pads to a multiple of 8
+                gen = gen[:small.shape[0], :small.shape[1]]
+            return gen.astype(np.float32)
+        except Exception:
+            pass    # best-effort: the TELEA line below always works
+    radius = max(3, int(min(small.shape[:2]) * 0.01))
+    return cv2.inpaint(small, mask, radius, cv2.INPAINT_TELEA).astype(np.float32)
+
+
 def _prime_for_generation(small: np.ndarray, mask: np.ndarray) -> np.ndarray:
-    """TELEA the hole, then blend it halfway to grey.  ``mask`` is 0/255."""
+    """Fill the hole (LaMa or TELEA, see `_prime_hole`), then blend it halfway
+    to grey.  ``mask`` is 0/255."""
     if not mask.any():
         return small
-    radius = max(3, int(min(small.shape[:2]) * 0.01))
-    primed = cv2.inpaint(small, mask, radius, cv2.INPAINT_TELEA).astype(np.float32)
+    primed = _prime_hole(small, mask)
     primed = primed * (1.0 - PRIME_MIX) + float(PRIME_GREY) * PRIME_MIX
     out = small.copy()
     inside = mask > 0
@@ -879,8 +906,11 @@ def describe(mode: str, settings=None) -> str:
         stats = json.loads(_http(base + "/system_stats", timeout=3.0).decode())
         sysinfo = stats.get("system", {})
         parts.append(f"comfyui at {base}: up (ComfyUI {sysinfo.get('comfyui_version', '?')})")
-    except Exception as exc:
-        parts.append(f"comfyui at {base}: unreachable ({exc})")
+    except Exception:
+        # No raw exception text: an OS-localised socket error (the German
+        # "Keine Verbindung möglich" on a German Windows) would end up on the
+        # doctor line, where it is noise, not information.
+        parts.append(f"comfyui: unreachable at {base}")
     wf_path, chosen = workflow_path(settings)
     try:
         wf = load_workflow(wf_path)

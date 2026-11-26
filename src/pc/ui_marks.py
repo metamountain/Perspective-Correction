@@ -85,6 +85,7 @@ class _MarksMixin:
         ``x, y`` are canvas pixels (photo-relative).  The session stores
         full-resolution pixels, so divide by ``_before_scale`` before storing
         and pass the same scale to hit-tests."""
+        self._push_undo()
         fs = self._before_scale
         fx, fy = x / fs, y / fs
         # Grab an existing corner first (nudge).
@@ -217,6 +218,7 @@ class _MarksMixin:
         # exists before a photograph is open -- so the empty case is reachable.
         if self.session is None:
             return
+        self._push_undo()
         # Both kinds, always: `a() or b()` stopped at the first that removed
         # something and left every horizontal line behind a vertical one.
         had_v = self.session.clear_control_lines()
@@ -242,6 +244,7 @@ class _MarksMixin:
             ep = self.session.pick_control_line_endpoint(
                 x, y, display_scale=self._before_scale, radius=10.0, kind=k)
             if ep is not None:
+                self._push_undo()
                 self._pending_mark = None
                 self._mark_drag = (ep, k)
                 # Nudging an endpoint is the finest placement this window asks
@@ -257,6 +260,7 @@ class _MarksMixin:
                 hit = self.session.pick_control_line(
                     x, y, display_scale=self._before_scale, kind=k)
                 if hit is not None:
+                    self._push_undo()
                     self.session.remove_control_line(hit, kind=k)
                     self._sync_from_session()
                     return
@@ -273,6 +277,9 @@ class _MarksMixin:
             return
         x0, y0 = self._pending_mark
         self._pending_mark = None
+        # Snapshot before `drop_planar_for` as well: the line and the quad it
+        # displaces are one gesture, and undo takes back both.
+        self._push_undo()
         # Marker or planar, not both (2026-09-20, user). A placed quad ignores
         # roll, pitch and yaw completely, so a line drawn while one is in force
         # would change nothing and look broken. The newest instruction wins.
@@ -327,6 +334,7 @@ class _MarksMixin:
         x0, y0 = self._pending_mark
         self._pending_mark = None
         self._mark_moved = False
+        self._push_undo()
         self._loupe_hide()              # the drag is over
         x = event.x - self._before_off[0]
         y = event.y - self._before_off[1]

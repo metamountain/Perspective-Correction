@@ -152,6 +152,10 @@ docs/detection.jpg
 /Perspective Correction.exe
 /tools/launcher.ico
 
+# one-line pin of an external venv's pythonw, written by
+# python tools/install_deps.py --venv <dir>
+.pc_python
+
 # written by the update button in a copy without git (selfupdate.INSTALL_MARK)
 .pc_install.json
 
