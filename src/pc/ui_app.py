@@ -34,6 +34,14 @@ from .ui_theme import (
 
 _MAC = sys.platform == "darwin"   # gui.py keeps its own copy for RB / ALT_MASK
 
+# Widget classes whose keys are their own: a window-wide shortcut that lands
+# on one of these is the widget's (typing, filtering, activating a button),
+# not the window's.  `_BUTTON_FOCUS` is the same set plus the buttons, which
+# the held-space peek guards against as well -- space is what activates a
+# button the focus sits on.
+_TEXT_FOCUS = ("Entry", "TEntry", "Spinbox", "TSpinbox", "TCombobox", "Text")
+_BUTTON_FOCUS = _TEXT_FOCUS + ("Button", "TButton")
+
 
 class _NoticeLabel:
     """Stands in for the fill/ComfyUI label of the retired defaults panel.
@@ -138,6 +146,26 @@ class _AppMixin:
         self.bind("<m>", lambda _e: self._tool_key("v_mark", "_on_mark_toggle"))
         self.bind("<b>", lambda _e: self._tool_key("v_stroke", "_on_stroke_toggle"))
         self.bind("<s>", lambda _e: self._tool_key("v_sam", "_on_sam_toggle"))
+        # Review shortcuts, window-wide.  They land on the window while the
+        # focus sits on a canvas or a slider, which the window's own
+        # bindings do not reach, so these go on the "all" bind tag instead.
+        # Each handler re-checks the focus itself: a key that belongs to a
+        # text field (or a button, for space) is that widget's.
+        self.bind_all("<Control-s>", self._save_key)
+        self.bind_all("<Control-S>", self._save_key)
+        self.bind_all("<Control-n>", self._next_key)
+        self.bind_all("<Control-N>", self._next_key)
+        self.bind_all("<Control-Right>", self._next_key)
+        if _MAC:
+            self.bind_all("<Command-s>", self._save_key)
+            self.bind_all("<Command-n>", self._next_key)
+        self.bind_all("<KeyPress-space>", self._space_press)
+        self.bind_all("<KeyRelease-space>", self._space_release)
+        # A window switch delivers no key release at all: the held-space
+        # peek and a held slider must settle when the focus goes, or they
+        # stay stuck on the far side of it.  Both are no-ops unless they
+        # actually ran.
+        self.bind_all("<FocusOut>", self._focus_lost)
         self._pump_closing = False
         self._pump_job = self._schedule_after(120, self._pump)
         if start_fullscreen:
@@ -233,6 +261,113 @@ class _AppMixin:
             return
         v.set(not v.get())
         getattr(r, handler_name)()
+
+    # -- review shortcuts: save, next photograph, hold-space peek ------------
+    def _focus_in_main(self):
+        """Does the key belong to this window?
+
+        A dialog (the overwrite prompt, Save As) or another program has its
+        own keyboard, and a shortcut must not reach through it.  No focus at
+        all means the window itself, which is exactly where these are wanted.
+        """
+        w = self.focus_get()
+        if w is None:
+            return True
+        try:
+            return w.winfo_toplevel() is self
+        except Exception:
+            return False
+
+    def _save_key(self, _e=None):
+        """Ctrl+S: the Save button, from the keyboard.
+
+        Saves the photograph on screen with the panel's own `_save`, so in a
+        walk it also moves on to the next one -- the shortcut says what the
+        button says.  A key for a text field is the field's.
+        """
+        if not self._focus_in_main():
+            return
+        w = self.focus_get()
+        if w is not None:
+            try:
+                if w.winfo_class() in _TEXT_FOCUS:
+                    return
+            except Exception:
+                pass
+        r = getattr(self, "review", None)
+        if r is None or getattr(r, "session", None) is None:
+            return
+        r._save()
+        return "break"
+
+    def _next_key(self, _e=None):
+        """Ctrl+N / Ctrl+Right: on to the next photograph of the walk.
+
+        Leaves the current one the way Skip does: a dirty photograph is
+        offered for saving first (`_leave_current`), so the shortcut can
+        never drop unsaved work.  With no walk under way there is nothing
+        to go to.
+        """
+        if not self._focus_in_main():
+            return
+        w = self.focus_get()
+        if w is not None:
+            try:
+                if w.winfo_class() in _TEXT_FOCUS:
+                    return
+            except Exception:
+                pass
+        if not getattr(self, "_review_queue", []):
+            self._notify("no more photographs in the queue")
+            return
+        if not self._leave_current():
+            return
+        # The walk's own deferred open: `on_closed` fires while the panel is
+        # being rebuilt, and loading inside that rebuild is asking for a
+        # half-dead parent, so the next photograph arrives a beat later.
+        self._schedule_after(50, self._open_next_review)
+        return "break"
+
+    def _space_press(self, _e=None):
+        """Space held down: the after pane shows the uncorrected original.
+
+        Auto-repeats of the held key arrive as further presses while the
+        peek is up, and the panel's handler ignores them.  A key for a text
+        field or a button is that widget's.
+        """
+        if not self._focus_in_main():
+            return
+        w = self.focus_get()
+        if w is not None:
+            try:
+                if w.winfo_class() in _BUTTON_FOCUS:
+                    return
+            except Exception:
+                pass
+        r = getattr(self, "review", None)
+        if r is None or getattr(r, "session", None) is None:
+            return
+        r._peek_original()
+
+    def _space_release(self, _e=None):
+        """The space key is up: the corrected preview comes back, however the
+        focus sits now -- the release ends the peek from anywhere."""
+        r = getattr(self, "review", None)
+        if r is not None:
+            r._peek_end()
+
+    def _focus_lost(self, _e=None):
+        """Focus left this window: settle anything a held key started.
+
+        A window switch delivers no key release, so without this the peek
+        would sit on the original and a slider drag on the reduced preview,
+        stuck on the far side of the switch.  Both handlers are no-ops
+        unless they actually ran.
+        """
+        r = getattr(self, "review", None)
+        if r is not None:
+            r._peek_end()
+            r._end_slider_drag()
 
     def _switch_theme(self, theme_name):
         """Swap the active palette: update INK in place, re-apply ttk styles,

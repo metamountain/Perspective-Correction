@@ -241,6 +241,21 @@ class ReviewPanel(tk.Frame, _AfterOwner, _SamMixin, _LoupeMixin, _CropGuidesMixi
         self.on_closed = None
         self._closed_sent = False
         self._busy = False
+        # True while a slider's button is held (see `_on_slider_press` /
+        # `_end_slider_drag`): the after picture then follows the pointer on
+        # the reduced interactive pass (`_redraw_slider_preview`) instead of
+        # the full-quality one.
+        self._slider_dragging = False
+        # The one pending `_schedule_redraw` job, if any: a slider release
+        # cancels it so the full-quality pass can run at once.
+        self._redraw_job = None
+        # True while the space key is held and the after pane shows the
+        # uncorrected original (see `_peek_original` / `_peek_end`).
+        self._space_peek = False
+        self._ph_a_peek = None        # the image the peek item shows, kept alive
+        # The angle sliders by name, rebuilt with the strip on every
+        # `_build`: the drag bindings need them and the tests press them.
+        self._slider_scales = {}
         self._before_scale = 1.0
         self._redraw_tries = 0
         # Fit-once-then-lock: the (before, after) canvas size the picture is
@@ -281,6 +296,9 @@ class ReviewPanel(tk.Frame, _AfterOwner, _SamMixin, _LoupeMixin, _CropGuidesMixi
                 if getattr(w, "_bpc_persistent", False):
                     continue      # the batch window's own frames, not a photograph's
                 w.destroy()
+        # The rebuilt strip below puts the new sliders in the same names;
+        # the old widgets are dead and so are the references to them.
+        self._slider_scales.clear()
 
     def load(self, path, settings, dest_path, overwrite=False, on_saved=None,
              on_closed=None, position=""):
@@ -293,6 +311,12 @@ class ReviewPanel(tk.Frame, _AfterOwner, _SamMixin, _LoupeMixin, _CropGuidesMixi
         self.on_closed = on_closed
         self._closed_sent = False
         self._busy = False
+        # A new photograph starts with no held key: a drag or a peek that
+        # outlived its own picture would steer the next one at reduced
+        # quality, or leave it on the original.
+        self._slider_dragging = False
+        self._space_peek = False
+        self._ph_a_peek = None
         self._before_scale = 1.0
         self._redraw_tries = 0
         self._img_box = None
@@ -840,6 +864,10 @@ class ReviewPanel(tk.Frame, _AfterOwner, _SamMixin, _LoupeMixin, _CropGuidesMixi
                                     orient="horizontal", length=layout.SLIDER_MIN,
                                     command=lambda _v: self._on_slider())
         self._yaw_scale.grid(row=0, column=1, sticky="ew", padx=3)
+        # The same reduced drag pass as the other angle sliders.
+        self._yaw_scale.bind("<ButtonPress-1>", self._on_slider_press)
+        self._yaw_scale.bind("<ButtonRelease-1>", self._end_slider_drag)
+        self._slider_scales["yaw"] = self._yaw_scale
         self._yaw_spin = ttk.Spinbox(h, textvariable=self.v_yaw, from_=-60, to=60,
                                       increment=0.1, format="%.2f", width=6,
                                       style="Compact.TSpinbox",
@@ -925,6 +953,11 @@ class ReviewPanel(tk.Frame, _AfterOwner, _SamMixin, _LoupeMixin, _CropGuidesMixi
         sc = ttk.Scale(parent, from_=lo, to=hi, variable=var, orient="horizontal",
                        length=layout.SLIDER_MIN, command=lambda _v: self._on_slider())
         sc.grid(row=0, column=c + 1, sticky="ew", padx=3)
+        # A held slider runs the reduced preview pass (see `_redraw`); the
+        # full-quality redraw comes back on release, at once.
+        sc.bind("<ButtonPress-1>", self._on_slider_press)
+        sc.bind("<ButtonRelease-1>", self._end_slider_drag)
+        self._slider_scales[label] = sc
         parent.columnconfigure(c + 1, weight=1, minsize=layout.SLIDER_MIN)
         sp = ttk.Spinbox(parent, textvariable=var, from_=lo, to=hi, increment=inc,
                          format=fmt, width=6, style="Compact.TSpinbox",
@@ -1322,7 +1355,38 @@ class ReviewPanel(tk.Frame, _AfterOwner, _SamMixin, _LoupeMixin, _CropGuidesMixi
             return
         self.session.set_manual(roll_deg=self.v_roll.get(), pitch_deg=self.v_pitch.get(),
                                 focal_35mm=self.v_focal.get(), yaw_deg=self.v_yaw.get())
+        # A held slider schedules on the tight drag beat and renders reduced
+        # (`_redraw`); without one, as from the spinboxes or a programmatic
+        # call, it takes the settled beat and the full-quality pass.
         self._schedule_redraw()
+
+    def _on_slider_press(self, _event=None):
+        """The slider's button goes down: from here until release the after
+        picture follows the pointer on the reduced interactive pass, so the
+        drag keeps up with the hand (see `_redraw`)."""
+        if self.session is None:
+            return
+        self._slider_dragging = True
+
+    def _end_slider_drag(self, _event=None):
+        """The slider's button is up: the reduced pass ends at once.
+
+        A pending reduced tick is dropped and the full-quality redraw runs
+        now -- the resting picture is 100 % quality, and its deferred fill
+        follows it.  It is also the safety net for a release Tk never
+        delivered (a window switch while the button was held), which the
+        App's `<FocusOut>` binding routes here.
+        """
+        if not self._slider_dragging:
+            return
+        self._slider_dragging = False
+        if self._redraw_job is not None:
+            try:
+                self.after_cancel(self._redraw_job)
+            except tk.TclError:
+                pass
+        self._redraw_job = None
+        self._redraw()
 
     def _use_auto(self):
         """Back to the angles the estimator found, keeping the rest of the work.
@@ -1563,7 +1627,7 @@ class ReviewPanel(tk.Frame, _AfterOwner, _SamMixin, _LoupeMixin, _CropGuidesMixi
         self._apply_strip()
 
 
-    def _show_after(self, frac_rect):
+    def _show_after(self, frac_rect, light=False):
         """Draw the whole after pane: the corrected frame with the outside-crop veil
         baked in (``darken_outside_crop``), its grid and rulers, and the kept
         rectangle's outline.
@@ -1572,6 +1636,11 @@ class ReviewPanel(tk.Frame, _AfterOwner, _SamMixin, _LoupeMixin, _CropGuidesMixi
         frame.  Re-baking from the cached un-veiled array (``_after_base``) is cheap --
         no re-warp, no re-inpaint -- so it can run on every drag tick and still feel
         live, which a stipple overlay could not because Tk has no per-item alpha.
+
+        ``light`` is the slider-drag pass: the picture being steered skips the two
+        expensive overlays -- the check-line detector and the output-size label,
+        whose plan is computed at full resolution -- and takes the veil, the guides
+        and the status word with it, as the full pass does.
         """
         base = getattr(self, "_after_base", None)
         if base is None:
@@ -1602,7 +1671,12 @@ class ReviewPanel(tk.Frame, _AfterOwner, _SamMixin, _LoupeMixin, _CropGuidesMixi
         self.c_after.create_image(aox, aoy, anchor="nw", image=ph)
         self._ph_a = ph
         self._draw_after_guides()
-        self._draw_after_lines(arr, ph.width(), ph.height())
+        # The light pass (a slider in the hand) skips the two expensive
+        # overlays: re-running the check-line detector here would cost more
+        # than the render it annotates, and the label below needs a plan
+        # computed at full resolution.
+        if not light:
+            self._draw_after_lines(arr, ph.width(), ph.height())
         self._draw_after_outline(arr, ph.width(), aox, aoy)
         # The crop outline used to be suppressed while the planar quad was up,
         # because the two drew over each other.  With planar gone there is
@@ -1613,36 +1687,89 @@ class ReviewPanel(tk.Frame, _AfterOwner, _SamMixin, _LoupeMixin, _CropGuidesMixi
         x0, y0, x1, y1 = (frac_rect or (0.0, 0.0, 1.0, 1.0))
         self._draw_crop_outline(aox + x0 * iw, aoy + y0 * ih,
                                 aox + x1 * iw, aoy + y1 * ih)
-        # Q2: output dimensions + crop size, bottom-left.
-        # `arr.shape` is the PREVIEW array (render_after scales to the canvas
-        # widget's on-screen size, see `_redraw`) -- it is not what `save()`
-        # will write. Ledger item 15 (2026-09-26, user-caught): this label
-        # claimed to show "output dimensions" while actually showing the
-        # preview's pixel size, which can be many times smaller than the real
-        # save. `session.output_size()` mirrors `save()`'s own plan exactly
-        # (same angles, same strip) so the two can never disagree again.
-        ow, oh = self.session.output_size()
-        cw = max(1, int(round((x1 - x0) * ow)))
-        ch = max(1, int(round((y1 - y0) * oh)))
-        # Q2: output dimensions + crop size, top-left, inside the picture (the
-        # picture sits flush to the top of the field, so the label lives over its
-        # corner with a small backing so it reads on any photo).
-        label_x = aox + layout.LABEL_INSET_PX
-        label_y = aoy + layout.LABEL_INSET_PX
-        label_text = f"{self._after_title}   {ow}×{oh}  {cw}×{ch}"
-        tid = self.c_after.create_text(label_x, label_y, anchor="nw",
-                                       text=label_text, fill=OVERLAY["label"],
-                                       font=ui_font(9))
-        bb = self.c_after.bbox(tid)
-        if bb:
-            pad = 2
-            self.c_after.create_rectangle(bb[0] - pad, bb[1] - pad,
-                                          bb[2] + pad, bb[3] + pad,
-                                          fill=INK["bg"], outline="")
-            self.c_after.tag_raise(tid)
+        if not light:
+            # Q2: output dimensions + crop size.  `session.output_size()`
+            # mirrors `save()`'s own plan exactly (same angles, same strip)
+            # so the label and the file it names can never disagree -- and
+            # that plan is computed at full resolution, which is why the
+            # light pass (a slider in the hand) leaves the label off.
+            ow, oh = self.session.output_size()
+            cw = max(1, int(round((x1 - x0) * ow)))
+            ch = max(1, int(round((y1 - y0) * oh)))
+            # Top-left, inside the picture (the picture sits flush to the top
+            # of the field, so the label lives over its corner with a small
+            # backing so it reads on any photo).
+            label_x = aox + layout.LABEL_INSET_PX
+            label_y = aoy + layout.LABEL_INSET_PX
+            label_text = f"{self._after_title}   {ow}×{oh}  {cw}×{ch}"
+            tid = self.c_after.create_text(label_x, label_y, anchor="nw",
+                                           text=label_text, fill=OVERLAY["label"],
+                                           font=ui_font(9))
+            bb = self.c_after.bbox(tid)
+            if bb:
+                pad = 2
+                self.c_after.create_rectangle(bb[0] - pad, bb[1] - pad,
+                                              bb[2] + pad, bb[3] + pad,
+                                              fill=INK["bg"], outline="")
+                self.c_after.tag_raise(tid)
         # The redraw above wiped the canvas, so the faint status word has to be
         # laid down again here to survive it.
         self._draw_status_overlay()
+
+    # -- hold-space peek: the uncorrected original in the after pane ---------
+    def _peek_original(self):
+        """Space held down: the after pane shows the uncorrected original.
+
+        The before picture fitted into the after field -- the two panes read
+        as one, which is the point of the comparison -- under a faint
+        ORIGINAL mark.  Auto-repeats of the held key arrive as further
+        presses while the peek is up and leave it untouched.  ``_peek_end``
+        restores the corrected preview.
+        """
+        s = self.session
+        if s is None or not self.winfo_exists():
+            return
+        if self._space_peek:
+            return
+        if getattr(self, "_img_box", None) is None:
+            return                      # no rendered size yet; nothing to fit into
+        _lock_b, lock_a = self._img_box
+        box_a = (max(1, self.c_after.winfo_width()),
+                 max(1, self.c_after.winfo_height()))
+        ph = getattr(self, "_ph_b", None)
+        if ph is None:
+            # The before pane never drew (it should have): render the original
+            # itself rather than peek into an empty field.
+            arr = s.render_before(max_edge=max(lock_a), show_lines=False)
+            ph, _ = _to_photo(arr, lock_a)
+        self._space_peek = True
+        self._ph_a_peek = ph            # the canvas item alone would not keep it alive
+        self.c_after.delete("all")
+        self._paint_ground(self.c_after)
+        aox = (box_a[0] - ph.width()) // 2
+        aoy = (box_a[1] - ph.height()) // 2
+        self.c_after.create_image(aox, aoy, anchor="nw", image=ph)
+        # The faint mark: this pane is showing the uncorrected photograph,
+        # not the result, and a pane that says nothing about that is a lie.
+        self.c_after.create_text(box_a[0] // 2, box_a[1] // 2, text="ORIGINAL",
+                                 fill=INK["dim"], font=ui_font(24),
+                                 tags="space_peek")
+        self._set_status("ORIGINAL -- the uncorrected photograph; "
+                         "release space for the correction")
+
+    def _peek_end(self):
+        """The space key is up, or the window lost focus: the corrected
+        preview comes back at full quality.  If a slider is still held the
+        reduced pass simply continues -- and its status word, which the
+        reduced pass does not refresh, is restored once here instead.
+        """
+        if not self._space_peek:
+            return
+        self._space_peek = False
+        self._ph_a_peek = None
+        if self._slider_dragging and self.session is not None:
+            self._set_status(self.session.status_text())
+        self._redraw()
 
     def _tool_active(self, var_name):
         """True if the named tool toggle variable exists and is active."""
@@ -2065,7 +2192,20 @@ class ReviewPanel(tk.Frame, _AfterOwner, _SamMixin, _LoupeMixin, _CropGuidesMixi
         if self._busy:
             return
         self._busy = True
-        self._schedule_after(60, self._redraw)
+        # A held slider is the one case where the preview has to keep up with
+        # the pointer: it renders on the reduced pass (see `_redraw`), so it
+        # may run on a tighter beat than the settled one everything else uses.
+        # One pending job at a time -- the flag above guarantees it -- and its
+        # ID is what a slider release cancels.
+        delay = (layout.SLIDER_DRAG_REDRAW_MS
+                 if self.session is not None and self._slider_dragging
+                 else layout.REDRAW_MS)
+        if self._redraw_job is not None:
+            try:
+                self.after_cancel(self._redraw_job)
+            except tk.TclError:
+                pass
+        self._redraw_job = self._schedule_after(delay, self._redraw)
 
     def _paint_ground(self, canvas):
         """Lay the theme's gradient under everything else on *canvas*.
@@ -2111,9 +2251,29 @@ class ReviewPanel(tk.Frame, _AfterOwner, _SamMixin, _LoupeMixin, _CropGuidesMixi
                 fill=INK["dim"], font=ui_font(13))
         self._set_status("")
 
+    def _redraw_slider_preview(self, lock_a, box_a):
+        """The after pane while a slider is held: the interactive pass.
+
+        Half the canvas pixels, never below ``layout.SLIDER_DRAG_MIN_EDGE``,
+        without fill, check-line detection or the output-size label -- the
+        picture is being steered, not judged, and ``_to_photo`` scales the
+        small array back up to the field.  The before pane does not change
+        with the angles, so it keeps its last full draw and only this pane
+        renders here.
+        """
+        s = self.session
+        edge = max(layout.SLIDER_DRAG_MIN_EDGE, max(lock_a) // 2)
+        after = s.render_after(max_edge=edge, apply_crop=False, fill="none", fast=True)
+        self._fill_gen += 1
+        self._after_base = after
+        self._after_box = lock_a
+        self._after_live = box_a
+        self._show_after(s.crop_rect, light=True)
+
     def _redraw(self):
         if not self.winfo_exists():
             return
+        self._redraw_job = None
         self._busy = False
         if self.session is None:
             self._draw_empty()
@@ -2160,6 +2320,14 @@ class ReviewPanel(tk.Frame, _AfterOwner, _SamMixin, _LoupeMixin, _CropGuidesMixi
             if self._img_box is None:
                 self._img_box = (box_b, box_a)
             lock_b, lock_a = self._img_box
+            if self._slider_dragging:
+                # A slider in the hand: only the after picture follows the
+                # pointer, on the reduced pass; the before pane does not
+                # change with the angles and keeps its last full draw.
+                # Release restores the full quality at once
+                # (see `_end_slider_drag`).
+                self._redraw_slider_preview(lock_a, box_a)
+                return
             # show_lines=False on purpose: the detected lines are drawn on the
             # canvas (`_draw_before_lines`), 1 px at the displayed size like
             # the after pane's check lines.  Baked into the image they scaled

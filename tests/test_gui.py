@@ -2962,3 +2962,229 @@ def test_full_lifecycle_destroy_cancels_all_pending_callbacks():
                 app.destroy()
         except Exception:  # noqa: S110 - Tk may raise TclError after destroy
             pass  # already destroyed
+
+
+def test_a_held_slider_renders_reduced_and_release_restores_full_quality():
+    """While a slider is held, the after pane runs the reduced interactive pass:
+    half the canvas pixels, never below SLIDER_DRAG_MIN_EDGE, on the tight drag
+    beat, without fill or status label.  Release ends the reduced pass at once
+    and the full-quality pass runs immediately; a slider change without a held
+    button (spinbox, programmatic) keeps the full pass -- the reduced one is
+    exclusively the hand-on-the-slider case.
+
+    Driven with real events on the real ttk.Scale the panel registers in
+    `_slider_scales`: button down on the track starts the drag, button up ends
+    it, exactly as a drag delivers them.
+    """
+    app = _app()
+    try:
+        _loaded(app, 1920, 1080)
+        r = app.review
+        if r.session is None or "pitch" not in r._slider_scales:
+            raise SkipTest("no session or no pitch slider")      # noqa: F821
+        s = r.session
+        lock_a = r._img_box[1]
+        edge = max(layout.SLIDER_DRAG_MIN_EDGE, max(lock_a) // 2)
+        sc = r._slider_scales["pitch"]
+        x, y = sc.winfo_width() // 2, sc.winfo_height() // 2
+
+        # Record what the panel asks the session to render: a held slider must
+        # ask for the reduced interactive pass (half pixels, no fill, fast),
+        # release and a drag-free change must ask for the full canvas.  Sizes
+        # on screen are no substitute: a warp whose plan crops to a motif can
+        # come back smaller than the reduced cap, and would read as "not full".
+        calls = []
+        orig_render = s.render_after
+        s.render_after = lambda **k: (calls.append(k), orig_render(**k))[1]
+        try:
+            # Button down on the track: the drag pass starts.
+            sc.event_generate("<ButtonPress-1>", x=x, y=y)
+            app.update()
+            assert r._slider_dragging, "pressing the slider must start the drag pass"
+
+            # Nudge the value while the button is held and pump until the
+            # reduced tick renders.
+            r.v_pitch.set(r.v_pitch.get() + 1.0)
+            r._on_slider()
+            assert _settle_until(
+                app, lambda: calls and calls[-1].get("fast") is True, n=300), (
+                    "the held slider never rendered the reduced pass")
+            assert calls[-1].get("max_edge") == edge and calls[-1].get("fill") == "none", calls[-1]
+            drag_w = r._after_base.shape[1]
+            assert drag_w <= edge + 2, "the reduced pass must stay reduced"
+
+            # Button up: the pending reduced tick is dropped and the
+            # full-quality pass runs at once, at the full canvas size.
+            sc.event_generate("<ButtonRelease-1>", x=x, y=y)
+            app.update()
+            assert not r._slider_dragging, "release must end the drag pass"
+            full = calls[-1]
+            assert full.get("max_edge") == max(lock_a) and not full.get("fast"), (
+                f"release did not run the full-quality pass: {full}")
+            calls.clear()
+
+            # Without a held button the settled pass must stay full: the
+            # reduced size is not leaking into ordinary redraws.
+            old = r._after_base
+            r.v_pitch.set(r.v_pitch.get() + 0.5)
+            r._on_slider()
+            assert _settle_until(
+                app, lambda: calls and calls[-1].get("max_edge") == max(lock_a)
+                and not calls[-1].get("fast")
+                and r._after_base is not old, n=300), (
+                    "a slider change without a drag must render at full size")
+        finally:
+            s.render_after = orig_render
+    finally:
+        app.destroy()
+
+
+def test_ctrl_s_saves_the_photo_on_screen_but_never_inside_a_text_field():
+    """Ctrl+S is the Save button on the keyboard: it saves the photograph on
+    screen through the panel's own `_save` (so in a walk it also moves on), and
+    with no photograph open there is nothing to save.  A key that belongs to a
+    text field is the field's -- both via the handler and via a generated
+    `<Control-s>` event travelling the real bind_all chain.
+    """
+    app = _app()
+    try:
+        assert app.bind_all("<Control-s>"), "Ctrl+S is not bound"
+        saved = []
+        app.review._save = lambda *a, **k: saved.append(True)
+
+        # No photograph open: the shortcut has nothing to save.
+        app._save_key()
+        assert saved == [], "with no photograph open there is nothing to save"
+
+        _loaded(app, 1920, 1080)
+        r = app.review
+        assert r.session is not None
+        r._save = lambda *a, **k: saved.append(True)
+
+        # The window's own keyboard: it saves and stops the chain.
+        app.focus_force(); app.update()
+        assert app._save_key() == "break"
+        assert saved == [True], "Ctrl+S must save the photograph on screen"
+        saved.clear()
+        app.event_generate("<Control-s>"); app.update()
+        assert saved == [True], "a generated Ctrl+S must go through the binding"
+        saved.clear()
+
+        # A key that belongs to a text field is the field's.
+        app._theme_combo.focus_set(); app.update()
+        app._save_key()
+        app.event_generate("<Control-s>"); app.update()
+        assert saved == [], "Ctrl+S in a text field must not save"
+    finally:
+        app.destroy()
+
+
+def test_holding_space_peeks_the_original_and_releases_back_to_the_correction():
+    """Space held down: the after pane shows the uncorrected original -- the
+    before picture itself, fitted into the after field under a faint ORIGINAL
+    mark -- so the two panes read as one for the comparison.  Release (or the
+    window losing focus) restores the corrected preview at full quality.
+    Auto-repeats of the held key must not re-run the peek, and a Space that
+    belongs to a button or a text field is that widget's.
+    """
+    app = _app()
+    try:
+        _loaded(app, 1920, 1080)
+        r = app.review
+        if r.session is None:
+            raise SkipTest("no session")                          # noqa: F821
+        assert app.bind_all("<KeyPress-space>"), "space is not bound"
+        # The off-screen window is not active yet: force its focus so a
+        # focus_set on a child widget takes hold and focus_get() reports it.
+        app.focus_force(); app.update()
+
+        # A key that belongs to a button or a text field is that widget's.
+        btn = next(c for c in r._btns.winfo_children()
+                   if c.winfo_class() in ("Button", "TButton"))
+        btn.focus_set(); app.update()
+        app._space_press()
+        assert not r._space_peek, "space on a button must not peek"
+        app._theme_combo.focus_set(); app.update()
+        app._space_press()
+        assert not r._space_peek, "space in a text field must not peek"
+        app.focus_force(); app.update()
+
+        # Press: the after pane shows the original, marked as such.
+        app.event_generate("<KeyPress-space>"); app.update()
+        assert r._space_peek, "holding space must peek the original"
+        marks = r.c_after.find_withtag("space_peek")
+        assert len(marks) == 1, "the peek carries exactly one ORIGINAL mark"
+        assert "ORIGINAL" in r.c_after.itemcget(marks[0], "text")
+        assert r._ph_a_peek is r._ph_b, (
+            "the after pane must show the before picture itself, not a copy")
+        assert "ORIGINAL" in r._status_text, r._status_text
+
+        # Auto-repeat of the held key: the peek stays up and is not re-run.
+        app._space_press()
+        assert r._space_peek, "auto-repeat must not end the peek"
+        assert len(r.c_after.find_withtag("space_peek")) == 1, (
+            "auto-repeat must not draw the mark twice")
+
+        # Release: the correction comes back at full quality.
+        app._space_release()
+        assert not r._space_peek
+        assert r._ph_a_peek is None, "the peek's photo reference must be dropped"
+        assert not r.c_after.find_withtag("space_peek"), (
+            "the mark must go with the peek")
+        assert r._ph_a is not r._ph_b, (
+            "the after pane must be re-rendered, not keep the peek's photo")
+
+        # Focus loss settles a peek whose release the window switch swallowed.
+        app._space_press()
+        assert r._space_peek
+        app._focus_lost()
+        assert not r._space_peek, "focus loss must end the peek"
+        _settle(app, 5)
+    finally:
+        app.destroy()
+
+
+def test_ctrl_n_and_ctrl_right_walk_on_to_the_next_photograph():
+    """Ctrl+N and Ctrl+Right are Skip on the keyboard: they leave the current
+    photograph the way the walk leaves it (a changed one is offered for saving
+    first, so the shortcut can never drop unsaved work) and open the next one
+    of the queue.  With an empty queue they say so instead of failing silently.
+
+    The first advance runs as a generated `<Control-Right>` event through the
+    real bind_all chain; both sequences are pinned as registered.
+    """
+    app = _app()
+    try:
+        assert app.bind_all("<Control-n>") and app.bind_all("<Control-Right>"), (
+            "Ctrl+N / Ctrl+Right are not bound")
+        second = os.path.join(os.path.dirname(ASSET), "1070912stkzg.jpg")
+        if not os.path.exists(second):
+            raise SkipTest("second asset missing")                # noqa: F821
+        app.geometry("1920x1080-4000+0")
+        app.update_idletasks(); app.update()
+        app._add([ASSET, second])
+        _settle(app)
+        r = app.review
+        assert r.session is not None
+        assert os.path.basename(r.session.path) == os.path.basename(ASSET)
+        assert app._review_queue == [os.path.abspath(second)], (
+            "a walk over two files must queue the second")
+
+        # A generated <Control-Right> walks on to the next photograph.
+        app.focus_force(); app.update()
+        app.event_generate("<Control-Right>"); app.update()
+        assert _settle_until(
+            app, lambda: app.review.session is not None
+            and os.path.basename(app.review.session.path)
+            == os.path.basename(second), n=300), (
+            "Ctrl+Right did not open the next photograph")
+        assert app._review_queue == [], "the walk must consume the queue"
+
+        # Empty queue: the shortcut says so and opens nothing.
+        app.focus_force(); app.update()
+        app._next_key()
+        app.update()
+        assert "no more photographs" in app.review._notice, app.review._notice
+        assert os.path.basename(app.review.session.path) == os.path.basename(second)
+    finally:
+        app.destroy()

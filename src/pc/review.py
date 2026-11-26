@@ -1259,7 +1259,7 @@ class ReviewSession(_ReviewCropPlanarMixin):
                 PV._draw_infinite_line(canvas, hline, PV.MAGENTA, 2)
         return _fit(canvas, max_edge)
 
-    def render_after(self, max_edge=900, apply_crop=True, fill="full"):
+    def render_after(self, max_edge=900, apply_crop=True, fill="full", fast=False):
         """The corrected frame, at preview size.
 
         ``fill`` is how the band is filled: ``"full"`` as the settings say,
@@ -1268,6 +1268,14 @@ class ReviewSession(_ReviewCropPlanarMixin):
         when the chosen backend is a slow one shown live, the job for it left
         in ``self.deferred_fill`` for the caller to run when it has time
         (user, 2026-10-23: "erst telea, dann relaxed lama hinterher").
+
+        ``fast`` is the interactive pass (a slider in the hand): the reduced
+        copy of the source is scaled with ``INTER_LINEAR`` instead of
+        ``INTER_AREA``.  AREA is the honest anti-aliased downscale, but on a
+        40 MP source it costs about a hundred times more than LINEAR (10 ms
+        versus 0.1 ms, measured) and the result is upscaled to the canvas
+        again on the way to the screen anyway, where the difference no
+        longer shows; the full-quality pass on release restores it.
 
         ``apply_crop=False`` returns the *whole* corrected frame with the
         hand-drawn rectangle left un-cut.  That is what a crop tool needs and
@@ -1300,14 +1308,15 @@ class ReviewSession(_ReviewCropPlanarMixin):
         yaw = self.current_yaw()
         crop = self._apply_crop if apply_crop else (lambda img: img)
         if abs(roll) < 1e-9 and abs(pitch) < 1e-9 and abs(yaw) < 1e-9:
-            out = _fit(crop(self.bgr), max_edge)
+            out = _fit(crop(self.bgr), max_edge, fast=fast)
             self.preview_map = ("scale", out.shape[1] / float(self.w))
             return out
         # render the preview from a reduced copy: a 24 MP warp per slider tick
         # is unusable, and the geometry is scale invariant apart from f
         s = min(1.0, float(max_edge) / max(self.w, self.h))
         small = cv2.resize(self.bgr, (max(1, int(self.w * s)), max(1, int(self.h * s))),
-                           interpolation=cv2.INTER_AREA) if s < 1.0 else self.bgr
+                           interpolation=(cv2.INTER_LINEAR if fast else cv2.INTER_AREA)) \
+            if s < 1.0 else self.bgr
         sh, sw = small.shape[:2]
         H = self._build_H(sw, sh, f * s, roll, pitch, yaw, max_area=self.settings.max_area_ratio)
         # Pass detected line segments so plan() can use the motif reframe
@@ -1836,12 +1845,12 @@ class ReviewSession(_ReviewCropPlanarMixin):
             pass
 
 
-def _fit(img, max_edge):
+def _fit(img, max_edge, fast=False):
     s = min(1.0, float(max_edge) / max(img.shape[:2]))
     if s >= 1.0:
         return img
     return cv2.resize(img, (max(1, int(img.shape[1] * s)), max(1, int(img.shape[0] * s))),
-                      interpolation=cv2.INTER_AREA)
+                      interpolation=cv2.INTER_LINEAR if fast else cv2.INTER_AREA)
 
 
 def darken_outside_crop(bgr, rect, keep=0.25):

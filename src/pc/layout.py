@@ -330,6 +330,21 @@ DRAG_PREVIEW_MS = 1000
 # A slow fill (lama) follows the stand-in once nothing has changed for this
 # long, off the Tk thread ("erst telea, dann relaxed lama hinterher").
 DEFERRED_FILL_MS = 400
+# Settled redraw beat: how often a scheduled redraw may run when nothing is
+# held down.  Only the angle-slider drag runs faster than this (below),
+# because it is the one interaction where the preview has to keep up with
+# the pointer instead of catching up to it.
+REDRAW_MS = 60
+# The angle sliders re-render the after picture on every step of a drag, and
+# the full-size pass is too slow for that (measured: a 40 MP photo re-warped
+# at canvas size runs at single digits of frames per second).  While a slider
+# is held the after picture therefore renders on a reduced interactive pass:
+# half the canvas pixels, never below SLIDER_DRAG_MIN_EDGE, without fill,
+# check-line detection or the output-size label, on a tighter beat.  The
+# before pane does not change with the angles and keeps its last full draw.
+# On button release the full-quality pass (fill included) runs at once.
+SLIDER_DRAG_REDRAW_MS = 12   # ms between reduced redraws while a slider is held
+SLIDER_DRAG_MIN_EDGE = 320   # px floor of the reduced pass on small canvases
 
 
 def loupe(field_short=0):
