@@ -8,14 +8,16 @@ not exist.  The mask comes back as an ignore region
 (True = outside the selection) that ``review.apply_sam_mask`` merges with the
 paint brush.
 
-The interpreter split mirrors BiRefNet: the GUI runs in the system Python, which
-has tkinter but no torch; SAM2 runs in ComfyUI's ``python_embeded``, which has
-torch and the official ``sam2`` package but no tkinter.  So ``run_subprocess``
-writes a small standalone script -- image path, box, points, checkpoint -- and
-spawns that interpreter on it.  The child loads the model, predicts one mask and
-saves it as a PNG next to the photograph's analysis output; the parent reads the
-PNG back with ``load_mask_png``.  One model load per process is the price of the
-split, paid once per click gesture rather than once per photograph in a batch.
+The interpreter split: the GUI runs in the system Python, which has tkinter
+but may have no torch.  When torch and transformers are installed here (the
+``deps`` menu), the in-process route below runs SAM 2.1 in this Python;
+otherwise ``run_subprocess`` writes a small standalone script -- image path,
+box, points, checkpoint -- and spawns ComfyUI's ``python_embeded`` on it, which
+has torch and the official ``sam2`` package but no tkinter.  The child loads the
+model, predicts one mask and saves it as a PNG next to the photograph's analysis
+output; the parent reads the PNG back with ``load_mask_png``.  One model load per
+process is the price of the split, paid once per click gesture rather than once
+per photograph in a batch.
 
 Everything that does not need torch -- path arithmetic, prompt validation, the
 mask round-trip -- lives here and is tested without a GPU.  The torch side is

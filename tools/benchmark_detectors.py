@@ -2,7 +2,6 @@
 """Run the line detectors against each other on real photographs.
 
     python tools/benchmark_detectors.py "D:\\Fotos"
-    python tools/benchmark_detectors.py tests/assets --mask birefnet
     python tools/benchmark_detectors.py tests/assets --detectors lsd,mlsd --focal 24
 
 **Why this exists rather than a synthetic benchmark.** A rendered scene carries
@@ -131,10 +130,9 @@ def main(argv=None) -> int:
     ap.add_argument("--focal", type=float, default=24.0,
                     help="35mm-equivalent focal length, fixed in every pass "
                          "(re-estimating it makes the metric meaningless)")
-    ap.add_argument("--mask", default="off", choices=["off", "auto", "birefnet"],
+    ap.add_argument("--mask", default="off", choices=["off", "auto"],
                     help="'file' is deliberately not offered: a cached mask is "
                          "stale on a warped copy")
-    ap.add_argument("--birefnet-model", default="auto")
     ap.add_argument("--edge", type=int, default=1600)
     ap.add_argument("--per-image", action="store_true",
                     help="also print each photograph, not only the summary")
@@ -147,16 +145,6 @@ def main(argv=None) -> int:
 
     base = Settings().replace(focal_35mm=args.focal, detect_max_edge=args.edge,
                               mask_mode=args.mask)
-    if args.mask == "birefnet":
-        from pc import birefnet as BN
-        w = args.birefnet_model
-        if w == "auto":
-            w = BN.find_weights()
-        if not w:
-            print("--mask birefnet found no weights")
-            return 2
-        base = base.replace(birefnet_model=w)
-        print("# mask: " + BN.describe(w))
 
     wanted = [d.strip() for d in args.detectors.split(",") if d.strip()]
     bad = [d for d in wanted if d not in ALL_DETECTORS]

@@ -2129,8 +2129,8 @@ class ReviewPanel(tk.Frame, _AfterOwner, _SamMixin, _LoupeMixin, _CropGuidesMixi
         Line brush -- drag a broad stroke over the before pane; every candidate
         line the stroke crosses is erased (deactivated) at once, like a pencil.
         The width doubles as the hit radius, so what you paint is what erases.
-        Masking -- moved here from the lower-right cell: source + BiRefNet model
-        picker.  The line detector also lives here now, moved out of the
+        Masking -- moved here from the lower-right cell: the mask source.
+        The line detector also lives here now, moved out of the
         lower-right adjustments panel: what-the-estimator-sees belongs beside the
         input image, not with the angles that edit the result."""
         # FIND controls, beside the input image: which detector feeds the
@@ -2168,11 +2168,11 @@ class ReviewPanel(tk.Frame, _AfterOwner, _SamMixin, _LoupeMixin, _CropGuidesMixi
                             "vertical and horizontal.")
 
         # -- where the mask comes from: no row any more ---------------------
-        # The source combobox, mask folder, BiRefNet model picker and file
-        # polarity were for testing only (user, 2026-10-24: "mask from file
-        # Zeile soll weg"). The brush, SAM and the Grounding DINO key are the
-        # mask sources; their models come from `deps`. The variables stay,
-        # hidden, because the gdino key and a reload drive them.
+        # The source combobox, mask folder, model picker and file polarity were
+        # for testing only. The brush and the SAM box select are the interactive
+        # mask sources; their models come from `deps`. The variables stay hidden:
+        # a reload drives v_maskmode, and v_mask/v_maskpath carry a remembered
+        # file mask for the batch panel.
         self.v_maskmode = tk.StringVar(value=self.settings.mask_mode)
         self.v_maskinv = tk.BooleanVar(value=self.settings.mask_invert)
 
@@ -2207,7 +2207,6 @@ class ReviewPanel(tk.Frame, _AfterOwner, _SamMixin, _LoupeMixin, _CropGuidesMixi
         self.lbl_mask = ttk.Label(parent, text="", wraplength=760, justify="left",
                                   style="Dim.TLabel")
         self.lbl_mask.pack(anchor="w")
-        self.v_gdino_prompt = tk.StringVar(value=self.settings.gdino_prompt or "building")
 
 
     def _on_before_b1motion(self, event):
@@ -2820,9 +2819,8 @@ class ReviewPanel(tk.Frame, _AfterOwner, _SamMixin, _LoupeMixin, _CropGuidesMixi
             # the signature for callers but no longer changes the look.
             fg, fg_on = INK["dim"], INK["text"]
             # A name draws; a hex codepoint quotes the icon font. The font is
-            # still right for anything it says well -- the dinosaur is a pun
-            # the user put there and it stays -- but the six tool marks are
-            # drawn, because the stock set has no vocabulary for them and
+            # still right for anything it says well -- but the six tool marks
+            # are drawn, because the stock set has no vocabulary for them and
             # borrowing the nearest picture is what put an eyedropper on a
             # building selector.
             def render(colour):
@@ -2893,9 +2891,9 @@ class ReviewPanel(tk.Frame, _AfterOwner, _SamMixin, _LoupeMixin, _CropGuidesMixi
                                "Shift+left or Alt+right dragged sideways sizes\n"
                                "the pen.",
                                invert=True)
-        # The Grounding DINO key (the dinosaur) is gone (user, 2026-10-24: "Dino
-        # ist zu gross, nervt ... Tool weg"): its model is 690 MB, and SAM's box
-        # does the same job with 184 MB. `--mask gdino` stays in the CLI.
+        # The Grounding DINO key (the dinosaur) is gone: its model is 690 MB,
+        # and SAM's box does the same job with 184 MB. The `--mask gdino` flag
+        # left the CLI with the rest of the backend.
         self._sam_btn = tool("sam", self.v_sam, self._on_sam_toggle,
                              "SAM (S): drag a box around the building;\n"
                              "everything outside is masked out.\n"
@@ -3338,11 +3336,10 @@ class App(_ROOT_CLASS, _AfterOwner, _SetupMixin, _ComfyMixin):
         # re-picked on every launch.  (The output folder stays offered, not
         # forced -- writing somewhere new is a decision; masking with a saved
         # mask is not.)
-        if self._remembered.get("mask_mode") in ("off", "file", "birefnet", "gdino"):
+        if self._remembered.get("mask_mode") in ("off", "file"):
             self.v_mask.set(self._remembered["mask_mode"])
-        key = "birefnet_model" if self.v_mask.get() in ("birefnet", "gdino") else "mask_file"
-        if self._remembered.get(key):
-            self.v_maskpath.set(self._remembered[key])
+        if self._remembered.get("mask_file"):
+            self.v_maskpath.set(self._remembered["mask_file"])
         self._refresh_items()          # opens on the drop stage, not the work one
         # a remembered path is offered, never forced: the selector still says off
         if initial:
@@ -3731,15 +3728,9 @@ class App(_ROOT_CLASS, _AfterOwner, _SetupMixin, _ComfyMixin):
             # workflow says", which is the default and must stay empty.
             setattr(s, key, "" if chosen.startswith("(") else chosen)
         s.mask_mode = self.v_mask.get()
-        path = self.v_maskpath.get() or self._remembered.get(
-            "birefnet_model" if self.v_mask.get() in ("birefnet", "gdino") else "mask_file", "")
         if s.mask_mode == "file":
-            s.mask_file = path
-        elif s.mask_mode in ("birefnet", "gdino"):
-            s.birefnet_model = path
-        if s.mask_mode == "gdino":
-            rp = getattr(self.review, "v_gdino_prompt", None)
-            s.gdino_prompt = (rp.get() if rp is not None else "") or "building"
+            s.mask_file = (self.v_maskpath.get()
+                           or self._remembered.get("mask_file", ""))
         return s
 
     def _check_fill(self):
@@ -4065,8 +4056,6 @@ class App(_ROOT_CLASS, _AfterOwner, _SetupMixin, _ComfyMixin):
         files = self._files()
         if not files:
             self._notify("batch: add photographs first (+, folder, drop or Ctrl+V)")
-            return
-        if not self._ensure_birefnet_model():
             return
         if not messagebox.askyesno(
                 "Batch", f"Correct {len(files)} photograph(s) unattended?\n\n"

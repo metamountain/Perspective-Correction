@@ -8,7 +8,7 @@ window. These four are free to ship and load on every OS:
     Inter              (OFL)        the UI face, regular weight, Latin
     JetBrains Mono     (OFL)        the retro themes' terminal face
     Material Symbols   (Apache 2.0) the add / folder / paste keys
-    Noto Emoji         (OFL)        the Grounding DINO key's dinosaur
+    Noto Emoji         (OFL)        the emoji font behind the icon renderer
 
 The variable sources are pinned to one instance (the window uses no bold) and
 subset, so the folder stays a few hundred KB. Run once when a font changes;

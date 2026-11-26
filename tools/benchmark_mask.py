@@ -1,10 +1,8 @@
 #!/usr/bin/env python3
 """Re-measure mask effectiveness on this machine.
 
-    python tools/benchmark_mask.py                          # all five configs
-    python tools/benchmark_mask.py --only "f unknown, BiRefNet-HR"
+    python tools/benchmark_mask.py                          # both configs
     python tools/benchmark_mask.py --limit 3                # first three photos only
-    python tools/benchmark_mask.py --only "f known, dynamic" --quiet
 
 **The warp's focal length is fixed ground truth, not the estimate.** The round
 trip is exact only when the warp is a known rotation in the *true* camera model.
@@ -15,14 +13,9 @@ mean before anyone had measured anything. The default is a fixed 24 mm warp,
 matching tools/benchmark_detectors.py; --warp-focal 0 restores the
 estimate-driven warp if you specifically want to see how bad it is.
 
-**Run under the ComfyUI python_embeded for the BiRefNet configs.** The system
-python has torch but not `transformers`, which the BiRefNet architecture
-imports, so every BiRefNet pass fails there with a module error:
-
-    "D:\\ComfyUI_windows_portable\\python_embeded\\python.exe" tools/benchmark_mask.py
-
-One config per call keeps each run under the 120 s terminal timeout; the
-BiRefNet configs take ~65 s over all 18 photos.
+Only the mask-off baselines remain: the learned-model segmenters were retired
+(docs/masking.md), so what is measured here is the reference a mask has to
+beat, not the mask itself.
 """
 from __future__ import annotations
 
@@ -61,21 +54,12 @@ from pc.config import Settings
 from pc.pipeline import analyse
 from benchmark_detectors import DELTAS, BORDER_GUARD, collect
 
-HR = r"D:\ComfyUI_windows_portable\ComfyUI\models\RMBG\BiRefNet\BiRefNet-HR.safetensors"
-DYN = r"D:\ComfyUI_windows_portable\ComfyUI\models\BiRefNet\General-dynamic.safetensors"
-
 KNOWN = dict(focal_35mm=24.0, detect_max_edge=1600)
 UNKNOWN = dict(focal_35mm=0.0, use_exif_focal=False, detect_max_edge=1600)
 
 CONFIGS = (
-    ("f known, mask off",      dict(detector="lsd", **KNOWN)),
-    ("f known, BiRefNet-HR",   dict(detector="lsd", mask_mode="birefnet",
-                                    birefnet_model=HR, **KNOWN)),
-    ("f unknown, mask off",    dict(detector="lsd", **UNKNOWN)),
-    ("f unknown, BiRefNet-HR", dict(detector="lsd", mask_mode="birefnet",
-                                    birefnet_model=HR, **UNKNOWN)),
-    ("f known, dynamic",       dict(detector="lsd", mask_mode="birefnet",
-                                    birefnet_model=DYN, **KNOWN)),
+    ("f known, mask off",   dict(detector="lsd", **KNOWN)),
+    ("f unknown, mask off", dict(detector="lsd", **UNKNOWN)),
 )
 
 

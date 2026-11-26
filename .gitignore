@@ -25,13 +25,11 @@ analysis/*
 /_*.txt
 *.log
 
-# downloaded third-party weights: BiRefNet, Grounding DINO, SAM2/SAM3.  Several
-# GB in total and five single files over GitHub's 100 MB hard limit, so a push
+# downloaded third-party weights: SAM2/SAM3.  Several
+# GB in total and single files over GitHub's 100 MB hard limit, so a push
 # containing them does not fail gracefully -- it is rejected outright.  All of
 # them are re-downloadable.  The vendored M-LSD model is the deliberate
 # exception: small, and tracked on purpose (see models/LICENSE.mlsd).
-models/BiRefNet/
-models/GroundingDINO/
 models/sam2/
 models/sam3/
 models/sam2.1-hiera-small/

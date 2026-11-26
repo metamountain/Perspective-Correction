@@ -31,7 +31,7 @@ sys.path.insert(0, HERE)
 SLOW = ("test_gui", "test_assets")
 
 MODULES = ["test_geometry", "test_lines", "test_layout", "test_warp", "test_estimation",
-            "test_pipeline", "test_cli", "test_review", "test_masks", "test_birefnet", "test_prefs",
+            "test_pipeline", "test_cli", "test_review", "test_masks", "test_prefs",
              "test_inpaint", "test_imageio",
             "test_detectors",
             "test_planar",

@@ -6,8 +6,8 @@ rem  overlays.  Drop a photo folder onto this file, or run it and answer.
 rem
 rem  Deliberately thin.  An earlier version searched for the model checkpoint here
 rem  and grew a line continuation inside a parenthesised block, which cmd runs as
-rem  a command -- so anything worth getting right is done by --birefnet-model auto
-rem  in Python, where it is tested.
+rem  a command -- so anything worth getting right is done in Python, where it is
+rem  tested.
 rem ---------------------------------------------------------------------------
 setlocal
 cd /d "%~dp0"
@@ -42,10 +42,6 @@ echo Results will be written to:
 echo   %OUT%
 echo.
 
-set "MASKARGS="
-set /p USEMASK=Segment the building out and ignore the rest (BiRefNet)? [y/N] 
-if /i "%USEMASK%"=="y" set "MASKARGS=--mask birefnet --birefnet-model auto"
-
 set "FOCALARG="
 set /p FOCAL=35mm-equivalent focal length, blank to let it estimate: 
 if not "%FOCAL%"=="" set "FOCALARG=--focal-35mm %FOCAL%"
@@ -55,11 +51,11 @@ echo === pc run %DATE% %TIME% > "%LOG%"
 echo === interpreter: %PY% >> "%LOG%"
 echo === photos: %PHOTOS% >> "%LOG%"
 echo. >> "%LOG%"
-"%PY%" perspective_correction.py --mask-info --birefnet-model auto >> "%LOG%" 2>&1
+"%PY%" perspective_correction.py --doctor >> "%LOG%" 2>&1
 echo. >> "%LOG%"
 
 rem --- the run ----------------------------------------------------------------
-"%PY%" perspective_correction.py "%PHOTOS%" -o "%OUT%\corrected" --debug-dir "%OUT%\debug" --json-report "%OUT%\report.json" --log-file "%LOG%" --diagnostics -v %FOCALARG% %MASKARGS%
+"%PY%" perspective_correction.py "%PHOTOS%" -o "%OUT%\corrected" --debug-dir "%OUT%\debug" --json-report "%OUT%\report.json" --log-file "%LOG%" --diagnostics -v %FOCALARG%
 
 echo.
 echo ---------------------------------------------------------------------------

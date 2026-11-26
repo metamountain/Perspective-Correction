@@ -38,16 +38,9 @@ class Settings:
     # 0.61 deg off, 3.58 deg on.  See docs/accuracy.md.
     merge_lines: bool = False
     merge_horizontal: bool = False
-    mask_mode: str = "off"          # off | file | birefnet | gdino
-    birefnet_model: str = ""        # path to BiRefNet weights
-    birefnet_threshold: float = 0.5  # matte is near-binary; not a tuning knob
-    birefnet_device: str = ""       # "" = cuda when available
-    birefnet_res: int = 0           # 0 = the size implied by the weight name
-    birefnet_shrink_frac: float = 0.008  # of the diagonal; ~15 px at 1600
+    mask_mode: str = "off"          # off | file
     mask_file: str = ""             # a PNG, or a folder of <stem>.png
     mask_invert: bool = False       # set when white means "keep"
-    gdino_prompt: str = "building"  # text prompt for the --mask gdino detector
-    gdino_model: str = ""           # GDINO model dir; "" = models/GroundingDINO
     sam_model: str = ""             # SAM2 checkpoint; "" = models/sam2/sam2.1_hiera_base_plus.pt
     sam_device: str = ""            # "" = cuda when available
 

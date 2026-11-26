@@ -37,8 +37,8 @@ Two things it taught, both kept:
   lower confidence; the screen showed speckles all over the timber frame.
 
 `--mask auto` is **not** a command-line choice any more: `--mask` takes
-`off`, `file` or `birefnet`, and an old script naming `auto` stops with
-argparse listing the three. That is deliberate -- a batch that quietly runs
+`off` or `file`, and an old script naming `auto` stops with argparse
+listing the two. That is deliberate -- a batch that quietly runs
 unmasked because the mask it asked for no longer exists is the silent kind of
 wrong this project avoids. The seam itself (`masks.build`) still accepts the
 word and returns no mask, so a programmatic caller holding an old settings
@@ -51,41 +51,24 @@ and the GUI review window has a **show mask** toggle. Both exist because the
 Fachwerk failure above was invisible in the numbers -- the only symptom was a
 slightly lower confidence -- and obvious the instant the mask was drawn.
 
-## BiRefNet, built in
+## BiRefNet and Grounding DINO, retired
 
-    python perspective_correction.py "D:\Fotos" --mask birefnet --birefnet-model auto --focal-35mm 24
+The two learned-model backends -- `--mask birefnet` (one full-frame matte of
+the salient object) and `--mask gdino` (a text prompt finds the box, the matte
+runs inside it) -- are gone. In practice SAM's box select and the manual brush
+masked better and cost less: two learned models, a checkpoint hunt and hundreds
+of megabytes, for a gain of a few tenths of a degree on six photographs.
+`--mask` takes `off` or `file` now; an old script naming a retired mode is
+refused by argparse, and `masks.build` still accepts the old names and returns
+no mask.
 
-BiRefNet is a *dichotomous* segmenter: one high-resolution matte separating the
-salient object from everything else. On an architectural photograph the salient
-object is the building, so the mask is the whole of it —
-
-    ignore := foreground < 0.5
-
-— with no scoring criterion in between and nothing for the line detector to
-adjudicate. Round-trip on the six shipped assets, focal length fixed at 24 mm in
-both passes so the metric stays self-consistent:
-
-| | mean | worst |
-|---|---|---|
-| mask off | 0.70° | 1.68° |
-| **BiRefNet-HR** | **0.65°** | **1.36°** |
-
-and with the focal length *unknown*, the regime a stripped web JPEG puts you in,
-1.12°/2.25° becomes **0.88°/1.96°** — a *larger* relative gain, which is exactly
-where it parts company with `--mask auto`.
-
-> All numbers on this page were re-measured after the round-trip harness gained
-> a border guard. Before it, the same comparison read 0.98°/2.80° → 0.56°/1.40°;
-> that spread was the harness smearing frame-edge pixels into straight lines,
-> not the mask. See CLAUDE.md, "The round trip measured itself for a while".
-
-It runs in ~0.3 s per photograph at 2048 px inference, and 0.0 s if the masks
-were exported once (below).
+The general lessons from that era hold for any mask:
 
 ### It masks most of the frame and almost none of the evidence
 
 This is the number that decides whether the guard in `masks.credible` is thick
-enough, and it is the distinction that module was written for:
+enough, and it is the distinction that module was written for. The figures
+below were measured with a segmenter mask (BiRefNet, before it was retired):
 
 | asset | share of frame masked | share of **line evidence** lost |
 |---|---|---|
@@ -119,87 +102,9 @@ Two earlier rules, kept here because both sound reasonable:
   decision about a few, and it needs a third factor in the weight for that.
   Within noise, and more machinery; the endpoint rule won on simplicity.
 
-### The threshold is not a knob; the shrink is the whole game
-
-**The threshold.** The matte comes back essentially binary. Sweeping the cut-off
-from 0.1 to 0.9 on a real barn moved the masked share from 50.5 % to 51.1 %.
-There is nothing in between to select.
-
-**The shrink.** BiRefNet cuts exactly along the building's silhouette, so the
-building's own corner and roof edges have both endpoints just inside the mask —
-they are precisely what the endpoint rule throws away first, and they are the
-longest and best-conditioned evidence in the frame. Pulling the reject region
-off the silhouette first hands them back:
-
-| reject mask shrunk by | mean | worst |
-|---|---|---|
-| 0.000 (~0 px) | 0.663° | 1.95° |
-| 0.002 (~4 px) | 0.597° | 1.43° |
-| 0.004 (~8 px) | 0.575° | 1.43° |
-| **0.008 (~15 px, default)** | **0.556°** | **1.15°** |
-| 0.016 (~31 px) | 0.639° | 1.64° |
-| **no mask at all** | 0.661° | 1.69° |
-
-**Read the first row against the last.** Unshrunk, the mask is worth nothing —
-0.663° against 0.661° for not masking at all. It removes as much good evidence
-as clutter. Everything the segmenter buys is bought by handing the silhouette
-back. `--birefnet-shrink 0` disables it; the value is a fraction of the frame
-diagonal, so it does not change meaning with `--detect-max-edge`.
-
-`masks.protect_structure` works alongside it, un-masking whatever a long
+`masks.protect_structure` works alongside any mask, un-masking whatever a long
 straight line runs through — a second, selective way of keeping architecture
 that a mask happens to cover.
-
-### Export the masks once instead of computing them every run
-
-    python perspective_correction.py "D:\Fotos" --mask-export "D:\Masken"
-    python perspective_correction.py "D:\Fotos" --mask file --mask-file "D:\Masken" --focal-35mm 24
-
-Two problems, one seam. It bridges the interpreter split — the Python with torch
-has no tkinter and the one with tkinter has no torch — and it turns a repeated
-run, or a benchmark that re-analyses a folder many times, into a file read. The
-PNGs are written at the analysis resolution and `masks.load` resamples, so the
-six masks in `tests/assets/masks` total 42 KB. White means ignore, so they need
-no `--mask-invert`.
-
-**One thing the cache must not be used for: the round-trip test.** That test
-warps each photograph by a known rotation, so the building has moved while the
-cached mask still describes the original. On `Alte_Scheune.jpg` the live and
-cached masks agree at **IoU 1.000** on the unwarped original and only 0.802 on a
-warped copy, and using the cache anyway reports 0.69°/2.35° for an estimator
-that actually achieves 0.65°/1.36°. It fails quietly, which is the dangerous
-kind. See `tests/assets/masks/README.md`.
-
-### Check the setup before running a batch
-
-    python perspective_correction.py --mask-info --birefnet-model auto
-
-It names the interpreter, which of `torch`, `timm`, `transformers`,
-`safetensors` and `torchvision` it can import, whether `tkinter` is present, and
-whether the weights actually load. The failure modes are a missing torch, a
-torch installed into a *different* interpreter, and weights sitting apart from
-the architecture that defines them — none of which is obvious from a run that
-simply errors on every file.
-
-`--birefnet-model auto` searches the usual ComfyUI locations, and a folder is
-only a candidate if `birefnet.py` sits beside the weights: a 444 MB file that
-cannot be loaded is a worse answer than finding nothing. Pass a path as a hint
-and **only** that path is searched.
-
-`--remember` stores the path so it is typed once.
-
-### Nothing is vendored
-
-The weights are Apache-2.0 and the BiRefNet architecture is MIT, so either could
-be redistributed — but both live in the user's ComfyUI install and this project
-only knows how to talk to them, exactly as it did with SAM checkpoints. That
-keeps a torch dependency out of a project that is otherwise numpy, OpenCV and
-Pillow, and `--mask-export` means the machine that has torch need not be the
-machine that runs the correction.
-
-`--mask birefnet` caps the worker pool at 2 unless `-j` is explicit, because
-workers are separate processes with their own model cache: eight of them load
-444 MB eight times and then queue for one GPU.
 
 ## What was here before: Segment Anything
 
@@ -238,8 +143,6 @@ outlines are already smooth at 768 px.
 | mask off | 0.98° | 2.80° |
 | **SAM as shipped** | **1.04°** | **3.52°** |
 | SAM, line density only | 0.62° | **1.18°** |
-| BiRefNet-HR | **0.56°** | 1.40° |
-| SAM ∪ BiRefNet | **0.52°** | **1.18°** |
 
 Three things are recorded here rather than deleted:
 
@@ -251,11 +154,11 @@ Three things are recorded here rather than deleted:
    neither. Synthetic fixtures are the right instrument for a *geometric*
    question with known ground truth and the wrong one for a *statistical*
    question about real texture — and "is this region foliage" is the second kind.
-3. **Repaired SAM still won the worst case, and the union of the two won both.**
-   0.52°/1.18° against BiRefNet's 0.56°/1.40°, because the two models fail on
-   different photographs. On six assets that is too thin to justify carrying two
-   models, a checkpoint hunt and an AGPL-3.0 optional dependency — but it is the
-   first thing to re-measure if more ground truth ever exists.
+3. **The union of two segmenters won both regimes.** The second model (then
+   BiRefNet) fails on different photographs than the first, so joining the two
+   masks beat either alone on all six assets. That is too thin a base to justify
+   carrying two models, a checkpoint hunt and an extra optional dependency — but
+   it is the first thing to re-measure if more ground truth ever exists.
 
 One incidental trap died with SAM and is worth remembering as a *class* of bug:
 **`ultralytics` replaces `cv2.imread` on import**, to support non-ASCII paths,
@@ -278,42 +181,25 @@ Convention: **white means ignore**. A segmenter normally returns the *subject*
 in white, so if the mask marks the building rather than the clutter, add
 `--mask-invert`.
 
-### Which BiRefNet weights
-
-| file | size | inference | notes |
-|---|---|---|---|
-| **BiRefNet-HR** | 444 MB | 2048 px | what was measured; the default of `auto` |
-| BiRefNet-general | 885 MB | 1024 px | larger file, lower inference resolution |
-| BiRefNet_lite / lite-2K | 178 MB | 1024 / 2048 px | faster, untested here |
-
-The resolution is read from the file name, because that is what every ComfyUI
-node does and the names are consistent enough for it. Override with
-`--birefnet-res`.
-
-**Analysis resolution barely matters downstream.** The correction runs at 1600 px
-on the long edge and masks are resampled nearest-neighbour, so a mask finer than
-a few pixels is wasted work. What the 2048 px inference buys is a cleaner
-*decision* about what the subject is, not a finer edge.
-
 ### Why this is a seam rather than a dependency
 
 Everything above goes through one function, `masks.build`, returning a boolean
-array the size of the analysis image. `off`, `auto`, `file` and `birefnet` are
-interchangeable behind it, which is what makes `--mask-export` possible: the
-model runs in whichever interpreter can load it, and everything afterwards --
-batch runs, the GUI, another machine -- consumes a folder of PNGs. A user who
-prefers a different segmenter gets the same benefit through `--mask file`
-without this project learning about it.
+array the size of the analysis image. `off` (and the retired `auto`) and `file`
+are interchangeable behind it, which is what makes an external mask folder
+possible: the mask comes from wherever the user got it -- painted by hand, or
+written by another tool -- and everything afterwards, batch runs, the GUI,
+another machine, consumes the same PNGs. A user who prefers a different
+segmenter gets the same benefit through `--mask file` without this project
+learning about it.
 
 ## Model weights (not in this repository)
 
-Several gigabytes, single files over GitHub's 100 MB limit, so not committed:
+Several hundred megabytes at a stretch, over GitHub's 100 MB limit, so not
+committed:
 
 | what | where it goes | download |
 |---|---|---|
-| BiRefNet HR (`--mask birefnet`) | `models/BiRefNet/` | [ZhengPeng7/BiRefNet_HR](https://huggingface.co/ZhengPeng7/BiRefNet_HR) |
-| Grounding DINO (`--mask gdino`) | `models/GroundingDINO/` | [IDEA-Research/GroundingDINO](https://github.com/IDEA-Research/GroundingDINO) (`transformers` build: `config.json` + `.safetensors`) |
 | SAM 2.1 | `models/sam2/` | [facebookresearch/sam2](https://github.com/facebookresearch/sam2) |
 
-`--mask-info` reports whether they load; `--birefnet-model auto` finds them in
-the usual ComfyUI folders. The M-LSD model is small and vendored in `models/`.
+The M-LSD model is small and vendored in `models/`. The SAM 2.1 small weights
+come from the `deps` menu.

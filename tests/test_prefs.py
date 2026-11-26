@@ -21,8 +21,8 @@ def test_saving_and_loading_a_path():
     with tempfile.TemporaryDirectory() as d:
         _isolated(d)
         assert prefs.load() == {}
-        assert prefs.save(birefnet_model="/models/BiRefNet-HR.safetensors")
-        assert prefs.load()["birefnet_model"] == "/models/BiRefNet-HR.safetensors"
+        assert prefs.save(mask_file="/masks")
+        assert prefs.load()["mask_file"] == "/masks"
 
 
 def test_only_known_keys_survive():
@@ -30,27 +30,27 @@ def test_only_known_keys_survive():
     configured behind the user's back."""
     with tempfile.TemporaryDirectory() as d:
         _isolated(d)
-        prefs.save(birefnet_model="/a.pth")
+        prefs.save(mask_file="/a")
         with open(prefs.path(), "w", encoding="utf-8") as fh:
-            json.dump({"birefnet_model": "/a.pth", "min_confidence": 0.01,
+            json.dump({"mask_file": "/a", "min_confidence": 0.01,
                        "detector": "lsd"}, fh)
         got = prefs.load()
-        assert got == {"birefnet_model": "/a.pth"}
+        assert got == {"mask_file": "/a"}
 
 
 def test_saving_merges_rather_than_replaces():
     with tempfile.TemporaryDirectory() as d:
         _isolated(d)
-        prefs.save(birefnet_model="/a.pth")
-        prefs.save(mask_file="/masks")
+        prefs.save(mask_file="/a")
+        prefs.save(mask_mode="off")
         got = prefs.load()
-        assert got["birefnet_model"] == "/a.pth" and got["mask_file"] == "/masks"
+        assert got["mask_file"] == "/a" and got["mask_mode"] == "off"
 
 
 def test_empty_values_are_not_stored():
     with tempfile.TemporaryDirectory() as d:
         _isolated(d)
-        assert not prefs.save(birefnet_model="", mask_file=None)
+        assert not prefs.save(mask_file="", mask_mode=None)
         assert prefs.load() == {}
 
 
@@ -63,26 +63,26 @@ def test_a_corrupt_file_is_ignored_not_fatal():
         with open(prefs.path(), "w", encoding="utf-8") as fh:
             fh.write("{ not json at all")
         assert prefs.load() == {}
-        assert prefs.save(birefnet_model="/a.pth")
-        assert prefs.load()["birefnet_model"] == "/a.pth"
+        assert prefs.save(mask_file="/a")
+        assert prefs.load()["mask_file"] == "/a"
 
 
 def test_an_explicit_flag_beats_a_remembered_one():
     from pc.cli import apply_prefs, build_parser
     with tempfile.TemporaryDirectory() as d:
         _isolated(d)
-        prefs.save(birefnet_model="/remembered.pth", focal_35mm=28)
+        prefs.save(mask_file="/remembered", focal_35mm=28)
         p = build_parser()
-        args = p.parse_args(["x", "--birefnet-model", "/typed.pth"])
+        args = p.parse_args(["x", "--mask-file", "/typed"])
         apply_prefs(args, p)
-        assert args.birefnet_model == "/typed.pth"
+        assert args.mask_file == "/typed"
         assert args.focal_35mm == 28.0          # unset, so the stored one fills in
 
 
 def test_forget_removes_everything():
     with tempfile.TemporaryDirectory() as d:
         _isolated(d)
-        prefs.save(birefnet_model="/a.pth")
+        prefs.save(mask_file="/a")
         assert prefs.forget()
         assert prefs.load() == {}
 

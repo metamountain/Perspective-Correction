@@ -306,8 +306,8 @@ class ReviewSession:
     # in.  Spelled out rather than guessed from the name, because guessing is
     # what broke it: `layer()` mapped only "sam" and fell through to
     # `getattr(self, "source")`, which does not exist -- so `layer("source")`
-    # was None for every photograph ever opened and the automatic mask (file,
-    # BiRefNet, gdino) was in the union in name only.
+    # was None for every photograph ever opened and the automatic mask (file)
+    # was in the union in name only.
     LAYER_ATTR = {"source": "source_mask", "sam": "sam_mask", "paint": "paint"}
 
     def layer(self, name):

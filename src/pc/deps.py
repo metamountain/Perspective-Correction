@@ -15,7 +15,7 @@ Two kinds of dependency, treated differently on purpose:
   imported lazily in `imageio.py` with a fallback to `default_focal_35mm`, so a
   missing piexif degrades, not stops -- reported, never fatal.
 
-* **optional** -- the learned backends (M-LSD, LaMa, ComfyUI, BiRefNet).
+* **optional** -- the learned backends (M-LSD, LaMa, ComfyUI).
   These are only a problem when *asked for*.  A run left at the defaults
   (`detector=lsd`, `fill=telea`, `mask=off`) must stay runnable on a machine
   with nothing but the core installed; that is the point of them being optional.
@@ -23,8 +23,8 @@ Two kinds of dependency, treated differently on purpose:
   and says which flag pulled it in.
 
 Nothing here imports torch or any heavy package at module level: availability is
-probed with guarded imports, for the same reason `birefnet.backends()` does it --
-importing torch is expensive and must not be the price of asking "is torch there?".
+probed with guarded imports, for the same reason the other optional backends do it
+-- importing torch is expensive and must not be the price of asking "is torch there?".
 """
 from __future__ import annotations
 
@@ -118,38 +118,12 @@ def preflight(settings, fill_asked=False):
             errs.append(f"--fill comfyui needs a running ComfyUI at {settings.comfy_url} "
                         f"and an API-format workflow; run --fill-info --fill comfyui")
 
-    if settings.mask_mode == "birefnet":
-        from . import birefnet as BN
-        if not settings.birefnet_model:
-            errs.append("--mask birefnet needs --birefnet-model <weights> (or 'auto')")
-        elif not BN.available(settings.birefnet_model):
-            errs.append(f"--mask birefnet: weights do not load ({settings.birefnet_model}); "
-                        f"run --mask-info for detail")
-    if settings.mask_mode == "gdino":
-        from . import masks as MK
-        if not MK.gdino_available(settings.gdino_model):
-            errs.append("--mask gdino needs transformers (pip install transformers timm einops) "
-                        "and a Grounding DINO model dir; run --doctor for detail")
-        # Ask the same question `masks._build_one` asks, or the preflight
-        # refuses a setup that works: the matte falls back to the weights
-        # vendored beside the code when nothing is configured, so an empty
-        # `birefnet_model` is not an error -- an empty fallback is.  Found by
-        # the per-module audit; the fallback landed in masks.py today and this
-        # gate was not brought along.
-        bn_path = settings.birefnet_model or MK.default_birefnet()
-        if not bn_path:
-            errs.append("--mask gdino needs --birefnet-model <weights> (or 'auto') for the matte")
-        else:
-            from . import birefnet as BN
-            if not BN.available(bn_path):
-                errs.append(f"--mask gdino: BiRefNet weights do not load ({bn_path})")
-
     return errs
 
 
 def doctor() -> int:
     """`--doctor`: the full picture, printed and exited on.  The sibling of the
-    three `*-info` probes, but it covers core *and* every optional backend at once.
+    two `*-info` probes, but it covers core *and* every optional backend at once.
 
     Returns 2 only when a *required* package is missing (the tool cannot run);
     unavailable optional backends are reported but do not fail the check, because
@@ -180,44 +154,12 @@ def doctor() -> int:
     if by.get("cv2", {}).get("ok") and by.get("numpy", {}).get("ok"):
         from . import mlsd as ML
         from . import inpaint as FILL
-        from . import birefnet as BN
         lines += ["", "optional backends (only needed when selected on the command line)"]
         ok = ML.available(st.mlsd_model)
         lines.append(f"  [{'yes' if ok else 'no ':>3}]  mlsd                TFLite runtime + vendored model")
         for mode in ("telea", "lama", "comfyui"):
             ok = FILL.available(mode, st)
             lines.append(f"  [{'yes' if ok else 'no ':>3}]  fill {mode:<8} {FILL.describe(mode, st)}")
-        weights = BN.find_weights()
-        # torch is not enough. BiRefNet's architecture is loaded through
-        # `transformers`, so an interpreter with torch and the weights and no
-        # transformers reports ready and then fails on the first photograph.
-        # That is exactly what happened: `--doctor` said "[yes] mask birefnet"
-        # on the very interpreter where `--mask-info` said "loads: NO -- No
-        # module named 'transformers'". Two checks of one fact, disagreeing;
-        # this one now reads the same `backends()` dict that --mask-info does.
-        missing = BN.arch_missing()
-        ok = bool(weights) and not missing
-        if not missing:
-            why = "ready" if weights else "no weights found"
-        else:
-            # Name the bridge before the install. Opting in costs torch,
-            # torchvision, transformers, timm and einops -- gigabytes -- to buy
-            # 0.70 -> 0.65 deg. That is a fine trade for someone who already
-            # has them and a bad one for everybody else, so the line says so
-            # rather than reading as a broken requirement.
-            why = ("optional, not needed for a normal run; wants "
-                   + ", ".join(missing))
-        lines.append(f"  [{'yes' if ok else 'no ':>3}]  mask birefnet                {why}"
-                     + (f"; weights found: {weights}" if weights else ""))
-        if missing and weights:
-            lines.append("           (an existing ComfyUI python can write the masks once: "
-                          "--mask-export DIR, then --mask file DIR)")
-        from . import masks as MK
-        gok = MK.gdino_available(st.gdino_model)
-        lines.append(f"  [{'yes' if gok else 'no ':>3}]  mask gdino                   "
-                     + ("ready (transformers + Grounding DINO model present)" if gok
-                        else "needs transformers (pip install transformers timm einops) "
-                             "+ a Grounding DINO model dir"))
     else:
         lines += ["", "optional backends: cannot check -- cv2 or numpy missing (see core above)"]
 

@@ -175,12 +175,13 @@ def test_a_skipped_image_can_be_written_into_a_new_output_folder():
 
 
 def test_a_mask_source_with_no_path_fails_once_not_per_file():
-    """`--mask birefnet` without weights used to fail every image with what read
-    as an internal fault. It is a configuration error and belongs before the run.
+    """`--mask file` without `--mask-file` used to fail every image with what
+    read as an internal fault. It is a configuration error and belongs before
+    the run.
 
     The preferences file has to be isolated here or the test asserts on
     behaviour the developer's own machine cannot produce: a remembered
-    ``birefnet_model`` fills the missing path in and the run succeeds, so this
+    ``mask_file`` fills the missing path in and the run succeeds, so this
     passed in CI and failed for anyone who had ever used ``--remember``.
     """
     from pc.cli import main as cli_main
@@ -190,7 +191,6 @@ def test_a_mask_source_with_no_path_fails_once_not_per_file():
         os.environ["XDG_CONFIG_HOME"] = d
         os.environ.pop("APPDATA", None)
         cv2.imwrite(os.path.join(d, "a.jpg"), synth.Scene(pitch_deg=8, seed=61).img)
-        assert cli_main([d, "--mask", "birefnet", "-o", os.path.join(d, "out")]) == 2
         assert cli_main([d, "--mask", "file", "-o", os.path.join(d, "out")]) == 2
         assert not os.path.exists(os.path.join(d, "out"))
     finally:
@@ -204,10 +204,9 @@ def test_a_mask_source_with_no_path_fails_once_not_per_file():
 
 def test_the_json_report_says_what_produced_it():
     """A log line reading "SKIPPED, low confidence" is nearly useless on its
-    own: the answer depends on the interpreter, the library versions, which
-    optional backends were present and what the settings were after defaults and
-    remembered values were applied. A report that omits those cannot be judged
-    by anyone who did not run it."""
+    own: the answer depends on the interpreter, the library versions, and what
+    the settings were after defaults and remembered values were applied. A
+    report that omits those cannot be judged by anyone who did not run it."""
     import json
 
     from pc.cli import main as cli_main
@@ -220,7 +219,7 @@ def test_the_json_report_says_what_produced_it():
             data = json.load(fh)
         assert set(data) == {"environment", "results"}
         env = data["environment"]
-        for expected in ("python", "numpy", "cv2", "optional backends", "settings"):
+        for expected in ("python", "numpy", "cv2", "settings"):
             assert expected in env, f"the report must record {expected}"
         assert len(data["results"]) == 1
         assert "confidence" in data["results"][0]

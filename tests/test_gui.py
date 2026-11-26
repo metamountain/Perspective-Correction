@@ -1127,30 +1127,6 @@ def test_the_sam_box_becomes_the_crop_and_shift_adds_to_the_selection():
         app.destroy()
 
 
-def test_gdino_batch_uses_the_stored_birefnet_model_without_asking():
-    """A gdino batch also needs BiRefNet weights for its matte. If the user already
-    saved a path (prefs), _ensure_birefnet_model must accept it and never pop the
-    dialog -- asked once, not per run. The old guard only checked 'birefnet', so a
-    gdino batch with a stored model would still fall through to the prompt."""
-    app = _app()
-    try:
-        from pc import gui as G
-        real_ask = G.messagebox.askyesnocancel
-        # If the code wrongly reaches the dialog, return Cancel (None) so the test
-        # fails fast instead of hanging on a modal window off-screen.
-        G.messagebox.askyesnocancel = lambda *a, **k: None
-        try:
-            app._remembered["birefnet_model"] = ASSET   # any existing file passes isfile
-            app.v_maskpath.set("")                       # fresh reload: entry empty
-            app.v_mask.set("gdino")
-            assert app._ensure_birefnet_model() is True, (
-                "a stored BiRefNet path must be accepted without the dialog")
-        finally:
-            G.messagebox.askyesnocancel = real_ask
-    finally:
-        app.destroy()
-
-
 def test_theme_switch_retints_canvas_backgrounds():
     """Switching to a light theme must re-tint every tk.Canvas whose bg was an
     INK value -- the 'still bg black!' report.  The canvases are created with

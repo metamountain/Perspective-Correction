@@ -1,31 +1,27 @@
-"""Setup, update and model-download dialogs for the window.
+"""Setup and update dialogs for the window.
 
-The five methods the ``App`` in :mod:`pc.gui` needs for the ``update`` and
-``deps`` buttons and the BiRefNet model prompt and download live here on a
-mixin.  This module never imports ``pc.gui``: it only needs the standard
-library, ``prefs`` and the theme names, plus lazy imports of ``selfupdate``,
-``depinstall`` and ``birefnet`` inside the methods that use them.
+The three methods the ``App`` in :mod:`pc.gui` needs for the ``update`` and
+``deps`` buttons live here on a mixin.  This module never imports ``pc.gui``:
+it only needs the standard library and the theme names, plus lazy imports of
+``selfupdate`` and ``depinstall`` inside the methods that use them.
 """
 from __future__ import annotations
 
-import os
 import threading
 
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+from tkinter import messagebox, ttk
 
-from . import prefs
 from .ui_theme import INK, _dark_titlebar
 
 
 class _SetupMixin:
-    """The setup, update and model-download methods, mixed into ``App``.
+    """The setup and update methods, mixed into ``App``.
 
     The host supplies the widgets and helpers these methods drive (``queue``,
-    ``btn_update``, ``btn_deps``, ``v_mask``, ``v_maskpath``,
-    ``_remembered``, ``_notify``, ``_check_fill``) and the ``_AfterOwner``
-    scheduler; the methods only add the ``_w_deps`` window and the busy flags
-    on ``self``.
+    ``btn_update``, ``btn_deps``, ``_notify``, ``_check_fill``) and the
+    ``_AfterOwner`` scheduler; the methods only add the ``_w_deps`` window
+    and the busy flags on ``self``.
     """
 
     def _check_for_update(self):
@@ -227,84 +223,3 @@ class _SetupMixin:
             self.queue.put(("call", lambda: finished(results)))
 
         threading.Thread(target=work, daemon=True).start()
-
-    def _ensure_birefnet_model(self):
-        """A batch with BiRefNet masking but no saved model would fail on every
-        photo with the same message; ask at the door instead.  The two answers
-        are the only two: point at a file, or fetch one into models/BiRefNet/."""
-        if self.v_mask.get() not in ("birefnet", "gdino"):
-            return True
-        path = self.v_maskpath.get() or self._remembered.get("birefnet_model", "")
-        if path and os.path.isfile(path):
-            return True
-        from . import birefnet as BN
-        ans = messagebox.askyesnocancel(
-            "No BiRefNet model",
-            "Masking is set to BiRefNet, but no model file is saved.\n\n"
-            "Yes     download BiRefNet-HR into models/BiRefNet/ (~444 MB)\n"
-            "No      choose an existing .safetensors file\n"
-            "Cancel  stop")
-        if ans is None:
-            return False
-        if ans:
-            return self._download_birefnet()
-        p = filedialog.askopenfilename(
-            title="BiRefNet weights",
-            filetypes=[("BiRefNet weights", "*.safetensors *.pth *.pt"),
-                       ("all files", "*.*")])
-        if not p:
-            return False
-        self.v_maskpath.set(p)
-        prefs.save(birefnet_model=p)
-        self._remembered["birefnet_model"] = p
-        messagebox.showinfo("BiRefNet model", BN.describe(p))
-        return True
-
-    def _download_birefnet(self):
-        """Fetch the weights and architecture into models/BiRefNet/ and save
-        the path, so the next run starts with a working model.  Runs on the
-        main thread on purpose: the progress window is only alive while the
-        event loop turns, and `update()` inside the callback is what turns it."""
-        from . import birefnet as BN
-        if not BN.transformers_available():
-            ok = messagebox.askyesno(
-                "BiRefNet",
-                "This interpreter has no 'transformers' package, which the\n"
-                "BiRefNet architecture imports. A downloaded model would still\n"
-                "fail to load here.\n\n"
-                "Yes: download anyway (for another python, e.g. ComfyUI's\n"
-                "python_embeded)    No: cancel")
-            if not ok:
-                return False
-        win = tk.Toplevel(self)
-        win.title("Downloading BiRefNet-HR")
-        win.resizable(False, False)
-        win.transient(self)
-        win.configure(bg=INK["bg"])
-        lbl = tk.Label(win, text="starting...", justify="left", padx=12, pady=8,
-                       bg=INK["bg"], fg=INK["text"])
-        lbl.pack()
-        bar = ttk.Progressbar(win, length=360, mode="determinate")
-        bar.pack(padx=12, pady=(0, 10))
-
-        def progress(name, done, total):
-            if total:
-                bar.configure(maximum=total, value=done)
-                lbl.configure(text=f"{name}: {done / 1e6:.0f} / {total / 1e6:.0f} MB")
-            else:
-                lbl.configure(text=name + " ...")
-            self.update()
-
-        try:
-            res = BN.download_weights(progress=progress)
-        except Exception as exc:
-            win.destroy()
-            messagebox.showerror("BiRefNet download", str(exc))
-            return False
-        win.destroy()
-        path = res["weights"]
-        self.v_maskpath.set(path)
-        prefs.save(birefnet_model=path)
-        self._remembered["birefnet_model"] = path
-        messagebox.showinfo("BiRefNet", BN.describe(path) + "\n\nSaved as the model path.")
-        return True

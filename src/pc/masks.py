@@ -9,19 +9,20 @@ boolean array the size of the analysis image, and any producer can fill it.
 Two producers ship:
 
 ``off``       no mask.
-``birefnet``  a segmenter: one matte, the salient object, the rest ignored.
+``file``      a PNG from anywhere -- painted by hand, or the output of another
+              tool, such as the SAM box select in the window.
 
-A third, ``file``, reads a PNG from anywhere -- painted by hand, written by
-``--mask-export``, or produced by some other tool.
-
-A fourth was here and is gone.  ``auto`` was a cheap texture heuristic --
+More were here and are gone.  ``auto`` was a cheap texture heuristic --
 excess green, incoherent local gradients, sky connected to the top edge -- and
 it needed no model at all, which was its whole appeal.  It was removed because
 it is a *pixel* statistic where the question is about *objects*: on a stripped
 web JPEG it took the horizontals the focal estimate needed, so it measurably
 hurt exactly the photographs that had least to spare (pitch max 5.58 -> 10.05
-deg with the focal length unknown).  A segmenter does not have that failure and
-is now cheap enough to be the only answer.  The history is in docs/masking.md.
+deg with the focal length unknown).  The history is in docs/masking.md.  The
+learned-model segmenters (``birefnet`` and ``gdino``) were retired the other
+way: in practice the manual brush, with SAM's box select, masked better and
+cost less.  ``build`` still accepts the retired names and returns no mask, so
+an old settings object does not abort a batch.
 """
 from __future__ import annotations
 
@@ -64,10 +65,10 @@ def load(path: str, shape, invert: bool = False) -> np.ndarray:
         raise ValueError(f"cannot read mask {path}")
     # ultralytics replaces cv2.imread with its own wrapper on import -- to
     # support non-ASCII paths -- and that wrapper returns (h, w, 1) for a
-    # greyscale read where OpenCV returns (h, w).  It is the first SAM backend
-    # tried, so merely *having* it installed silently broke --mask file, which
-    # is the bridge --mask-export writes for.  Squeeze rather than test for the
-    # patch: a mask is two dimensional by definition.
+    # greyscale read where OpenCV returns (h, w).  Merely *having* it installed
+    # silently broke --mask file, which is how an external tool's masks get in.
+    # Squeeze rather than test for the patch: a mask is two dimensional by
+    # definition.
     while img.ndim > 2:
         img = img[..., 0]
     if img.shape[:2] != tuple(shape[:2]):
@@ -105,152 +106,6 @@ def protect_structure(mask: np.ndarray, seg: np.ndarray, min_len: float,
     return mask & ~(keep.astype(bool))
 
 
-GDINO_PAD_FRAC = 0.04   # pad around the detected box before cropping
-
-
-def default_gdino_dir() -> str:
-    """Where the vendored Grounding DINO model lives: ``models/GroundingDINO/``."""
-    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    return os.path.join(root, "models", "GroundingDINO")
-
-
-def birefnet_home() -> str:
-    """Where `deps` puts the BiRefNet weights and where the window looks."""
-    root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    return os.path.join(root, "models", "BiRefNet")
-
-
-def default_birefnet() -> str:
-    """The vendored BiRefNet weights, or "" when they are not there.
-
-    `birefnet_model` defaults to empty, and both `--mask birefnet` and
-    `--mask gdino` refuse without it -- gdino finds its box and then asks
-    BiRefNet to matte inside it. So two working backends presented as broken
-    while their weights sat in the repo, unreferenced. An explicit setting
-    still wins; this only fills the blank.
-    """
-    path = os.path.join(birefnet_home(), "BiRefNet_lite.safetensors")
-    return path if os.path.isfile(path) else ""
-
-
-_GDINO_CACHE = {}
-
-
-def _gdino_load(model_dir: str):
-    """Load (and cache) the Grounding DINO processor + model for one directory."""
-    import torch
-    from transformers import AutoProcessor, AutoModelForZeroShotObjectDetection
-
-    key = os.path.abspath(model_dir)
-    if key not in _GDINO_CACHE:
-        dev = "cuda" if torch.cuda.is_available() else "cpu"
-        proc = AutoProcessor.from_pretrained(model_dir, local_files_only=True)
-        model = (AutoModelForZeroShotObjectDetection
-                 .from_pretrained(model_dir, local_files_only=True).to(dev).eval())
-        _GDINO_CACHE[key] = (proc, model, dev)
-    return _GDINO_CACHE[key]
-
-
-def gdino_box(bgr: np.ndarray, prompt: str, model_dir: str):
-    """The best ``prompt`` box in ``bgr`` pixels: ``(x0, y0, x1, y1), score``.
-
-    A full-frame fallback with score 0 when nothing clears the threshold, so a
-    miss degrades to "matte the whole frame" rather than crashing the run.
-    """
-    import torch
-    from PIL import Image
-
-    proc, model, dev = _gdino_load(model_dir)
-    h, w = bgr.shape[:2]
-    pil = Image.fromarray(cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB))
-    inp = proc(text=[prompt], images=pil, return_tensors="pt").to(dev)
-    with torch.no_grad():
-        res = model(**inp)
-    det = proc.post_process_grounded_object_detection(
-        res, inp["input_ids"], threshold=0.20, text_threshold=0.20,
-        target_sizes=[(h, w)])[0]
-    scores = det["scores"].cpu().numpy()
-    if len(scores) == 0:
-        return (0, 0, w, h), 0.0
-    boxes = det["boxes"].cpu().numpy()
-    labels = [str(x) for x in det["text_labels"]]
-    want = prompt.lower()
-    keep = [i for i, lab in enumerate(labels) if want in lab.lower()]
-    if not keep:
-        keep = list(range(len(scores)))
-    best = int(max(keep, key=lambda i: float(scores[i])))
-    return (int(boxes[best][0]), int(boxes[best][1]),
-            int(boxes[best][2]), int(boxes[best][3])), float(scores[best])
-
-
-def _gdino_compose(h, w, x0, y0, x1, y1, crop_ignore: np.ndarray) -> np.ndarray:
-    """Full-frame ignore mask from a detected box and its matte.
-
-    Outside the (padded) box is not the subject, so it is ignored outright; inside,
-    the BiRefNet matte of the crop decides.  ``crop_ignore`` is True where the fit
-    should not look, at the crop's own resolution.
-    """
-    ignore = np.ones((h, w), bool)
-    ci = crop_ignore
-    if ci.shape[:2] != (y1 - y0, x1 - x0):
-        ci = cv2.resize(ci.astype(np.uint8), (x1 - x0, y1 - y0),
-                        interpolation=cv2.INTER_NEAREST).astype(bool)
-    ignore[y0:y1, x0:x1] = ci
-    return ignore
-
-
-def gdino_mask(bgr: np.ndarray, settings):
-    """``(ignore_mask, note)`` for ``--mask gdino``.
-
-    A text prompt finds the subject's box, BiRefNet mattes inside it, and
-    everything outside the box is dropped -- so a competing foreground object
-    that BiRefNet would otherwise grab on its own is cut away by the crop.
-    """
-    from . import birefnet as BN
-
-    weights = getattr(settings, "birefnet_model", "") or default_birefnet()
-    if not weights:
-        raise ValueError("--mask gdino needs --birefnet-model <weights> for the matte")
-    prompt = (getattr(settings, "gdino_prompt", "") or "building").strip() or "building"
-    model_dir = getattr(settings, "gdino_model", "") or default_gdino_dir()
-
-    h, w = bgr.shape[:2]
-    box, score = gdino_box(bgr, prompt, model_dir)
-    x0, y0, x1, y1 = box
-    px = int(GDINO_PAD_FRAC * w)
-    py = int(GDINO_PAD_FRAC * h)
-    x0 = max(0, x0 - px); y0 = max(0, y0 - py)
-    x1 = min(w, x1 + px); y1 = min(h, y1 + py)
-    if (x1 - x0) < 8 or (y1 - y0) < 8:
-        raise ValueError("--mask gdino: the detected box is too small to matte")
-
-    crop = bgr[y0:y1, x0:x1]
-    fg = BN.foreground(crop, weights,
-                       device=getattr(settings, "birefnet_device", ""),
-                       res=getattr(settings, "birefnet_res", 0))
-    ci = fg < float(getattr(settings, "birefnet_threshold", 0.5))
-    spx = BN.shrink_px_for(ci.shape, getattr(settings, "birefnet_shrink_frac", 0.008))
-    if spx > 0:
-        k = np.ones((2 * spx + 1,) * 2, np.uint8)
-        ci = cv2.erode(ci.astype(np.uint8), k).astype(bool)
-    ignore = _gdino_compose(h, w, x0, y0, x1, y1, ci)
-    return ignore, ("GDINO '{p}' box {b} score {s:.2f}; BiRefNet inside, "
-                    "{m:.0f}% of frame ignored".format(
-                        p=prompt, b=box, s=score, m=float(ignore.mean()) * 100))
-
-
-def gdino_available(model_dir: str = "") -> bool:
-    """Can this interpreter run ``--mask gdino``?  Needs transformers and the weights."""
-    import importlib.util
-
-    if importlib.util.find_spec("transformers") is None:
-        return False
-    d = model_dir or default_gdino_dir()
-    if not os.path.isdir(d) or not os.path.isfile(os.path.join(d, "config.json")):
-        return False
-    return any(f.endswith(".safetensors") for f in os.listdir(d))
-
-
 def _build_one(mode: str, bgr: np.ndarray, settings, image_path: str = ""):
     """``(mask_or_None, note)`` for a single source name."""
     if mode in ("off", "auto"):
@@ -261,34 +116,20 @@ def _build_one(mode: str, bgr: np.ndarray, settings, image_path: str = ""):
     if mode == "file":
         return load(resolve(settings.mask_file, image_path), bgr.shape,
                     getattr(settings, "mask_invert", False)), "painted mask"
-    if mode == "birefnet":
-        from . import birefnet as BN
-        path = getattr(settings, "birefnet_model", "") or default_birefnet()
-        if not path:
-            raise ValueError("--mask birefnet needs --birefnet-model <weights>")
-        return BN.build_mask(
-            bgr, path,
-            threshold=getattr(settings, "birefnet_threshold", BN.DEFAULT_THRESHOLD),
-            device=getattr(settings, "birefnet_device", ""),
-            res=getattr(settings, "birefnet_res", 0),
-            shrink_frac=getattr(settings, "birefnet_shrink_frac", 0.008))
-    if mode == "gdino":
-        return gdino_mask(bgr, settings)
+    # Any other name -- including the retired "birefnet" and "gdino" -- is
+    # accepted and ignored rather than raising, so an old settings object does
+    # not abort a batch.
     return None, ""
 
 
 def build(bgr: np.ndarray, settings, image_path: str = "", seg=None):
     """``(mask_or_None, note)`` for whichever source(s) are configured.
 
-    ``mask_mode`` is one name ("birefnet") or several, comma-joined
-    ("file,birefnet").  Several are **added**: a pixel is ignored when any
-    source ignores it, because each source is an independent claim about what
-    is not the building and dropping evidence twice costs nothing while keeping
-    clutter one source missed costs a wrong correction.
-
-    Note that gdino already runs BiRefNet inside its box, so ticking both it
-    and birefnet gives the full-frame matte union -- which is the plain
-    birefnet result, and throws away the crop that made gdino worth picking.
+    ``mask_mode`` is one name ("file") or several, comma-joined.  Several are
+    **added**: a pixel is ignored when any source ignores it, because each
+    source is an independent claim about what is not the building and dropping
+    evidence twice costs nothing while keeping clutter one source missed costs
+    a wrong correction.
     """
     mode = getattr(settings, "mask_mode", "off")
     parts = [p.strip() for p in str(mode).split(",") if p.strip()]

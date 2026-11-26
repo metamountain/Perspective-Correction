@@ -2,28 +2,27 @@
 
 One PNG per photograph in `tests/assets/`, matched by file stem.
 
-    python perspective_correction.py tests/assets --mask-export tests/assets/masks
+They are a static fixture: the tool that generated them (`--mask-export`,
+BiRefNet) is retired, so they are committed and not regenerated.
 
 ## Convention
 
 **White means *ignore*.** That is what `masks.load` expects, so these work with
 a plain `--mask file --mask-file tests/assets/masks` and **no `--mask-invert`**.
-BiRefNet itself returns the opposite — the subject — and `birefnet.build_mask`
-does the inversion before anything is written.
+A segmenter returns the opposite (the subject); the writer inverts before
+anything is stored.
 
 Stored at the analysis resolution (long edge 1600), not at the photograph's
 resolution; `masks.load` resamples. That is why six masks are 42 KB.
 
-Produced by `BiRefNet-HR.safetensors` (444 MB, 2048 px inference) at the default
-threshold of 0.5. Regenerate with the command above if the model or the
-threshold changes — the numbers in `docs/masking.md` are tied to these.
+Produced by a now-retired segmenter (BiRefNet-HR); they are a committed
+fixture, not regenerated — the numbers in `docs/masking.md` are tied to these.
 
 ## What the cache is for, and the one thing it must not be used for
 
-It exists so the mask is computed **once** instead of once per run: BiRefNet
-needs torch and ~0.3 s per photograph, and the test suite re-analyses this
-folder many times over. With the cache, every mask-dependent test runs in an
-interpreter that has neither torch nor a 444 MB checkpoint.
+It exists so the mask is read **once** instead of recomputed per run: the test
+suite re-analyses this folder many times over, and a cached PNG keeps every
+mask-dependent test runnable in an interpreter without torch.
 
 **It must not be used for the round-trip test.** That test warps each photograph
 by a known rotation and re-estimates, so the building is in a different place in

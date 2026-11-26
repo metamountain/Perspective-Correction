@@ -168,57 +168,22 @@ def build_parser():
                    help="report the core packages and every optional backend this "
                         "interpreter can run, and exit. Exits 2 if a required "
                         "package is missing")
-    g.add_argument("--mask", choices=["off", "file", "birefnet", "gdino"],
+    g.add_argument("--mask", choices=["off", "file"],
                    default=Settings.mask_mode,
-                   help="'file' a painted PNG or a folder of them, 'birefnet' segment "
-                        "the building out (see --birefnet-model), 'gdino' find it by "
-                        "text prompt and matte inside the box (needs --birefnet-model)")
-    g.add_argument("--birefnet-model", default="",
-                   help="BiRefNet weights, or 'auto' to search the usual ComfyUI "
-                        "folders. Example: "
-                        r'"D:\ComfyUI_windows_portable\ComfyUI\models\RMBG\BiRefNet\BiRefNet-HR.safetensors"')
-    g.add_argument("--birefnet-threshold", type=float, default=Settings.birefnet_threshold,
-                   help="matte cut-off. The matte is near-binary, so this is not a "
-                        "tuning knob: 0.1 to 0.9 moves the masked share by half a percent")
-    g.add_argument("--birefnet-res", type=int, default=Settings.birefnet_res,
-                   help="inference size; 0 takes the size implied by the weight name "
-                        "(2048 for HR and 2K, else 1024)")
-    g.add_argument("--birefnet-shrink", type=float, default=Settings.birefnet_shrink_frac,
-                   metavar="FRAC",
-                   help="pull the masked region off the building silhouette by this "
-                        "fraction of the frame diagonal, so its own corner and roof "
-                        "edges survive (0.008 is ~15 px at 1600; 0 disables)")
-    g.add_argument("--birefnet-device", default="",
-                   help="cuda, cpu; empty picks cuda when present")
-    g.add_argument("--gdino-prompt", default=Settings.gdino_prompt,
-                   help="text prompt for --mask gdino, e.g. 'building' or 'facade'; "
-                        "Grounding DINO finds the box, BiRefNet mattes inside it")
-    g.add_argument("--gdino-model", default="",
-                   help="Grounding DINO model dir; empty uses the vendored "
-                        "models/GroundingDINO")
+                   help="'file' a painted PNG or a folder of them (see --mask-file)")
     g.add_argument("--remember", action="store_true",
-                   help="store --birefnet-model, --mask-file, -o, --focal-35mm, "
-                        "--pad, --comfy-url and --comfy-workflow as defaults for "
-                        "future runs")
+                   help="store --mask-file, -o, --focal-35mm, --pad, --comfy-url and "
+                        "--comfy-workflow as defaults for future runs")
     g.add_argument("--forget", action="store_true",
                    help="delete the remembered defaults and exit")
-    g.add_argument("--mask-export", metavar="DIR",
-                   help="write one mask PNG per photo into DIR, then exit. Two uses: "
-                        "run it from the interpreter that has torch (ComfyUI's "
-                        "python_embeded) and consume the folder anywhere with "
-                        "--mask file --mask-file DIR, including the GUI; or cache the "
-                        "masks so a repeated run does not recompute them")
     g.add_argument("--diagnostics", action="store_true",
                    help="print the environment (interpreter, versions, backends, "
                         "settings) before the run, so a log is self-describing")
-    g.add_argument("--mask-info", action="store_true",
-                   help="report whether BiRefNet can run here, describe "
-                        "--birefnet-model, and exit")
     g.add_argument("--mask-file", default="",
                    help="a PNG mask, or a folder holding one <stem>.png per image")
     g.add_argument("--mask-invert", action="store_true",
                    help="the mask marks what to KEEP, which is what a segmenter "
-                        "naturally outputs; --mask-export already inverts")
+                        "naturally outputs")
     g.add_argument("--detect-max-edge", type=int, default=Settings.detect_max_edge)
     g.add_argument("--min-line-length", type=float, default=Settings.min_line_length_frac,
                    help="minimum line length as a fraction of the short edge")
@@ -303,13 +268,6 @@ def settings_from(args) -> Settings:
     s.mask_mode = args.mask
     s.mask_file = args.mask_file
     s.mask_invert = args.mask_invert
-    s.birefnet_model = args.birefnet_model
-    s.birefnet_threshold = args.birefnet_threshold
-    s.birefnet_res = args.birefnet_res
-    s.birefnet_shrink_frac = args.birefnet_shrink
-    s.birefnet_device = args.birefnet_device
-    s.gdino_prompt = args.gdino_prompt
-    s.gdino_model = args.gdino_model
     s.detect_max_edge = args.detect_max_edge
     s.min_line_length_frac = args.min_line_length
     s.inlier_threshold_deg = args.inlier_threshold
@@ -438,15 +396,13 @@ def diagnostics_text(args, settings) -> str:
     """Everything needed to interpret a log without asking follow-up questions.
 
     A log that says "SKIPPED, low confidence" is nearly useless on its own: the
-    answer depends on the interpreter, the library versions, which optional
-    backends were present and what the settings actually were after defaults and
-    remembered values were applied.
+    answer depends on the interpreter, the library versions, and what the
+    settings actually were after defaults and remembered values were applied.
     """
     import platform
     import sys as _sys
 
     from . import __version__
-    from . import birefnet as BN
 
     out = ["# --- environment " + "-" * 48]
     out.append(f"# pc {__version__} on {platform.platform()}")
@@ -457,13 +413,8 @@ def diagnostics_text(args, settings) -> str:
             out.append(f"#   {mod:8s} {getattr(m, '__version__', '?')}")
         except Exception as exc:
             out.append(f"#   {mod:8s} MISSING ({type(exc).__name__})")
-    out.append("# optional backends: " + ", ".join(
-        f"{k}={'yes' if v else 'no'}" for k, v in BN.backends().items()))
-    if settings.mask_mode == "birefnet" and settings.birefnet_model:
-        out.append(f"# birefnet: {BN.describe(settings.birefnet_model)}")
     interesting = ("detector", "mask_mode", "mask_file",
-                   "birefnet_model",
-                   "birefnet_threshold", "focal_35mm", "default_focal_35mm",
+                   "focal_35mm", "default_focal_35mm",
                    "focal_estimate", "min_confidence", "max_pitch_deg",
                    "max_roll_deg", "max_horizontal_deg",
                    "pitch_strength", "roll_strength", "horizontal_strength",
@@ -477,39 +428,14 @@ def diagnostics_text(args, settings) -> str:
     return "\n".join(out)
 
 
-def mask_info(args) -> int:
-    """Answer "is my setup right?" without running a batch first.
-
-    Worth a flag of its own: the failure modes are a missing torch, a torch
-    installed into a *different* interpreter, and weights sitting apart from the
-    architecture that defines them -- and none of them is obvious from a run
-    that simply errors on every file.
-    """
-    import sys as _sys
-
-    from . import birefnet as BN
-    print(f"interpreter: {_sys.executable}")
-    for name, ok in BN.backends().items():
-        print(f"  {'yes' if ok else 'no ':>3}  {name}")
-    if args.birefnet_model:
-        print(f"\nmodel: {BN.describe(args.birefnet_model)}")
-        try:
-            BN._load(args.birefnet_model, args.birefnet_device)
-            print("  loads: yes")
-        except Exception as exc:
-            print(f"  loads: NO\n{exc}")
-    else:
-        print("\n(pass --birefnet-model to check specific weights)")
-    return 0
-
-
 def detector_info(args) -> int:
-    """The detector half of --mask-info, and for the same reason.
+    """A batch tool like the old mask probe: a missing TFLite runtime or model
+    must say so out loud.
 
     The M-LSD detector is an optional dependency with its own failure modes --
     a missing TFLite runtime, a missing model -- and a run that simply falls
-    back to LSD says none of that out loud.  It is a batch tool: the silent
-    fallback is the dangerous one.
+    back to LSD says none of that out loud.  The silent fallback is the
+    dangerous one.
     """
     import sys as _sys
 
@@ -527,12 +453,12 @@ def apply_prefs(args, parser):
 
     Only fills what the command line left at its default, so an explicit flag
     always wins and a run is still fully described by what was typed plus what
-    ``--mask-info`` reports.
+    ``--diagnostics`` prints.
     """
     from . import prefs
     stored = prefs.load()
     used = []
-    for key in ("birefnet_model", "mask_file", "output"):
+    for key in ("mask_file", "output"):
         if not getattr(args, key, None) and stored.get(key):
             setattr(args, key, stored[key])
             used.append(key)
@@ -570,15 +496,6 @@ def main(argv=None) -> int:
     if args.forget:
         print("forgot remembered defaults" if prefs.forget() else "nothing was remembered")
         return 0
-    if args.birefnet_model == "auto":
-        from . import birefnet as BN
-        found = BN.find_weights()
-        if not found:
-            print("--birefnet-model auto found no weights; pass a path")
-            return 2
-        args.birefnet_model = found
-        if not args.quiet:
-            print(f"# using {BN.describe(found)}")
     used = apply_prefs(args, parser)
     if used and not args.quiet:
         print(f"# using remembered {', '.join(used)} from {prefs.path()}")
@@ -588,8 +505,7 @@ def main(argv=None) -> int:
         # "the one deliberate exception ... expects to survive" and that no
         # code path could ever store. It is saved here now, where the user
         # states it.
-        ok = prefs.save(birefnet_model=args.birefnet_model, mask_file=args.mask_file,
-                        output=args.output, pad=args.pad,
+        ok = prefs.save(mask_file=args.mask_file, output=args.output, pad=args.pad,
                         focal_35mm=args.focal_35mm if args.focal_35mm else None,
                         comfy_url=(args.comfy_url
                                    if args.comfy_url != Settings.comfy_url else None),
@@ -605,36 +521,6 @@ def main(argv=None) -> int:
         return 0
     if args.detector_info:
         return detector_info(args)
-    if args.mask_info:
-        return mask_info(args)
-    if args.mask_export:
-        from . import birefnet as BN
-        if not args.birefnet_model:
-            args.birefnet_model = BN.find_weights()
-        if not args.birefnet_model:
-            print("--mask-export needs --birefnet-model <weights>")
-            return 2
-        files = collect(args.inputs, args.recursive)
-        if not files:
-            print("no readable images found")
-            return 1
-        log = _Log(args.log_file, args.quiet)
-        _, failed = BN.export_masks(files, args.birefnet_model, args.mask_export,
-                                    settings_from(args), log=log)
-        log.close()
-        return 0 if failed == 0 else 3
-    if args.mask in ("birefnet", "gdino") and not args.birefnet_model:
-        from . import birefnet as BN
-        found = BN.find_weights()
-        what = "--mask " + args.mask
-        if found:
-            print(what + " needs --birefnet-model. This machine has:\n"
-                  "  " + found + "\n\nRun it with:\n"
-                  "    " + what + " --birefnet-model auto --remember")
-        else:
-            print(what + " needs --birefnet-model <weights>, or 'auto'.\n\n"
-                  + BN.what_you_need())
-        return 2
     if args.mask == "file" and not args.mask_file:
         print("--mask file needs --mask-file <png or folder>")
         return 2
@@ -729,16 +615,6 @@ def main(argv=None) -> int:
         jobs.append((src, dst, settings, args.debug_dir, args.dry_run, args.strip))
 
     workers = args.workers or min(8, (os.cpu_count() or 1))
-    if not args.workers and settings.mask_mode == "birefnet" and workers > 2:
-        # Each worker is a separate process with its own birefnet._CACHE, so
-        # eight of them load the 444 MB checkpoint eight times and then queue
-        # for one GPU.  On a ten-image folder that is most of the runtime; on a
-        # large batch it amortises, but never usefully past a couple of workers.
-        # An explicit -j is left alone -- the user may know their machine better.
-        # --mask-export once and --mask file avoids the question entirely.
-        workers = 2
-        log(f"# --mask birefnet: capped at {workers} workers "
-            f"(each loads the checkpoint; pass -j to override, or --mask-export once)")
     results = []
     t0 = time.time()
     if workers <= 1 or len(jobs) <= 1:

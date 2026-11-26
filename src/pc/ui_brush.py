@@ -3,19 +3,14 @@
 The mask control methods and the brush/stroke painting methods that
 ``ReviewPanel`` (in :mod:`pc.gui`) carries for the excluded region live here
 on a mixin.  This module never imports ``pc.gui``: it needs only the standard
-library, the ``AUTO`` mode from ``review``, the BiRefNet model helpers from
-``masks``, ``prefs`` for the model path remembered from an earlier run, and
-the shared ``INK`` / ``OVERLAY`` palettes plus ``MASK_SWATCHES`` from
-``ui_theme`` (shared by object identity with ``gui.py``'s re-exports).
+library, the ``AUTO`` mode from ``review``, and the shared ``INK`` / ``OVERLAY``
+palettes plus ``MASK_SWATCHES`` from ``ui_theme`` (shared by object identity
+with ``gui.py``'s re-exports).
 """
 from __future__ import annotations
 
-import os
-
 import tkinter as tk
 
-from . import masks as MK
-from . import prefs
 from .review import AUTO
 from .ui_theme import INK, MASK_SWATCHES, OVERLAY
 
@@ -49,28 +44,6 @@ class _BrushMaskMixin:
         if mode == "file" and not self.session.settings.mask_file:
             mode = "off"               # the folder picker is gone with its row
             self.v_maskmode.set(mode)
-        if mode in ("birefnet", "gdino") and not self.session.settings.birefnet_model:
-            # The model comes from `deps` into models/BiRefNet, or from a path
-            # remembered from earlier; there is no picker any more.  Missing
-            # weights are said, with where they were looked for -- never a
-            # file dialog nobody asked for.
-            app = self._app()
-            remembered = getattr(app, "_remembered", {}) if app is not None else {}
-            stored = (remembered.get("birefnet_model", "")
-                      or prefs.load().get("birefnet_model", "")
-                      or MK.default_birefnet())
-            if stored and os.path.isfile(stored):
-                self.session.settings = self.session.settings.replace(
-                    birefnet_model=stored)
-            else:
-                self.v_maskmode.set("off")
-                self._notify(f"The BiRefNet model was not found in {MK.birefnet_home()} "
-                             f"-- mask left off.")
-                return
-        if mode == "gdino":
-            # the prompt lives in the entry, not the settings, until it is applied
-            self.session.settings = self.session.settings.replace(
-                gdino_prompt=self.v_gdino_prompt.get())
         err = self.session.set_mask(mode, invert=bool(self.v_maskinv.get()))
         self.lbl_mask.configure(text=err or "")
         if self.session.mode == AUTO:
